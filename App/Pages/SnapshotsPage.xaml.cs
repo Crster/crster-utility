@@ -75,41 +75,54 @@ namespace App.Pages
 
         private void EditSnapshotWindow_ImageSaved(object? sender, SavedImageResult result)
         {
+            EmptyStatePanel.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+            ResultCard.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+
             ScreenshotDisplay.Source = result.Image;
             BuildPalette(result.PaletteColors);
         }
 
-        private void BuildPalette(List<WColor> colors)
+        private void BuildPalette(List<ThemeColor> themeColors)
         {
-            PaletteContainer.Children.Clear();
+            PaletteLeft.Children.Clear();
+            PaletteRight.Children.Clear();
 
-            foreach (var color in colors)
+            int count = themeColors.Count;
+            int half = Math.Min(5, count);
+            int leftCount = Math.Min(half, count);
+            int rightCount = Math.Max(0, count - leftCount);
+
+            void AddSwatch(StackPanel parent, ThemeColor tc)
             {
-                var hex = $"#{color.R:X2}{color.G:X2}{color.B:X2}";
-
                 var border = new Microsoft.UI.Xaml.Controls.Border
                 {
-                    Width = 40,
-                    Height = 40,
+                    Width = 48,
+                    Height = 48,
                     Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(
-                        new WColor { A = color.A, R = color.R, G = color.G, B = color.B }),
-                    CornerRadius = new Microsoft.UI.Xaml.CornerRadius(4),
+                        new WColor { A = tc.Color.A, R = tc.Color.R, G = tc.Color.G, B = tc.Color.B }),
+                    CornerRadius = new Microsoft.UI.Xaml.CornerRadius(6),
                     BorderThickness = new Microsoft.UI.Xaml.Thickness(1),
                     BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(MColor.LightGray)
                 };
 
-                var tooltip = new Microsoft.UI.Xaml.Controls.ToolTip { Content = hex };
+                var tooltip = new Microsoft.UI.Xaml.Controls.ToolTip { Content = $"{tc.Name}: {tc.Hex}" };
                 Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(border, tooltip);
 
                 border.Tapped += (s, e) =>
                 {
                     var dataPackage = new DataPackage();
-                    dataPackage.SetText(hex);
+                    dataPackage.SetText(tc.Hex);
                     WClipboard.SetContent(dataPackage);
                 };
 
-                PaletteContainer.Children.Add(border);
+                parent.Children.Add(border);
             }
+
+            for (int i = 0; i < leftCount; i++)
+                AddSwatch(PaletteLeft, themeColors[i]);
+
+            for (int i = leftCount; i < leftCount + rightCount; i++)
+                AddSwatch(PaletteRight, themeColors[i]);
         }
     }
 }

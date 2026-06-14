@@ -632,7 +632,7 @@ namespace App.Windows
             var image = new BitmapImage();
             await image.SetSourceAsync(stream);
 
-            var palette = ColorPaletteService.ExtractPalette(bitmap, 10);
+            var palette = ColorPaletteService.ExtractBootstrapTheme(bitmap);
 
             bitmap.Dispose();
             return new SavedImageResult
