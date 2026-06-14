@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="App.Windows.EditSnapshotWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:App.Windows"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:canvas="using:Microsoft.Graphics.Canvas.UI.Xaml"
+    mc:Ignorable="d"
+    Title="Edit Snapshot">
+
+    <Grid x:Name="RootGrid" IsTabStop="True" KeyDown="MyCanvas_KeyDown">
+        <!-- CanvasControl as background -->
+        <canvas:CanvasControl x:Name="MyCanvas"
+                          ClearColor="Black"
+                          Draw="MyCanvas_Draw"
+                          PointerPressed="MyCanvas_PointerPressed"
+                          PointerMoved="MyCanvas_PointerMoved"
+                          PointerReleased="MyCanvas_PointerReleased"/>
+
+        <!-- Overlay controls -->
+        <Border Margin="0,10,0,0"
+                Padding="5,0,5,0"
+                VerticalAlignment="Top" HorizontalAlignment="Center"
+                Background="{ThemeResource SolidBackgroundFillColorBase}"
+                CornerRadius="{StaticResource OverlayCornerRadius}">
+            <StackPanel Orientation="Horizontal">
+                <AppBarToggleButton x:Name="CropButton" Icon="Crop" Label="Crop" Click="CropButton_Click"/>
+                <AppBarToggleButton x:Name="ArrowButton" Label="Arrow" Click="ArrowButton_Click">
+                    <AppBarToggleButton.Icon>
+                        <FontIcon Glyph="&#xEA4F;">
+                            <FontIcon.RenderTransform>
+                                <RotateTransform Angle="270" CenterX="10" CenterY="10"/>
+                            </FontIcon.RenderTransform>
+                        </FontIcon>
+                    </AppBarToggleButton.Icon>
+                </AppBarToggleButton>
+                <AppBarToggleButton x:Name="BoxButton" Label="Box" Click="BoxButton_Click">
+                    <AppBarToggleButton.Icon>
+                        <FontIcon Glyph="&#xE739;"/>
+                    </AppBarToggleButton.Icon>
+                </AppBarToggleButton>
+                <AppBarToggleButton x:Name="TextButton" Label="Text" Click="TextButton_Click">
+                    <AppBarToggleButton.Icon>
+                        <FontIcon Glyph="&#xEF60;"/>
+                    </AppBarToggleButton.Icon>
+                </AppBarToggleButton>
+                <AppBarSeparator />
+                <AppBarButton x:Name="CopyButton" Icon="Copy" Label="Copy" Click="CopyButton_Click"/>
+                <AppBarButton x:Name="SaveButton" Icon="Save" Label="Save" Click="SaveButton_Click"/>
+                <AppBarButton x:Name="CancelButton" Icon="Cancel" Label="Cancel" Click="CancelButton_Click"/>
+            </StackPanel>
+        </Border>
+    </Grid>
+
+</Window>

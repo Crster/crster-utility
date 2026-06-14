@@ -1,0 +1,44 @@
+## .NET / C#
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.log
+
+## Visual Studio
+.vs/
+*.sln.docstates
+*.VC.db
+*.VC.opendb
+
+## WinUI / Windows App SDK
+*.appx
+*.appxbundle
+*.msix
+*.msixbundle
+*.pfx
+*.publishsettings
+
+## NuGet
+*.nupkg
+packages/
+
+## Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+ARM/
+ARM64/
+
+## Rider / VS Code
+.idea/
+.vscode/
+*.code-workspace
+
+## OS files
+.DS_Store
+Thumbs.db
