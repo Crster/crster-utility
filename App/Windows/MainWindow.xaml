@@ -43,7 +43,7 @@
             IsPaneToggleButtonVisible="False">
 
             <NavigationView.MenuItems>
-                <NavigationViewItem Icon="Camera" Content="Snapshots" Tag="SnapshotsPage" />
+                <NavigationViewItem x:Name="SnapshotsNavItem" Icon="Camera" Content="Snapshots" Tag="SnapshotsPage" />
                 <NavigationViewItem Icon="Video" Content="Recordings" Tag="RecordingsPage" />
                 <NavigationViewItem Content="Notebooks" Tag="NotebookBooksPage">
                     <NavigationViewItem.Icon>

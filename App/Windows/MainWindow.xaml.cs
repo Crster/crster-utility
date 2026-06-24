@@ -20,6 +20,10 @@ namespace App.Windows
             AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
 
             SidebarNavigation.SelectionChanged += SidebarNavigation_SelectionChanged;
+            SidebarNavigation.Loaded += (s, e) =>
+            {
+                SidebarNavigation.SelectedItem = SnapshotsNavItem;
+            };
         }
 
         private void SidebarNavigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
@@ -30,7 +34,12 @@ namespace App.Windows
                 if (tag == "SnapshotsPage")
                 {
                     NavigationPresenter.Navigate(typeof(Pages.SnapshotsPage));
-                } else
+                }
+                else if (tag == "RecordingsPage")
+                {
+                    NavigationPresenter.Navigate(typeof(Pages.RecordingsPage));
+                }
+                else
                 {
                     NavigationPresenter.Content = null;
                 }
