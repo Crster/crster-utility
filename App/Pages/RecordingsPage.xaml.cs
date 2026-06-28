@@ -31,13 +31,7 @@ namespace App.Pages
 
             var hwnd = WindowNative.GetWindowHandle(App.MainWindow);
 
-            var picker = new GraphicsCapturePicker();
-            InitializeWithWindow.Initialize(picker, hwnd);
-
-            var item = await picker.PickSingleItemAsync();
-            if (item == null)
-                return;
-
+            // Step 1: Ask for filename first
             var savePicker = new FileSavePicker
             {
                 SuggestedStartLocation = PickerLocationId.VideosLibrary,
@@ -52,6 +46,14 @@ namespace App.Pages
                 return;
 
             _currentOutputPath = outputFile.Path;
+
+            // Step 2: Then pick video source
+            var picker = new GraphicsCapturePicker();
+            InitializeWithWindow.Initialize(picker, hwnd);
+
+            var item = await picker.PickSingleItemAsync();
+            if (item == null)
+                return;
 
             _recorder = new ScreenRecorderService(_device);
             _recorder.RecordingStarted += Recorder_RecordingStarted;
@@ -79,10 +81,16 @@ namespace App.Pages
                 ResetUI();
                 ShowError($"Recording failed: {ex.Message}");
             }
+            finally
+            {
+                // RecordingStopped event will fire when mux is done
+            }
         }
 
         private void StopRecordingButton_Click(object sender, RoutedEventArgs e)
         {
+            StopRecordingButton.IsEnabled = false;
+            RecordingStatusText.Text = "Stopping and processing...";
             _recorder?.Stop();
         }
 
