@@ -47,11 +47,8 @@ namespace App.Pages
 
             _currentOutputPath = outputFile.Path;
 
-            // Step 2: Then pick video source
-            var picker = new GraphicsCapturePicker();
-            InitializeWithWindow.Initialize(picker, hwnd);
-
-            var item = await picker.PickSingleItemAsync();
+            // Step 2: Capture the primary display directly.
+            var item = await ScreenCaptureService.GetMainDisplayItemAsync();
             if (item == null)
                 return;
 
@@ -90,7 +87,7 @@ namespace App.Pages
         private void StopRecordingButton_Click(object sender, RoutedEventArgs e)
         {
             StopRecordingButton.IsEnabled = false;
-            RecordingStatusText.Text = "Stopping and processing...";
+            RecordingStatusText.Text = "Saving...";
             _recorder?.Stop();
         }
 

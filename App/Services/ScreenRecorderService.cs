@@ -47,6 +47,9 @@ namespace App.Services
         private long _micSamplesReceived = 0;
         private long _micSamplesQueued = 0;
         private long _micSamplesProcessed = 0;
+        private long _loopbackSamplesReceived = 0;
+        private long _loopbackSamplesWritten = 0;
+        private long _micEmptyCallbacks = 0;
 
         // Audio Recording Fields
         private WasapiLoopbackCapture? _loopbackCapture;
@@ -78,8 +81,6 @@ namespace App.Services
             uint frameRate = 30,
             bool includeCursor = true)
         {
-            Debug.WriteLine($"[RecordAsync] Called. outputFilePath={outputFilePath}, size={item.Size.Width}x{item.Size.Height}, fps={frameRate}, bitrate={bitrateBps}, cursor={includeCursor}");
-
             lock (_lock)
             {
                 if (_isRecording)
@@ -168,7 +169,6 @@ namespace App.Services
                 if (!_transcodeOp.CanTranscode)
                     throw new InvalidOperationException("MFT Encoder could not initialize with these configurations.");
 
-                Debug.WriteLine("[RecordAsync] Transcode prepared. Starting capture, audio recording, and transcode.");
                 RecordingStarted?.Invoke(this, outputFilePath);
 
                 _frameStopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -177,6 +177,9 @@ namespace App.Services
                 _micSamplesReceived = 0;
                 _micSamplesQueued = 0;
                 _micSamplesProcessed = 0;
+                _loopbackSamplesReceived = 0;
+                _loopbackSamplesWritten = 0;
+                _micEmptyCallbacks = 0;
 
                 // Start loopback + mic audio recording
                 StartAudioRecording(audioTempPath);
@@ -187,7 +190,6 @@ namespace App.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[RecordAsync] Exception: {ex}");
                 _isRecording = false;
                 Cleanup();
                 await StopAudioRecordingAsync();
@@ -210,8 +212,6 @@ namespace App.Services
                     _isRecording = false;
                     Cleanup();
                     await StopAudioRecordingAsync();
-                    
-                    Debug.WriteLine($"[RecordAsync] Final stats - Frames: {_frameCount}, Dropped: {_droppedFrames}, Mic received: {_micSamplesReceived}, Queued: {_micSamplesQueued}, Processed: {_micSamplesProcessed}");
                     
                     // Run mux async in background WITHOUT blocking UI
                     _ = Task.Run(async () =>
@@ -260,11 +260,9 @@ namespace App.Services
             var frame = sender.TryGetNextFrame();
             if (frame == null)
             {
-                _droppedFrames++;
-                if (_droppedFrames % 100 == 0)
-                    Debug.WriteLine($"[OnFrameArrived] Dropped {_droppedFrames} total frames");
-                return;
-            }
+                    _droppedFrames++;
+                    return;
+                }
 
             lock (_lock)
             {
@@ -317,11 +315,6 @@ namespace App.Services
                     args.Request.Sample = sample;
                     
                     _frameCount++;
-                    if (_frameCount % 300 == 0)
-                    {
-                        var fps = (double)_frameCount / _frameStopwatch?.Elapsed.TotalSeconds ?? 0;
-                        Debug.WriteLine($"[OnSampleRequested] Frame {_frameCount}, FPS: {fps:F1}, Queue: {_frameQueue.Count}, Dropped: {_droppedFrames}");
-                    }
                 }
                 else
                 {
@@ -332,9 +325,8 @@ namespace App.Services
             {
                 args.Request.Sample = null;
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.WriteLine($"[OnSampleRequested] Exception: {ex}");
                 args.Request.Sample = null;
             }
             finally
@@ -400,8 +392,6 @@ namespace App.Services
             {
                 _loopbackCapture = new WasapiLoopbackCapture();
                 var waveFormat = _loopbackCapture.WaveFormat;
-                Debug.WriteLine($"[StartAudioRecording] Loopback format: {waveFormat}");
-
                 _loopbackWriter = new WaveFileWriter(loopbackPath, waveFormat);
 
                 _loopbackRecordTask = Task.Run(() =>
@@ -412,31 +402,27 @@ namespace App.Services
                         {
                             if (_isAudioRecording && e.BytesRecorded > 0)
                             {
+                                _loopbackSamplesReceived++;
                                 lock (_lock)
                                 {
                                     _loopbackWriter?.Write(e.Buffer, 0, e.BytesRecorded);
+                                    _loopbackSamplesWritten++;
                                 }
                             }
                         };
 
                         _loopbackCapture.StartRecording();
-                        Debug.WriteLine("[StartAudioRecording] Loopback capture started.");
-
                         // Keep task alive while recording
                         while (_isAudioRecording)
                         {
                             System.Threading.Thread.Sleep(100);
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"[LoopbackRecordTask] Exception: {ex.Message}");
-                    }
+                    catch { }
                 });
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.WriteLine($"[StartAudioRecording] Failed to start loopback: {ex.Message}");
                 _loopbackCapture?.Dispose();
                 _loopbackCapture = null;
             }
@@ -446,9 +432,6 @@ namespace App.Services
             {
                 _micCapture = new WasapiCapture();
                 _micWaveFormat = _micCapture.WaveFormat;
-                Debug.WriteLine($"[StartAudioRecording] Mic format: {_micWaveFormat}");
-                Debug.WriteLine($"[StartAudioRecording] Mic in use: Default capture device");
-
                 _micWriter = new WaveFileWriter(micPath, _micWaveFormat);
 
                 // Start background processing task for mic audio
@@ -458,7 +441,7 @@ namespace App.Services
                     {
                         while (_isAudioRecording)
                         {
-                            if (_micAudioQueue.TryDequeue(out var buffer))
+                            if (_micAudioQueue != null && _micAudioQueue.TryDequeue(out var buffer))
                             {
                                 lock (_lock)
                                 {
@@ -466,23 +449,14 @@ namespace App.Services
                                     _micSamplesProcessed++;
                                 }
                                 
-                                if (_micSamplesProcessed % 100 == 0)
-                                {
-                                    var queueDepth = _micAudioQueue?.Count ?? 0;
-                                    Debug.WriteLine($"[MicProcessingTask] Processed {_micSamplesProcessed}, Queue depth: {queueDepth}, Received: {_micSamplesReceived}");
-                                }
                             }
                             else
                             {
                                 await Task.Delay(1);
                             }
                         }
-                        Debug.WriteLine($"[MicProcessingTask] Stopped. Total processed: {_micSamplesProcessed}");
                     }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"[MicProcessingTask] Exception: {ex.Message}");
-                    }
+                    catch { }
                 });
 
                 _micRecordTask = Task.Run(() =>
@@ -497,7 +471,7 @@ namespace App.Services
                                 {
                                     _micSamplesReceived++;
                                     // NO LOCK HERE - Queue the audio for async processing
-                                    float volumeBoost = 6.0f;
+                                    float volumeBoost = 2.0f;
                                     var boostedBuffer = new byte[e.BytesRecorded];
                                     System.Buffer.BlockCopy(e.Buffer, 0, boostedBuffer, 0, e.BytesRecorded);
                                     
@@ -517,37 +491,26 @@ namespace App.Services
                                     _micAudioQueue?.Enqueue(boostedBuffer);
                                     _micSamplesQueued++;
                                     
-                                    if (_micSamplesReceived % 100 == 0)
-                                    {
-                                        var queueDepth = _micAudioQueue?.Count ?? 0;
-                                        Debug.WriteLine($"[MicRecordTask] Received {_micSamplesReceived} callbacks, Queued {_micSamplesQueued}, Queue depth: {queueDepth}\");
-                                    }
                                 }
                                 else
                                 {
-                                    Debug.WriteLine($"[MicRecordTask] Empty data callback (muted?)\");
+                                    _micEmptyCallbacks++;
                                 }
                             }
                         };
 
                         _micCapture.StartRecording();
-                        Debug.WriteLine("[StartAudioRecording] Mic capture started. Volume boost: 6x");
-
                         // Keep task alive while recording
                         while (_isAudioRecording)
                         {
                             System.Threading.Thread.Sleep(100);
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        Debug.WriteLine($"[MicRecordTask] Exception: {ex.Message}");
-                    }
+                    catch { }
                 });
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.WriteLine($"[StartAudioRecording] Failed to start mic: {ex.Message}");
                 _micCapture?.Dispose();
                 _micCapture = null;
             }
@@ -582,9 +545,8 @@ namespace App.Services
             {
                 _loopbackCapture?.StopRecording();
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.WriteLine($"[StopAudioRecording] Loopback stop error: {ex.Message}");
             }
             finally
             {
@@ -601,9 +563,8 @@ namespace App.Services
             {
                 _micCapture?.StopRecording();
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.WriteLine($"[StopAudioRecording] Mic stop error: {ex.Message}");
             }
             finally
             {
@@ -639,6 +600,7 @@ namespace App.Services
             {
                 string loopbackPath = audioPath.Replace(".wav", "_loopback.wav");
                 string micPath = audioPath.Replace(".wav", "_mic.wav");
+                string mixedAudioPath = audioPath.Replace(".wav", "_mixed.wav");
 
                 bool hasVideo = File.Exists(videoPath) && new FileInfo(videoPath).Length > 1000;
                 bool hasLoopback = File.Exists(loopbackPath) && new FileInfo(loopbackPath).Length > 1000;
@@ -649,12 +611,9 @@ namespace App.Services
                     throw new FileNotFoundException("Video file was not recorded successfully.");
                 }
 
-                Debug.WriteLine($"[MuxAudioVideoAsync] Video: {hasVideo}, Loopback: {hasLoopback}, Mic: {hasMic}");
-
                 // Fast path: no audio, just copy video
                 if (!hasLoopback && !hasMic)
                 {
-                    Debug.WriteLine("[MuxAudioVideoAsync] No audio, copying video directly (fast).");
                     if (File.Exists(outputPath)) File.Delete(outputPath);
                     File.Copy(videoPath, outputPath);
                     return;
@@ -666,22 +625,26 @@ namespace App.Services
                 var videoClip = await global::Windows.Media.Editing.MediaClip.CreateFromFileAsync(videoFile);
                 composition.Clips.Add(videoClip);
 
-                // Mix audio tracks
-                if (hasLoopback)
+                string? audioTrackPath = null;
+                if (hasLoopback && hasMic)
                 {
-                    var loopbackFile = await StorageFile.GetFileFromPathAsync(loopbackPath);
-                    var loopbackTrack = await global::Windows.Media.Editing.BackgroundAudioTrack.CreateFromFileAsync(loopbackFile);
-                    composition.BackgroundAudioTracks.Add(loopbackTrack);
-                    Debug.WriteLine("[MuxAudioVideoAsync] Added loopback track.");
+                    await MixWavFilesAsync(loopbackPath, micPath, mixedAudioPath);
+                    audioTrackPath = mixedAudioPath;
+                }
+                else if (hasLoopback)
+                {
+                    audioTrackPath = loopbackPath;
+                }
+                else if (hasMic)
+                {
+                    audioTrackPath = micPath;
                 }
 
-                if (hasMic)
+                if (audioTrackPath != null)
                 {
-                    var micFile = await StorageFile.GetFileFromPathAsync(micPath);
-                    var micTrack = await global::Windows.Media.Editing.BackgroundAudioTrack.CreateFromFileAsync(micFile);
-                    micTrack.Volume = 1.5;
-                    composition.BackgroundAudioTracks.Add(micTrack);
-                    Debug.WriteLine("[MuxAudioVideoAsync] Added mic track (150% volume).");
+                    var audioFile = await StorageFile.GetFileFromPathAsync(audioTrackPath);
+                    var audioTrack = await global::Windows.Media.Editing.BackgroundAudioTrack.CreateFromFileAsync(audioFile);
+                    composition.BackgroundAudioTracks.Add(audioTrack);
                 }
 
                 var destFile = await StorageFile.GetFileFromPathAsync(outputPath);
@@ -694,23 +657,20 @@ namespace App.Services
                 profile.Video.FrameRate.Denominator = 1;
                 profile.Audio = AudioEncodingProperties.CreateAac(44100, 2, 192000);
 
-                Debug.WriteLine("[MuxAudioVideoAsync] Starting render (timeout 300s)...");
                 var cts = new CancellationTokenSource(TimeSpan.FromSeconds(300));
-                var saveOp = composition.RenderToFileAsync(destFile, global::Windows.Media.Editing.MediaTrimmingPreference.Fast, profile);
+                // Prefer preserving the full capture length over a faster trimmed render.
+                var saveOp = composition.RenderToFileAsync(destFile, global::Windows.Media.Editing.MediaTrimmingPreference.Precise, profile);
                 await saveOp.AsTask(cts.Token);
-                Debug.WriteLine("[MuxAudioVideoAsync] Render complete.");
             }
             catch (OperationCanceledException)
             {
-                Debug.WriteLine("[MuxAudioVideoAsync] Render timeout.");
                 if (File.Exists(videoPath) && !File.Exists(outputPath))
                 {
                     File.Copy(videoPath, outputPath, true);
                 }
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.WriteLine($"[MuxAudioVideoAsync] Error: {ex.Message}");
                 if (File.Exists(videoPath) && !File.Exists(outputPath))
                 {
                     File.Copy(videoPath, outputPath, true);
@@ -724,15 +684,28 @@ namespace App.Services
                     if (File.Exists(audioPath)) File.Delete(audioPath);
                     string loopbackPath = audioPath.Replace(".wav", "_loopback.wav");
                     string micPath = audioPath.Replace(".wav", "_mic.wav");
+                    string mixedAudioPath = audioPath.Replace(".wav", "_mixed.wav");
                     if (File.Exists(loopbackPath)) File.Delete(loopbackPath);
                     if (File.Exists(micPath)) File.Delete(micPath);
+                    if (File.Exists(mixedAudioPath)) File.Delete(mixedAudioPath);
                 }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"[MuxAudioVideoAsync] Temp cleanup error: {ex.Message}");
-                }
+                catch { }
             }
         }
+
+        private static async Task MixWavFilesAsync(string firstPath, string secondPath, string outputPath)
+        {
+            using var firstReader = new AudioFileReader(firstPath);
+            using var secondReader = new AudioFileReader(secondPath);
+
+            var mixer = new MixingSampleProvider(new[] { firstReader, secondReader })
+            {
+                ReadFully = false
+            };
+
+            await Task.Run(() => WaveFileWriter.CreateWaveFile16(outputPath, mixer));
+        }
+
     }
 }
 

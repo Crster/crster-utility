@@ -14,6 +14,8 @@ namespace App.Services
 {
     public static class ScreenCaptureService
     {
+        public static Task<GraphicsCaptureItem?> GetMainDisplayItemAsync() => GetMainDisplayItem();
+
         public static async Task<CanvasBitmap?> CaptureAsync()
         {
             try

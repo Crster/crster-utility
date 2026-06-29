@@ -100,12 +100,12 @@
                           FontSize="64"
                           Foreground="{ThemeResource TextFillColorDisabledBrush}"
                           HorizontalAlignment="Center" />
-                <TextBlock Text="Select a window or display"
+                <TextBlock Text="Captures the primary display"
                           Style="{StaticResource SubtitleTextBlockStyle}"
                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                           HorizontalAlignment="Center"
                           Margin="0,16,0,4" />
-                <TextBlock Text="Click Start Recording to choose a capture target"
+                <TextBlock Text="Click Start Recording to capture the entire screen"
                           Style="{StaticResource CaptionTextBlockStyle}"
                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                           HorizontalAlignment="Center" />
