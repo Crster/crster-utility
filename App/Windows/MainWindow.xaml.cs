@@ -4,7 +4,6 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using System;
 using Windows.Graphics;
-using WinRT.Interop;
 
 namespace App.Windows
 {
@@ -16,6 +15,7 @@ namespace App.Windows
             this.ExtendsContentIntoTitleBar = true;
 
             AppWindow.Resize(new SizeInt32(800, 600));
+            CenterOnCurrentScreen();
             AppWindow.SetIcon("Assets/WindowIcon.ico");
             AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
 
@@ -24,6 +24,18 @@ namespace App.Windows
             {
                 SidebarNavigation.SelectedItem = SnapshotsNavItem;
             };
+        }
+
+        private void CenterOnCurrentScreen()
+        {
+            DisplayArea displayArea = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
+            RectInt32 workArea = displayArea.WorkArea;
+            SizeInt32 size = AppWindow.Size;
+
+            int x = workArea.X + (workArea.Width - size.Width) / 2;
+            int y = workArea.Y + (workArea.Height - size.Height) / 2;
+
+            AppWindow.Move(new PointInt32(x, y));
         }
 
         private void SidebarNavigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
