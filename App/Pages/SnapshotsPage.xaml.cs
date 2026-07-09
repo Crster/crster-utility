@@ -10,6 +10,7 @@ using MColor = Microsoft.UI.Colors;
 using WColor = Windows.UI.Color;
 using WClipboard = Windows.ApplicationModel.DataTransfer.Clipboard;
 using DataPackage = Windows.ApplicationModel.DataTransfer.DataPackage;
+using System.Threading;
 
 namespace App.Pages
 {
@@ -43,6 +44,7 @@ namespace App.Pages
             {
                 IsMainWindowVisible = true;
                 SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_HIDEWINDOW);
+                Thread.Sleep(100);
             }
 
             Snapshot = await ScreenCaptureService.CaptureAsync();

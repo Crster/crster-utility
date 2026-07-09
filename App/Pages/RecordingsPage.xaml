@@ -10,6 +10,21 @@
     <Page.Resources>
         <Thickness x:Key="CardPadding">24</Thickness>
         <CornerRadius x:Key="CardCornerRadius">12</CornerRadius>
+        <Storyboard x:Key="RecordingWaveStoryboard">
+            <DoubleAnimation Storyboard.TargetName="RecordingWaveTransform"
+                             Storyboard.TargetProperty="X"
+                             From="-150"
+                             To="220"
+                             Duration="0:0:1.25"
+                             RepeatBehavior="Forever" />
+            <DoubleAnimation Storyboard.TargetName="RecordingWave"
+                             Storyboard.TargetProperty="Opacity"
+                             From="0.18"
+                             To="0.42"
+                             Duration="0:0:0.62"
+                             AutoReverse="True"
+                             RepeatBehavior="Forever" />
+        </Storyboard>
     </Page.Resources>
 
     <ScrollViewer VerticalScrollBarVisibility="Auto"
@@ -39,61 +54,120 @@
 
             <!-- Controls -->
             <StackPanel Grid.Row="1"
-                        Orientation="Horizontal"
                         HorizontalAlignment="Center"
                         Spacing="16">
-                <Button x:Name="StartRecordingButton"
-                          Content="Start Recording"
-                          Style="{StaticResource AccentButtonStyle}"
-                          Padding="24,12,24,12"
-                          Click="StartRecordingButton_Click" />
-                <Button x:Name="StopRecordingButton"
-                          Content="Stop Recording"
-                          Background="#DC3545"
-                          Foreground="White"
-                          Padding="24,12,24,12"
-                          IsEnabled="False"
-                          Click="StopRecordingButton_Click" />
+                <Button x:Name="RecordingButton"
+                          Background="Transparent"
+                          BorderThickness="0"
+                          Padding="0"
+                          Click="RecordingButton_Click">
+                    <Grid MinWidth="145"
+                          MinHeight="40">
+                        <Border x:Name="RecordingButtonBase"
+                                Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                CornerRadius="4">
+                            <Grid>
+                                <Border x:Name="RecordingWave"
+                                        Width="112"
+                                        HorizontalAlignment="Left"
+                                        VerticalAlignment="Stretch"
+                                        CornerRadius="4"
+                                        Background="#55FFFFFF"
+                                        Opacity="0"
+                                        IsHitTestVisible="False"
+                                        RenderTransformOrigin="0.5,0.5">
+                                    <Border.RenderTransform>
+                                        <TranslateTransform x:Name="RecordingWaveTransform"
+                                                            X="-150" />
+                                    </Border.RenderTransform>
+                                </Border>
+                                <TextBlock x:Name="RecordingButtonLabel"
+                                           Text="Start Recording"
+                                           Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                                           FontSize="14"
+                                           FontWeight="Normal"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           Margin="24,12" />
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Button>
             </StackPanel>
 
-            <!-- Status Card -->
+            <!-- Latest Recording -->
             <Border Grid.Row="2"
-                    x:Name="StatusCard"
+                    x:Name="LatestRecordingCard"
                     Visibility="Collapsed"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="{StaticResource CardCornerRadius}"
                     Margin="0,24,0,0">
-                <Grid Padding="{StaticResource CardPadding}">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
+                <StackPanel Padding="{StaticResource CardPadding}"
+                            Spacing="18">
+                    <Button x:Name="LatestRecordingButton"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0"
+                            HorizontalAlignment="Stretch"
+                            Click="LatestRecordingButton_Click">
+                        <Border Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}"
+                                CornerRadius="8">
+                            <Image x:Name="LatestRecordingImage"
+                                   Stretch="Uniform"
+                                   MaxHeight="420"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Margin="12" />
+                        </Border>
+                    </Button>
 
-                    <ProgressRing x:Name="RecordingProgressRing"
-                                   Grid.Column="0"
-                                   IsActive="False"
-                                   Width="40"
-                                   Height="40"
-                                   Margin="0,0,16,0" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="1"
-                                VerticalAlignment="Center">
-                        <TextBlock x:Name="RecordingStatusText"
-                                  Style="{StaticResource SubtitleTextBlockStyle}"
-                                  Text="Ready" />
-                        <TextBlock x:Name="RecordingPathText"
-                                  Style="{StaticResource CaptionTextBlockStyle}"
-                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                  TextWrapping="Wrap"
-                                  Margin="0,4,0,0" />
-                    </StackPanel>
-                </Grid>
+                        <StackPanel Grid.Column="0"
+                                    Spacing="4">
+                            <TextBlock Text="Duration"
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Name="LatestRecordingDurationText"
+                                       Text="00:00"
+                                       Style="{StaticResource SubtitleTextBlockStyle}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1"
+                                    Spacing="4"
+                                    HorizontalAlignment="Center">
+                            <TextBlock Text="FPS"
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Name="LatestRecordingFpsText"
+                                       Text="0.0"
+                                       Style="{StaticResource SubtitleTextBlockStyle}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2"
+                                    Spacing="4"
+                                    HorizontalAlignment="Right">
+                            <TextBlock Text="File Size"
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Name="LatestRecordingFileSizeText"
+                                       Text="0 MB"
+                                       Style="{StaticResource SubtitleTextBlockStyle}" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
             </Border>
 
             <!-- Info -->
-            <StackPanel Grid.Row="3"
+            <StackPanel Grid.Row="2"
+                        x:Name="InfoPanel"
                         Margin="0,32,0,0"
                         HorizontalAlignment="Center">
                 <FontIcon Glyph="&#xE7F4;"
