@@ -52,6 +52,29 @@
                           Margin="0,4,0,0" />
             </StackPanel>
 
+            <Border Grid.Row="2"
+                    x:Name="FinalizingPanel"
+                    Visibility="Collapsed"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="24"
+                    Margin="0,32,0,0">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Finalizing recording"
+                               Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock x:Name="FinalizingStatusText"
+                               Text="Writing your video…"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <ProgressBar IsIndeterminate="True" Height="6" />
+                    <TextBlock x:Name="FinalizingCountdownText"
+                               Text="About a few seconds remaining"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                </StackPanel>
+            </Border>
+
             <!-- Controls -->
             <StackPanel Grid.Row="1"
                         HorizontalAlignment="Center"

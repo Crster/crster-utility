@@ -26,10 +26,8 @@ namespace App.Services
 {
     public sealed class ScreenRecorderService : IDisposable
     {
-        private const int MaxVideoQueueDepth = 1;
         private const int MaxMicQueueDepth = 64;
         private const int TraceSampleModulo = 60;
-        private const int DiagnosticIntervalMs = 2000;
 
         private sealed record CapturedFrame(long Id, Direct3D11CaptureFrame Frame);
 
@@ -37,8 +35,8 @@ namespace App.Services
         private GraphicsCaptureItem? _item;
         private Direct3D11CaptureFramePool? _framePool;
         private GraphicsCaptureSession? _session;
-        private readonly System.Collections.Concurrent.ConcurrentQueue<CapturedFrame> _frameQueue = new();
-        private readonly SemaphoreSlim _frameSemaphore = new(0);
+        private CapturedFrame? _latestFrame;
+        private readonly SemaphoreSlim _frameAvailable = new(0, 1);
         private CancellationTokenSource? _cts;
         private readonly object _lock = new();
         private readonly TypedEventHandler<MediaStreamSample, object> _sampleProcessedHandler;
@@ -53,13 +51,18 @@ namespace App.Services
         private TimeSpan _finalElapsed = TimeSpan.Zero;
         private long _frameCount = 0;
         private long _droppedFrames = 0;
+        private long _throttledFrames = 0;
         private long _nextFrameId = 0;
+        private TimeSpan _minimumFrameInterval;
+        private TimeSpan? _lastAcceptedFrameTime;
         private System.Diagnostics.Stopwatch? _frameStopwatch;
         private string? _videoTempPath;
         private string? _audioBaseTempPath;
         private long _micSamplesReceived = 0;
         private long _micSamplesQueued = 0;
         private long _micSamplesProcessed = 0;
+        private long _micQueuedBytes = 0;
+        private long _micDroppedBuffers = 0;
         private long _loopbackSamplesReceived = 0;
         private long _loopbackSamplesWritten = 0;
         private long _micEmptyCallbacks = 0;
@@ -75,7 +78,6 @@ namespace App.Services
         private WaveFormat? _micWaveFormat;
         private ConcurrentQueue<byte[]>? _micAudioQueue;
         private Task? _micProcessingTask;
-        private Task? _diagnosticTask;
 
         public bool IsRecording => _isRecording;
         public TimeSpan Elapsed => _frameStopwatch?.Elapsed ?? TimeSpan.Zero;
@@ -94,52 +96,24 @@ namespace App.Services
             _sampleProcessedHandler = OnSampleProcessed;
         }
 
+        [Conditional("RECORDER_DIAGNOSTICS")]
         private static void Trace(string message)
         {
-            Debug.WriteLine($"[ScreenRecorder] {DateTime.Now:HH:mm:ss.fff} {message}");
         }
 
+        [Conditional("RECORDER_DIAGNOSTICS")]
         private void TraceMemorySnapshot(string reason)
         {
             var process = Process.GetCurrentProcess();
             Trace(
                 $"{reason} memManaged={GC.GetTotalMemory(false):N0}B " +
-                $"private={process.PrivateMemorySize64:N0}B workingSet={process.WorkingSet64:N0}B " +
-                $"frameQueue={_frameQueue.Count} micQueue={_micAudioQueue?.Count ?? 0} " +
-                $"frames={_frameCount} dropped={_droppedFrames} micReceived={_micSamplesReceived} " +
-                $"micQueued={_micSamplesQueued} micProcessed={_micSamplesProcessed} loopbackReceived={_loopbackSamplesReceived} " +
-                $"loopbackWritten={_loopbackSamplesWritten}");
-        }
-
-        private void StartDiagnosticsLoop()
-        {
-            var token = _cts?.Token;
-            if (token == null)
-            {
-                Trace("Diagnostics loop not started because cancellation token is unavailable");
-                return;
-            }
-
-            _diagnosticTask = Task.Run(async () =>
-            {
-                Trace("Diagnostics loop started");
-                try
-                {
-                    while (!token.Value.IsCancellationRequested)
-                    {
-                        TraceMemorySnapshot("Diagnostics");
-                        await Task.Delay(DiagnosticIntervalMs, token.Value);
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    Trace("Diagnostics loop canceled");
-                }
-                catch (Exception ex)
-                {
-                    Trace($"Diagnostics loop failed: {ex.GetType().Name}: {ex.Message}");
-                }
-            });
+                $"allocated={GC.GetTotalAllocatedBytes(false):N0}B " +
+                $"private={process.PrivateMemorySize64:N0}B workingSet={process.WorkingSet64:N0}B handles={process.HandleCount} " +
+                $"gc=[{GC.CollectionCount(0)},{GC.CollectionCount(1)},{GC.CollectionCount(2)}] " +
+                $"videoSlot={(_latestFrame is null ? 0 : 1)} pendingSamples={_pendingSamples.Count} micQueue={_micAudioQueue?.Count ?? 0} micQueuedBytes={Interlocked.Read(ref _micQueuedBytes):N0} " +
+                $"frames={_frameCount} dropped={_droppedFrames} throttled={_throttledFrames} micReceived={_micSamplesReceived} " +
+                $"micQueued={_micSamplesQueued} micProcessed={_micSamplesProcessed} micDroppedBuffers={_micDroppedBuffers} " +
+                $"loopbackReceived={_loopbackSamplesReceived} loopbackWritten={_loopbackSamplesWritten} tempBytes={GetCurrentRecordingSizeBytes():N0}");
         }
 
         public async Task RecordAsync(
@@ -158,7 +132,12 @@ namespace App.Services
             }
 
             _item = item ?? throw new ArgumentNullException(nameof(item));
+            if (frameRate == 0)
+                throw new ArgumentOutOfRangeException(nameof(frameRate), "Frame rate must be greater than zero.");
+
             _startTime = null;
+            _minimumFrameInterval = TimeSpan.FromSeconds(1d / frameRate);
+            _lastAcceptedFrameTime = null;
 
             uint width = (uint)item.Size.Width;
             uint height = (uint)item.Size.Height;
@@ -252,17 +231,18 @@ namespace App.Services
                 _frameStopwatch = System.Diagnostics.Stopwatch.StartNew();
                 _frameCount = 0;
                 _droppedFrames = 0;
+                _throttledFrames = 0;
                 _micSamplesReceived = 0;
                 _micSamplesQueued = 0;
                 _micSamplesProcessed = 0;
+                _micQueuedBytes = 0;
+                _micDroppedBuffers = 0;
                 _loopbackSamplesReceived = 0;
                 _loopbackSamplesWritten = 0;
                 _micEmptyCallbacks = 0;
 
                 // Start loopback + mic audio recording
                 StartAudioRecording(audioTempPath);
-                StartDiagnosticsLoop();
-
                 _session.StartCapture();
                 Trace("Capture started; waiting for transcoder completion");
 
@@ -330,7 +310,11 @@ namespace App.Services
             }
 
             _session?.Dispose();
-            _framePool?.Dispose();
+            if (_framePool != null)
+            {
+                _framePool.FrameArrived -= OnFrameArrived;
+                _framePool.Dispose();
+            }
             _session = null;
             _framePool = null;
             Trace("Stop completed");
@@ -354,6 +338,7 @@ namespace App.Services
 
             var frameId = Interlocked.Increment(ref _nextFrameId);
 
+            CapturedFrame? previousFrame;
             lock (_lock)
             {
                 if (!_isRecording)
@@ -362,25 +347,32 @@ namespace App.Services
                     Trace($"FrameArrived ignored because recording is no longer active frameId={frameId}");
                     return;
                 }
-            }
 
-            // Keep only the freshest frame to avoid GPU memory buildup when encoding lags behind capture.
-            while (_frameQueue.Count >= MaxVideoQueueDepth)
-            {
-                if (_frameQueue.TryDequeue(out var oldFrame))
+                if (_lastAcceptedFrameTime.HasValue && frame.SystemRelativeTime - _lastAcceptedFrameTime.Value < _minimumFrameInterval)
                 {
-                    oldFrame.Frame.Dispose();
-                    _frameSemaphore.Wait(0);
-                    _droppedFrames++;
-                    Trace($"Video queue full; dropped stale frame id={oldFrame.Id} queueCount={_frameQueue.Count} dropped={_droppedFrames}");
+                    frame.Dispose();
+                    _throttledFrames++;
+                    return;
+                }
+
+                _lastAcceptedFrameTime = frame.SystemRelativeTime;
+                previousFrame = Interlocked.Exchange(ref _latestFrame, new CapturedFrame(frameId, frame));
+                if (previousFrame is null)
+                {
+                    _frameAvailable.Release();
                 }
             }
 
-            _frameQueue.Enqueue(new CapturedFrame(frameId, frame));
-            _frameSemaphore.Release();
+            if (previousFrame != null)
+            {
+                previousFrame.Frame.Dispose();
+                _droppedFrames++;
+                Trace($"Video slot replaced stale frame id={previousFrame.Id} dropped={_droppedFrames}");
+            }
+
             if (frameId % TraceSampleModulo == 0)
             {
-                Trace($"Frame enqueued frameId={frameId} queueCount={_frameQueue.Count} frameCount={_frameCount} dropped={_droppedFrames}");
+                Trace($"Frame accepted frameId={frameId} frameCount={_frameCount} dropped={_droppedFrames} throttled={_throttledFrames}");
             }
         }
 
@@ -400,22 +392,47 @@ namespace App.Services
                     token = _cts.Token;
                 }
 
-                await _frameSemaphore.WaitAsync(token);
+                await _frameAvailable.WaitAsync(token);
 
-                if (_frameQueue.TryDequeue(out var capturedFrame))
+                var capturedFrame = Interlocked.Exchange(ref _latestFrame, null);
+                if (capturedFrame != null)
                 {
-                    _startTime ??= capturedFrame.Frame.SystemRelativeTime;
-                    var timeStamp = capturedFrame.Frame.SystemRelativeTime - _startTime.Value;
-                    var sample = MediaStreamSample.CreateFromDirect3D11Surface(
-                        capturedFrame.Frame.Surface, timeStamp);
-                    _pendingSamples[sample] = capturedFrame;
-                    sample.Processed += _sampleProcessedHandler;
-                    args.Request.Sample = sample;
-                    
-                    _frameCount++;
-                    if (_frameCount % TraceSampleModulo == 0)
+                    // The sample holds the Direct3D surface until the encoder has consumed it.
+                    // _pendingSamples owns the frame until the sample is processed.
+                    var frameHandedOff = false;
+                    MediaStreamSample? sample = null;
+                    try
                     {
-                        Trace($"SampleRequested produced frameId={capturedFrame.Id} frameCount={_frameCount} queueCount={_frameQueue.Count} elapsed={Elapsed}");
+                        _startTime ??= capturedFrame.Frame.SystemRelativeTime;
+                        var timeStamp = capturedFrame.Frame.SystemRelativeTime - _startTime.Value;
+                        sample = MediaStreamSample.CreateFromDirect3D11Surface(
+                            capturedFrame.Frame.Surface, timeStamp);
+                        sample.Processed += _sampleProcessedHandler;
+                        if (!_pendingSamples.TryAdd(sample, capturedFrame))
+                            throw new InvalidOperationException("Unable to track the video sample.");
+
+                        args.Request.Sample = sample;
+                        frameHandedOff = true;
+
+                        _frameCount++;
+                        if (_frameCount % TraceSampleModulo == 0)
+                        {
+                            Trace($"SampleRequested produced frameId={capturedFrame.Id} frameCount={_frameCount} elapsed={Elapsed}");
+                        }
+                    }
+                    finally
+                    {
+                        if (!frameHandedOff)
+                        {
+                            if (sample != null)
+                            {
+                                sample.Processed -= _sampleProcessedHandler;
+                                _pendingSamples.TryRemove(sample, out _);
+                            }
+
+                            capturedFrame.Frame.Dispose();
+                            Trace($"SampleRequested disposed unsubmitted frameId={capturedFrame.Id}");
+                        }
                     }
                 }
                 else
@@ -444,7 +461,10 @@ namespace App.Services
         {
             if (_pendingSamples.TryRemove(sender, out var capturedFrame))
             {
-                Trace($"Sample processed frameId={capturedFrame.Id}");
+                if (capturedFrame.Id % TraceSampleModulo == 0)
+                {
+                    Trace($"Sample processed frameId={capturedFrame.Id} pendingSamples={_pendingSamples.Count}");
+                }
                 capturedFrame.Frame.Dispose();
             }
 
@@ -468,28 +488,33 @@ namespace App.Services
             }
 
             _session?.Dispose();
-            _framePool?.Dispose();
-
-            // Drain queue
-            while (_frameQueue.TryDequeue(out var frame))
+            if (_framePool != null)
             {
-                Trace($"Cleanup disposing queued frame id={frame.Id}");
-                frame.Frame.Dispose();
+                _framePool.FrameArrived -= OnFrameArrived;
+                _framePool.Dispose();
+            }
+
+            var queuedFrame = Interlocked.Exchange(ref _latestFrame, null);
+            if (queuedFrame != null)
+            {
+                Trace($"Cleanup disposing queued frame id={queuedFrame.Id}");
+                queuedFrame.Frame.Dispose();
             }
 
             foreach (var entry in _pendingSamples)
             {
                 if (_pendingSamples.TryRemove(entry.Key, out var capturedFrame))
                 {
+                    entry.Key.Processed -= _sampleProcessedHandler;
                     Trace($"Cleanup disposing pending sample frame id={capturedFrame.Id}");
                     capturedFrame.Frame.Dispose();
                 }
             }
 
-            // Reset semaphore count
-            while (_frameSemaphore.CurrentCount > 0)
+            // Reset the one-frame slot signal.
+            while (_frameAvailable.CurrentCount > 0)
             {
-                _frameSemaphore.Wait(0);
+                _frameAvailable.Wait(0);
             }
 
             if (_mediaStreamSource != null)
@@ -519,6 +544,8 @@ namespace App.Services
             string loopbackPath = audioBasePath.Replace(".wav", "_loopback.wav");
             string micPath = audioBasePath.Replace(".wav", "_mic.wav");
             _micAudioQueue = new ConcurrentQueue<byte[]>();
+            _micQueuedBytes = 0;
+            _micDroppedBuffers = 0;
             Trace($"StartAudioRecording base='{audioBasePath}' loopback='{loopbackPath}' mic='{micPath}'");
 
             // 1. Device Sound Loopback - Independent writer
@@ -585,6 +612,7 @@ namespace App.Services
                         {
                             if (_micAudioQueue != null && _micAudioQueue.TryDequeue(out var buffer))
                             {
+                                Interlocked.Add(ref _micQueuedBytes, -buffer.Length);
                                 lock (_lock)
                                 {
                                     _micWriter?.Write(buffer, 0, buffer.Length);
@@ -616,11 +644,10 @@ namespace App.Services
                                 if (e.BytesRecorded > 0)
                                 {
                                     _micSamplesReceived++;
-                                    // NO LOCK HERE - Queue the audio for async processing
-                                    float volumeBoost = 2.0f;
+                                    const float volumeBoost = 2.0f;
                                     var boostedBuffer = new byte[e.BytesRecorded];
                                     System.Buffer.BlockCopy(e.Buffer, 0, boostedBuffer, 0, e.BytesRecorded);
-                                    
+
                                     // If 32-bit float format, amplify the samples
                                     if (_micWaveFormat != null && _micWaveFormat.BitsPerSample == 32)
                                     {
@@ -629,24 +656,26 @@ namespace App.Services
                                             float sample = BitConverter.ToSingle(boostedBuffer, i);
                                             sample *= volumeBoost;
                                             sample = Math.Max(-1.0f, Math.Min(1.0f, sample));
-                                            byte[] boosted = BitConverter.GetBytes(sample);
-                                            Array.Copy(boosted, 0, boostedBuffer, i, 4);
+                                            BitConverter.TryWriteBytes(boostedBuffer.AsSpan(i, sizeof(float)), sample);
                                         }
                                     }
 
                                     var queue = _micAudioQueue;
                                     if (queue != null)
                                     {
-                                        while (queue.Count >= MaxMicQueueDepth && queue.TryDequeue(out _))
+                                        while (queue.Count >= MaxMicQueueDepth && queue.TryDequeue(out var droppedBuffer))
                                         {
+                                            Interlocked.Add(ref _micQueuedBytes, -droppedBuffer.Length);
+                                            Interlocked.Increment(ref _micDroppedBuffers);
                                         }
 
+                                        Interlocked.Add(ref _micQueuedBytes, boostedBuffer.Length);
                                         queue.Enqueue(boostedBuffer);
                                     }
                                     _micSamplesQueued++;
                                     if (_micSamplesReceived % TraceSampleModulo == 0)
                                     {
-                                        Trace($"Mic callback bytes={e.BytesRecorded} received={_micSamplesReceived} queued={_micSamplesQueued} queueDepth={_micAudioQueue?.Count ?? 0}");
+                                        Trace($"Mic callback bytes={e.BytesRecorded} received={_micSamplesReceived} queued={_micSamplesQueued} queueDepth={_micAudioQueue?.Count ?? 0} queuedBytes={Interlocked.Read(ref _micQueuedBytes):N0} droppedBuffers={_micDroppedBuffers}");
                                     }
                                     
                                 }
@@ -729,6 +758,7 @@ namespace App.Services
             {
                 while (_micAudioQueue.TryDequeue(out var buffer))
                 {
+                    Interlocked.Add(ref _micQueuedBytes, -buffer.Length);
                     Array.Clear(buffer, 0, buffer.Length);
                 }
                 Trace("Mic audio queue drained");
@@ -802,11 +832,11 @@ namespace App.Services
                     return;
                 }
 
-                var composition = new global::Windows.Media.Editing.MediaComposition();
+                global::Windows.Media.Editing.MediaComposition? composition = new();
                 TraceMemorySnapshot("Mux-composition-created");
 
                 var videoFile = await StorageFile.GetFileFromPathAsync(videoPath);
-                var videoClip = await global::Windows.Media.Editing.MediaClip.CreateFromFileAsync(videoFile);
+                global::Windows.Media.Editing.MediaClip? videoClip = await global::Windows.Media.Editing.MediaClip.CreateFromFileAsync(videoFile);
                 composition.Clips.Add(videoClip);
                 TraceMemorySnapshot("Mux-video-clip-added");
 
@@ -826,32 +856,35 @@ namespace App.Services
                     audioTrackPath = micPath;
                 }
 
-                if (audioTrackPath != null)
+                global::Windows.Media.Editing.BackgroundAudioTrack? audioTrack = null;
+                try
                 {
-                    Trace($"MuxAudioVideoAsync using audioTrackPath='{audioTrackPath}'");
-                    var audioFile = await StorageFile.GetFileFromPathAsync(audioTrackPath);
-                    var audioTrack = await global::Windows.Media.Editing.BackgroundAudioTrack.CreateFromFileAsync(audioFile);
-                    composition.BackgroundAudioTracks.Add(audioTrack);
-                    TraceMemorySnapshot("Mux-audio-track-added");
+                    if (audioTrackPath != null)
+                    {
+                        Trace($"MuxAudioVideoAsync using audioTrackPath='{audioTrackPath}'");
+                        var audioFile = await StorageFile.GetFileFromPathAsync(audioTrackPath);
+                        audioTrack = await global::Windows.Media.Editing.BackgroundAudioTrack.CreateFromFileAsync(audioFile);
+                        composition.BackgroundAudioTracks.Add(audioTrack);
+                        TraceMemorySnapshot("Mux-audio-track-added");
+                    }
+
+                    await RenderCompositionAsync(composition, outputPath, width, height, bitrateBps, frameRate);
                 }
+                finally
+                {
+                    // These WinRT media-editing objects have no IDisposable implementation. Remove
+                    // their references promptly, then collect only at the post-recording mux boundary.
+                    composition.BackgroundAudioTracks.Clear();
+                    composition.Clips.Clear();
+                    audioTrack = null;
+                    videoClip = null;
+                    composition = null;
 
-                var destFile = await StorageFile.GetFileFromPathAsync(outputPath);
-
-                var profile = MediaEncodingProfile.CreateMp4(VideoEncodingQuality.HD1080p);
-                profile.Video.Width = width;
-                profile.Video.Height = height;
-                profile.Video.Bitrate = bitrateBps;
-                profile.Video.FrameRate.Numerator = frameRate;
-                profile.Video.FrameRate.Denominator = 1;
-                profile.Audio = AudioEncodingProperties.CreateAac(44100, 2, 192000);
-
-                var cts = new CancellationTokenSource(TimeSpan.FromSeconds(300));
-                // Prefer preserving the full capture length over a faster trimmed render.
-                TraceMemorySnapshot("Mux-before-render");
-                var saveOp = composition.RenderToFileAsync(destFile, global::Windows.Media.Editing.MediaTrimmingPreference.Precise, profile);
-                await saveOp.AsTask(cts.Token);
-                TraceMemorySnapshot("Mux-after-render");
-                Trace("MuxAudioVideoAsync render complete");
+                    GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: false);
+                    GC.WaitForPendingFinalizers();
+                    GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: false);
+                    TraceMemorySnapshot("Mux-media-resources-released");
+                }
             }
             catch (OperationCanceledException)
             {
@@ -888,6 +921,31 @@ namespace App.Services
                 TraceMemorySnapshot("Mux-cleanup-end");
                 Trace("MuxAudioVideoAsync cleanup complete");
             }
+        }
+
+        private async Task RenderCompositionAsync(
+            global::Windows.Media.Editing.MediaComposition composition,
+            string outputPath,
+            uint width,
+            uint height,
+            uint bitrateBps,
+            uint frameRate)
+        {
+            var destFile = await StorageFile.GetFileFromPathAsync(outputPath);
+            var profile = MediaEncodingProfile.CreateMp4(VideoEncodingQuality.HD1080p);
+            profile.Video.Width = width;
+            profile.Video.Height = height;
+            profile.Video.Bitrate = bitrateBps;
+            profile.Video.FrameRate.Numerator = frameRate;
+            profile.Video.FrameRate.Denominator = 1;
+            profile.Audio = AudioEncodingProperties.CreateAac(44100, 2, 192000);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(300));
+            TraceMemorySnapshot("Mux-before-render");
+            var saveOp = composition.RenderToFileAsync(destFile, global::Windows.Media.Editing.MediaTrimmingPreference.Precise, profile);
+            await saveOp.AsTask(cts.Token);
+            TraceMemorySnapshot("Mux-after-render");
+            Trace("MuxAudioVideoAsync render complete");
         }
 
         private static async Task MixWavFilesAsync(string firstPath, string secondPath, string outputPath)

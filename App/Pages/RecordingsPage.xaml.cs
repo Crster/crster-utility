@@ -46,11 +46,14 @@ namespace App.Pages
         private bool _isAwaitingSavePath;
         private bool _isFinalVideoReady;
         private bool _isFinalizingSave;
+        private readonly DispatcherTimer _finalizingTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+        private int _estimatedFinalizingSeconds;
 
         public RecordingsPage()
         {
             this.InitializeComponent();
             _device = Direct3D11Helper.CreateDevice();
+            _finalizingTimer.Tick += FinalizingTimer_Tick;
         }
 
         private async void RecordingButton_Click(object sender, RoutedEventArgs e)
@@ -169,6 +172,8 @@ namespace App.Pages
             RecordingButtonBase.Background = GetAccentButtonBrush();
             RecordingButton.IsEnabled = true;
             InfoPanel.Visibility = showInfoPanel ? Visibility.Visible : Visibility.Collapsed;
+            FinalizingPanel.Visibility = Visibility.Collapsed;
+            _finalizingTimer.Stop();
             StopRecordingWave();
             _recorder?.Dispose();
             _recorder = null;
@@ -378,10 +383,38 @@ namespace App.Pages
             StopRecordingWave();
             CloseRecordingToolbar();
             RestoreMainWindowAfterRecording();
+            ShowFinalizingState();
             _recorder?.Stop();
             _pendingFinalPath = await PromptForFinalPathAsync();
             _isAwaitingSavePath = false;
             await TryCompleteRecordingAsync();
+        }
+
+        private void ShowFinalizingState()
+        {
+            var recordingDuration = _recorder?.Elapsed ?? TimeSpan.Zero;
+            _estimatedFinalizingSeconds = Math.Max(5, (int)Math.Ceiling(recordingDuration.TotalSeconds * 0.15));
+            FinalizingPanel.Visibility = Visibility.Visible;
+            InfoPanel.Visibility = Visibility.Collapsed;
+            LatestRecordingCard.Visibility = Visibility.Collapsed;
+            FinalizingStatusText.Text = "Writing your video and mixing audio…";
+            UpdateFinalizingCountdown();
+            _finalizingTimer.Start();
+        }
+
+        private void FinalizingTimer_Tick(object? sender, object e)
+        {
+            if (_estimatedFinalizingSeconds > 0)
+                _estimatedFinalizingSeconds--;
+
+            UpdateFinalizingCountdown();
+        }
+
+        private void UpdateFinalizingCountdown()
+        {
+            FinalizingCountdownText.Text = _estimatedFinalizingSeconds > 0
+                ? $"About {_estimatedFinalizingSeconds} second{(_estimatedFinalizingSeconds == 1 ? string.Empty : "s")} remaining"
+                : "Almost done…";
         }
 
         private void OpenRecordingToolbar()

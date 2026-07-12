@@ -6,22 +6,79 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
     Title="Recording Toolbar">
+    <Grid x:Name="RootGrid" Background="Transparent">
+        <Grid.Resources>
+            <Storyboard x:Key="RecordingPulseStoryboard">
+                <DoubleAnimation Storyboard.TargetName="RecordingPulseBorder"
+                                 Storyboard.TargetProperty="Opacity"
+                                 From="0.45"
+                                 To="1"
+                                 Duration="0:0:0.7"
+                                 AutoReverse="True"
+                                 RepeatBehavior="Forever" />
+            </Storyboard>
+        </Grid.Resources>
 
-    <Window.SystemBackdrop>
-        <MicaBackdrop />
-    </Window.SystemBackdrop>
+        <Border Margin="1"
+                Background="#FF242424"
+                CornerRadius="8">
+            <Grid Padding="12,0,6,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
 
-    <Border x:Name="TimerDragArea"
-            Background="Transparent"
-            VerticalAlignment="Center"
-            Padding="15, 0">
-        
-        <TextBlock x:Name="TimerText"
-                   Text="00:00"
-                   FontSize="16"
-                   FontWeight="SemiBold"
-                   Margin="0,-1,0,0"
-                   VerticalAlignment="Center"
-                   HorizontalAlignment="Left" />
-    </Border>
+                <Border x:Name="TimerDragArea"
+                        Background="Transparent"
+                        PointerPressed="TimerDragArea_PointerPressed"
+                        PointerMoved="TimerDragArea_PointerMoved"
+                        PointerReleased="TimerDragArea_PointerReleased"
+                        PointerCanceled="TimerDragArea_PointerCanceled">
+                    <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
+                        <Ellipse Width="9" Height="9" Fill="IndianRed" />
+                        <TextBlock x:Name="TimerText"
+                                   Text="00:00"
+                                   FontSize="18"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+
+                <Button x:Name="StopButton"
+                        Grid.Column="1"
+                        Width="30"
+                        Height="30"
+                        Padding="0"
+                        Background="IndianRed"
+                        BorderBrush="IndianRed"
+                        Foreground="White"
+                        ToolTipService.ToolTip="Stop recording"
+                        Click="StopButton_Click">
+                    <Button.Resources>
+                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#FFD96B6B" />
+                        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#FF9F3636" />
+                        <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="#FF754040" />
+                        <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="#FFD96B6B" />
+                        <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="#FF9F3636" />
+                        <SolidColorBrush x:Key="ButtonBorderBrushDisabled" Color="#FF754040" />
+                        <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="White" />
+                        <SolidColorBrush x:Key="ButtonForegroundPressed" Color="White" />
+                        <SolidColorBrush x:Key="ButtonForegroundDisabled" Color="#FFBFBFBF" />
+                    </Button.Resources>
+                    <Border Width="12"
+                            Height="12"
+                            Background="White"
+                            CornerRadius="1" />
+                </Button>
+            </Grid>
+        </Border>
+
+        <Border x:Name="RecordingPulseBorder"
+                Margin="1"
+                Background="Transparent"
+                BorderBrush="IndianRed"
+                BorderThickness="3"
+                CornerRadius="8"
+                IsHitTestVisible="False" />
+    </Grid>
 </Window>
