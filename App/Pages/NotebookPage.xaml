@@ -1,0 +1,65 @@
+<Page
+    x:Class="App.Pages.NotebookPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:App.Controls">
+
+    <Grid Padding="24">
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="16" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+
+        <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="4">
+            <ToggleButton x:Name="ParagraphTool" Tag="paragraph" Click="ToolButton_Click" IsChecked="True" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Paragraph"><SymbolIcon Symbol="Font" /></ToggleButton>
+            <Button Tag="image" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Image"><SymbolIcon Symbol="Pictures" /></Button>
+            <Button Tag="file" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="File"><SymbolIcon Symbol="Attach" /></Button>
+            <Button Tag="table" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Table"><FontIcon Glyph="&#xE9F0;" /></Button>
+            <Button Tag="todo" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Todo"><SymbolIcon Symbol="Bullets" /></Button>
+            <Button Tag="password" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Password"><FontIcon Glyph="&#xE72E;" /></Button>
+        </StackPanel>
+
+        <ListView x:Name="BlocksHost"
+                  Grid.Row="2"
+                  MinHeight="480"
+                  Padding="0"
+                  HorizontalContentAlignment="Stretch"
+                  SelectionMode="None"
+                  IsItemClickEnabled="False"
+                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                  ScrollViewer.HorizontalScrollMode="Disabled"
+                  Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                  BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                  BorderThickness="1"
+                  CornerRadius="12">
+            <ListView.ItemTemplate>
+                <DataTemplate>
+                    <controls:Noteblock Loaded="Block_Loaded" />
+                </DataTemplate>
+            </ListView.ItemTemplate>
+            <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem">
+                    <Setter Property="HorizontalAlignment" Value="Stretch" />
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    <Setter Property="VerticalContentAlignment" Value="Top" />
+                    <Setter Property="MinHeight" Value="0" />
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="Margin" Value="0" />
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ListViewItem">
+                                <ContentPresenter Content="{TemplateBinding Content}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  ContentTransitions="{TemplateBinding ContentTransitions}"
+                                                  HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </ListView.ItemContainerStyle>
+            <ListView.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <ItemsStackPanel />
+                </ItemsPanelTemplate>
+            </ListView.ItemsPanel>
+        </ListView>
+    </Grid>
+</Page>

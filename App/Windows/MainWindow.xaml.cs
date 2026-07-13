@@ -51,6 +51,10 @@ namespace App.Windows
                 {
                     NavigationPresenter.Navigate(typeof(Pages.RecordingsPage));
                 }
+                else if (tag == "NotebookBooksPage")
+                {
+                    NavigationPresenter.Navigate(typeof(Pages.NotebookPage));
+                }
                 else
                 {
                     NavigationPresenter.Content = null;

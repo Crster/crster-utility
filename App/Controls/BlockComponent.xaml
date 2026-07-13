@@ -1,0 +1,15 @@
+<UserControl
+    x:Class="App.Controls.Noteblock"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Border x:Name="Root"
+            Padding="10"
+            HorizontalAlignment="Stretch"
+            Background="Transparent"
+            CornerRadius="6"
+            PointerEntered="Root_PointerEntered"
+            PointerExited="Root_PointerExited">
+        <Grid x:Name="ContentHost" />
+    </Border>
+</UserControl>
