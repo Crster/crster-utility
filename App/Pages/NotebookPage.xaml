@@ -8,22 +8,22 @@
         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="16" /><RowDefinition Height="*" /></Grid.RowDefinitions>
 
         <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="4">
-            <ToggleButton x:Name="ParagraphTool" Tag="paragraph" Click="ToolButton_Click" IsChecked="True" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Paragraph"><SymbolIcon Symbol="Font" /></ToggleButton>
-            <Button Tag="image" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Image"><SymbolIcon Symbol="Pictures" /></Button>
-            <Button Tag="file" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="File"><SymbolIcon Symbol="Attach" /></Button>
-            <Button Tag="table" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Table"><FontIcon Glyph="&#xE9F0;" /></Button>
-            <Button Tag="todo" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Todo"><SymbolIcon Symbol="Bullets" /></Button>
-            <Button Tag="password" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Password"><FontIcon Glyph="&#xE72E;" /></Button>
+            <ToggleButton x:Name="ParagraphTool" Tag="paragraph" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Paragraph"><SymbolIcon Symbol="Font" /></ToggleButton>
+            <ToggleButton x:Name="ImageTool" Tag="image" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Image"><SymbolIcon Symbol="Pictures" /></ToggleButton>
+            <ToggleButton x:Name="FileTool" Tag="file" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="File"><SymbolIcon Symbol="Attach" /></ToggleButton>
+            <ToggleButton x:Name="TableTool" Tag="table" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Table"><FontIcon Glyph="&#xF232;" /></ToggleButton>
+            <ToggleButton x:Name="TodoTool" Tag="todo" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Todo"><SymbolIcon Symbol="Bullets" /></ToggleButton>
         </StackPanel>
 
         <ListView x:Name="BlocksHost"
                   Grid.Row="2"
-                  MinHeight="480"
                   Padding="0"
                   HorizontalContentAlignment="Stretch"
                   SelectionMode="None"
                   IsItemClickEnabled="False"
+                  DoubleTapped="BlocksHost_DoubleTapped"
                   ScrollViewer.VerticalScrollBarVisibility="Auto"
+                  ScrollViewer.VerticalScrollMode="Enabled"
                   ScrollViewer.HorizontalScrollMode="Disabled"
                   Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                   BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -57,7 +57,7 @@
             </ListView.ItemContainerStyle>
             <ListView.ItemsPanel>
                 <ItemsPanelTemplate>
-                    <ItemsStackPanel />
+                    <StackPanel />
                 </ItemsPanelTemplate>
             </ListView.ItemsPanel>
         </ListView>

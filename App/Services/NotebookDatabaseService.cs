@@ -31,8 +31,17 @@ namespace App.Services
             await StartFreshIfLegacyAsync();
             if (!File.Exists(_documentPath)) return [];
 
-            await using var stream = File.OpenRead(_documentPath);
-            var entries = await JsonSerializer.DeserializeAsync<List<NotebookEntry>>(stream) ?? [];
+            List<NotebookEntry> entries;
+            await using (var stream = File.OpenRead(_documentPath))
+                entries = await JsonSerializer.DeserializeAsync<List<NotebookEntry>>(stream) ?? [];
+            var migratedPasswordEntries = false;
+            foreach (var entry in entries.Where(entry => entry.Type == "password"))
+            {
+                entry.Type = "paragraph";
+                migratedPasswordEntries = true;
+            }
+
+            if (migratedPasswordEntries) await SaveAsync(entries);
             return entries.OrderByDescending(entry => entry.Index).ToList();
         }
 
@@ -45,7 +54,7 @@ namespace App.Services
             File.Move(temporaryPath, _documentPath, true);
 
             _vectorDatabase = new BasicMemoryVectorDatabase();
-            foreach (var entry in orderedEntries.Where(entry => entry.Type != "password" && !string.IsNullOrWhiteSpace(entry.Content)))
+            foreach (var entry in orderedEntries.Where(entry => !string.IsNullOrWhiteSpace(entry.Content)))
                 _vectorDatabase.AddText(entry.Content, entry.Index.ToString());
             await _vectorDatabase.SaveToFileAsync(_indexPath);
         }

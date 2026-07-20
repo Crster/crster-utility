@@ -20,6 +20,9 @@ namespace App.Pages
         private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(400) };
         private NotebookAttachmentStorageService? _attachmentStorage;
         private readonly ObservableCollection<NotebookEntry> _entries = [];
+        private NotebookEntry? _entryToEdit;
+        private Noteblock? _hoveredBlock;
+        private Noteblock? _focusedBlock;
         private bool _isLoading;
         private bool _isSaving;
         private bool _saveQueued;
@@ -47,19 +50,20 @@ namespace App.Pages
         private async void ToolButton_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not FrameworkElement { Tag: string type }) return;
-            ParagraphTool.IsChecked = type == "paragraph";
             if (type is "image" or "file")
             {
                 await AddAttachmentAsync(type);
+                UpdateToolbarHighlight();
                 return;
             }
 
             AddEntry(type, type switch
             {
-                "table" => "| Column 1 | Column 2 |\n| --- | --- |\n| Value | Value |",
-                "todo" => "- [ ] New task",
+                "table" => "\"Header 1\",\"Header 2\",\"Header 3\"\n\"Row 1, Cell 1\",\"Row 1, Cell 2\",\"Row 1, Cell 3\"\n\"Row 2, Cell 1\",\"Row 2, Cell 2\",\"Row 2, Cell 3\"",
+                "todo" => "- New task",
                 _ => string.Empty
             });
+            UpdateToolbarHighlight();
         }
 
         private async Task AddAttachmentAsync(string type)
@@ -75,24 +79,63 @@ namespace App.Pages
 
             InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow));
             var file = await picker.PickSingleFileAsync();
-            if (file is not null) AddEntry(type, await _attachmentStorage.CopyFromPathAsync(file.Path));
+            if (file is not null)
+            {
+                var attachmentPath = await _attachmentStorage.CopyFromPathAsync(file.Path);
+                AddEntry(type, $"{attachmentPath}{Environment.NewLine}{Environment.NewLine}", startEditing: true);
+            }
         }
 
-        private void AddEntry(string type, string content)
+        private void AddEntry(string type, string content, bool startEditing = false)
         {
             var index = _entries.Count == 0 ? 1 : _entries.Max(entry => entry.Index) + 1;
-            _entries.Insert(0, new NotebookEntry { Type = type, Content = content, Index = index });
+            var entry = new NotebookEntry { Type = type, Content = content, Index = index };
+            _entryToEdit = startEditing ? entry : null;
+            _entries.Insert(0, entry);
             ScheduleSave();
+        }
+
+        private void BlocksHost_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+        {
+            e.Handled = true;
+            AddEntry("paragraph", string.Empty, startEditing: true);
         }
 
         private void Block_Loaded(object sender, RoutedEventArgs e)
         {
             if (sender is not Noteblock { DataContext: NotebookEntry entry } block || _attachmentStorage is null) return;
-            block.Configure(entry, _attachmentStorage.GetFullPath);
+            var startInEditMode = ReferenceEquals(entry, _entryToEdit);
+            if (startInEditMode) _entryToEdit = null;
+            block.Configure(entry, _attachmentStorage.GetFullPath, startInEditMode);
             block.ContentChanged -= Block_ContentChanged;
             block.RemoveRequested -= Block_RemoveRequested;
+            block.InteractionStateChanged -= Block_InteractionStateChanged;
             block.ContentChanged += Block_ContentChanged;
             block.RemoveRequested += Block_RemoveRequested;
+            block.InteractionStateChanged += Block_InteractionStateChanged;
+            Block_InteractionStateChanged(block, EventArgs.Empty);
+        }
+
+        private void Block_InteractionStateChanged(object? sender, EventArgs e)
+        {
+            if (sender is not Noteblock block) return;
+            if (block.IsBlockPointerOver) _hoveredBlock = block;
+            else if (ReferenceEquals(block, _hoveredBlock)) _hoveredBlock = null;
+
+            if (block.IsEditorFocused) _focusedBlock = block;
+            else if (ReferenceEquals(block, _focusedBlock)) _focusedBlock = null;
+
+            UpdateToolbarHighlight();
+        }
+
+        private void UpdateToolbarHighlight()
+        {
+            var type = (_hoveredBlock ?? _focusedBlock)?.Entry.Type;
+            ParagraphTool.IsChecked = type == "paragraph";
+            ImageTool.IsChecked = type == "image";
+            FileTool.IsChecked = type == "file";
+            TableTool.IsChecked = type == "table";
+            TodoTool.IsChecked = type == "todo";
         }
 
         private void Block_ContentChanged(object? sender, EventArgs e) => ScheduleSave();
@@ -102,7 +145,10 @@ namespace App.Pages
             if (sender is not Noteblock block) return;
             var entry = _entries.FirstOrDefault(candidate => ReferenceEquals(candidate, block.Entry));
             if (entry is null) return;
+            if (ReferenceEquals(block, _hoveredBlock)) _hoveredBlock = null;
+            if (ReferenceEquals(block, _focusedBlock)) _focusedBlock = null;
             _entries.Remove(entry);
+            UpdateToolbarHighlight();
             ScheduleSave();
         }
 
