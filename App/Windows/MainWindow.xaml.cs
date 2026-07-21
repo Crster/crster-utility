@@ -3,12 +3,19 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using System;
+using System.Threading;
+using System.Threading.Tasks;
+using App.Models;
+using App.Services;
 using Windows.Graphics;
 
 namespace App.Windows
 {
     public sealed partial class MainWindow : Window
     {
+        private readonly NotebookDatabaseService _notebookDatabase = new();
+        private int _searchVersion;
+        private CancellationTokenSource? _searchCancellation;
         public MainWindow()
         {
             InitializeComponent();
@@ -60,6 +67,43 @@ namespace App.Windows
                     NavigationPresenter.Content = null;
                 }
             }
+        }
+
+        private async void GlobalSearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+        {
+            if (args.Reason != AutoSuggestionBoxTextChangeReason.UserInput) return;
+
+            var query = sender.Text.Trim();
+            var searchVersion = ++_searchVersion;
+            _searchCancellation?.Cancel();
+            _searchCancellation?.Dispose();
+            _searchCancellation = new CancellationTokenSource();
+            if (query.Length < 2)
+            {
+                sender.ItemsSource = null;
+                return;
+            }
+
+            try
+            {
+                await Task.Delay(250, _searchCancellation.Token);
+                var results = await _notebookDatabase.SearchAsync(query, cancellationToken: _searchCancellation.Token);
+                if (searchVersion == _searchVersion && string.Equals(sender.Text.Trim(), query, StringComparison.Ordinal))
+                    sender.ItemsSource = results;
+            }
+            catch (OperationCanceledException)
+            {
+                // A newer keystroke has already started a more relevant search.
+            }
+        }
+
+        private void GlobalSearchBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs args)
+        {
+            SidebarNavigation.SelectedItem = NotebookNavItem;
+            if (args.SelectedItem is NotebookSearchResult result)
+                NavigationPresenter.Navigate(typeof(Pages.NotebookPage), result.EntryIndex);
+            sender.Text = string.Empty;
+            sender.ItemsSource = null;
         }
     }
 }

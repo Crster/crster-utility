@@ -63,6 +63,21 @@ namespace App.Controls
             ShowEditorContent();
         }
 
+        internal void HighlightSearchResult()
+        {
+            Root.Background = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(72, 0, 120, 212));
+            var highlightTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            highlightTimer.Tick += (_, _) =>
+            {
+                highlightTimer.Stop();
+                if (_editor is null)
+                    Root.Background = _isPointerOver
+                        ? (Brush)Application.Current.Resources["SubtleFillColorSecondaryBrush"]
+                        : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            };
+            highlightTimer.Start();
+        }
+
         private void Noteblock_Tapped(object sender, TappedRoutedEventArgs e)
         {
             ShowEditor();

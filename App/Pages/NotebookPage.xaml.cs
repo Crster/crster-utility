@@ -9,6 +9,7 @@ using App.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Navigation;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 
@@ -26,6 +27,7 @@ namespace App.Pages
         private bool _isLoading;
         private bool _isSaving;
         private bool _saveQueued;
+        private int? _searchResultIndex;
 
         public NotebookPage()
         {
@@ -45,6 +47,12 @@ namespace App.Pages
             foreach (var entry in (await _database.LoadAsync()).OrderByDescending(entry => entry.Index)) _entries.Add(entry);
             _isLoading = false;
             BlocksHost.ItemsSource = _entries;
+        }
+
+        protected override void OnNavigatedTo(NavigationEventArgs e)
+        {
+            base.OnNavigatedTo(e);
+            _searchResultIndex = e.Parameter as int?;
         }
 
         private async void ToolButton_Click(object sender, RoutedEventArgs e)
@@ -82,7 +90,7 @@ namespace App.Pages
             if (file is not null)
             {
                 var attachmentPath = await _attachmentStorage.CopyFromPathAsync(file.Path);
-                AddEntry(type, $"{attachmentPath}{Environment.NewLine}{Environment.NewLine}", startEditing: true);
+                AddEntry(type, $"{attachmentPath}{Environment.NewLine}{file.Name}{Environment.NewLine}{Environment.NewLine}", startEditing: true);
             }
         }
 
@@ -114,6 +122,16 @@ namespace App.Pages
             block.RemoveRequested += Block_RemoveRequested;
             block.InteractionStateChanged += Block_InteractionStateChanged;
             Block_InteractionStateChanged(block, EventArgs.Empty);
+
+            if (_searchResultIndex == entry.Index)
+            {
+                _searchResultIndex = null;
+                _ = DispatcherQueue.TryEnqueue(() =>
+                {
+                    BlocksHost.ScrollIntoView(entry, ScrollIntoViewAlignment.Leading);
+                    block.HighlightSearchResult();
+                });
+            }
         }
 
         private void Block_InteractionStateChanged(object? sender, EventArgs e)

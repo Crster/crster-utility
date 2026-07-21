@@ -29,10 +29,22 @@
             </TitleBar.IconSource>
             <TitleBar.Content>
                 <AutoSuggestBox
+                    x:Name="GlobalSearchBox"
                     Width="360"
                     VerticalAlignment="Center"
                     PlaceholderText="Search in Crster Utility..."
-                    QueryIcon="Find" />
+                    QueryIcon="Find"
+                    TextChanged="GlobalSearchBox_TextChanged"
+                    SuggestionChosen="GlobalSearchBox_SuggestionChosen">
+                    <AutoSuggestBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Spacing="2" Padding="4">
+                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding Details}" TextWrapping="Wrap" Opacity="0.72" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </AutoSuggestBox.ItemTemplate>
+                </AutoSuggestBox>
             </TitleBar.Content>
         </TitleBar>
 
@@ -45,7 +57,7 @@
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="SnapshotsNavItem" Icon="Camera" Content="Snapshots" Tag="SnapshotsPage" />
                 <NavigationViewItem Icon="Video" Content="Recordings" Tag="RecordingsPage" />
-                <NavigationViewItem Content="Notebooks" Tag="NotebookBooksPage">
+                <NavigationViewItem x:Name="NotebookNavItem" Content="Notebooks" Tag="NotebookBooksPage">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE70B;" />
                     </NavigationViewItem.Icon>

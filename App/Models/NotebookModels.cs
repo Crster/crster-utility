@@ -13,4 +13,13 @@ namespace App.Models
         [JsonPropertyName("index")]
         public int Index { get; set; }
     }
+
+    internal sealed class NotebookSearchResult
+    {
+        public required int EntryIndex { get; init; }
+
+        public required string Title { get; init; }
+
+        public required string Details { get; init; }
+    }
 }
