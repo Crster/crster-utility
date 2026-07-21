@@ -62,6 +62,10 @@ namespace App.Windows
                 {
                     NavigationPresenter.Navigate(typeof(Pages.NotebookPage));
                 }
+                else if (tag == "ToolsPage")
+                {
+                    NavigationPresenter.Navigate(typeof(Pages.ToolsPage));
+                }
                 else
                 {
                     NavigationPresenter.Content = null;
