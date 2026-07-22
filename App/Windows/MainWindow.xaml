@@ -62,14 +62,14 @@
                         <FontIcon Glyph="&#xE70B;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
+                <NavigationViewItem Content="Chat" Tag="ChatPage">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8BD;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
                 <NavigationViewItem Content="Tools" Tag="ToolsPage">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xEC7A;" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem Content="Cleanup" Tag="CleanupPage">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xEA99;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>

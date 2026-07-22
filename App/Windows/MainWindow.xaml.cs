@@ -66,6 +66,10 @@ namespace App.Windows
                 {
                     NavigationPresenter.Navigate(typeof(Pages.ToolsPage));
                 }
+                else if (tag == "ChatPage")
+                {
+                    NavigationPresenter.Navigate(typeof(Pages.ChatPage));
+                }
                 else
                 {
                     NavigationPresenter.Content = null;
