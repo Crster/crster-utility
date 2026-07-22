@@ -50,7 +50,7 @@ namespace App.Services
             var orderedEntries = entries.OrderByDescending(entry => entry.Index).ToList();
             var temporaryPath = $"{_documentPath}.{Guid.NewGuid():N}.tmp";
             await using (var stream = File.Create(temporaryPath))
-                await JsonSerializer.SerializeAsync(stream, orderedEntries, new JsonSerializerOptions { WriteIndented = true });
+                await JsonSerializer.SerializeAsync(stream, new NotebookDocument { Entries = orderedEntries }, new JsonSerializerOptions { WriteIndented = true });
             File.Move(temporaryPath, _documentPath, true);
 
             bool shouldRefreshSearchIndex;
@@ -81,16 +81,14 @@ namespace App.Services
 
         private async Task<List<NotebookEntry>> LoadEntriesFromDiskAsync()
         {
-            await Task.Run(StartFreshIfLegacyAsync);
             if (!File.Exists(_documentPath)) return [];
 
             var entries = await Task.Run(async () =>
             {
                 await using var stream = File.OpenRead(_documentPath);
-                return await JsonSerializer.DeserializeAsync<List<NotebookEntry>>(stream) ?? [];
+                return (await JsonSerializer.DeserializeAsync<NotebookDocument>(stream))?.Entries ?? [];
             });
-
-            foreach (var entry in entries.Where(entry => entry.Type == "password")) entry.Type = "paragraph";
+            foreach (var entry in entries) entry.Type = "note";
             return entries.OrderByDescending(entry => entry.Index).ToList();
         }
 
@@ -121,39 +119,10 @@ namespace App.Services
             }
         }
 
-        private async Task StartFreshIfLegacyAsync()
-        {
-            if (!File.Exists(_documentPath)) return;
-
-            bool isCurrentFormat;
-            await using (var stream = File.OpenRead(_documentPath))
-            using (var document = await JsonDocument.ParseAsync(stream))
-            {
-                isCurrentFormat = document.RootElement.ValueKind == JsonValueKind.Array &&
-                                  document.RootElement.EnumerateArray().All(item =>
-                                      item.TryGetProperty("type", out _) &&
-                                      item.TryGetProperty("content", out _) &&
-                                      item.TryGetProperty("index", out _));
-            }
-
-            if (isCurrentFormat) return;
-
-            var backupPath = Path.Combine(RootPath, $"notebook.legacy-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}.json");
-            File.Move(_documentPath, backupPath, true);
-            if (File.Exists(_indexPath)) File.Delete(_indexPath);
-        }
-
         private static string CreateSearchPreview(NotebookEntry entry)
         {
-            var content = entry.Content.Replace("\r\n", " ").Replace('\n', ' ').Trim();
-            if (entry.Type is "image" or "file")
-            {
-                var descriptionStart = entry.Content.IndexOfAny(['\r', '\n']);
-                if (descriptionStart >= 0)
-                    content = entry.Content[(descriptionStart + 1)..].Trim();
-            }
-
-            if (string.IsNullOrWhiteSpace(content)) content = $"{entry.Type} attachment";
+            var content = NotebookFormat.CreateSearchText(entry.Content);
+            if (string.IsNullOrWhiteSpace(content)) content = "Note";
             return content.Length <= 120 ? content : $"{content[..117]}...";
         }
 
@@ -204,7 +173,7 @@ namespace App.Services
                 var entriesByTerm = new Dictionary<string, List<NotebookEntry>>(StringComparer.Ordinal);
                 foreach (var entry in orderedEntries)
                 {
-                    foreach (var term in ExtractSearchTerms($"{entry.Type} {entry.Content}").Distinct(StringComparer.Ordinal))
+                    foreach (var term in ExtractSearchTerms(NotebookFormat.CreateSearchText(entry.Content)).Distinct(StringComparer.Ordinal))
                     {
                         if (!entriesByTerm.TryGetValue(term, out var matchingEntries))
                         {
@@ -235,11 +204,10 @@ namespace App.Services
                     cancellationToken.ThrowIfCancellationRequested();
                     if (entryLists.Any(entries => !ContainsEntryIndex(entries, entry.Index))) continue;
 
-                    var type = string.IsNullOrWhiteSpace(entry.Type) ? "Note" : entry.Type;
                     results.Add(new NotebookSearchResult
                     {
                         EntryIndex = entry.Index,
-                        Title = $"{char.ToUpperInvariant(type[0])}{type[1..]} notebook entry",
+                        Title = NotebookFormat.GetTitle(entry.Content) ?? "Note",
                         Details = CreateSearchPreview(entry)
                     });
                     if (results.Count == maximumResults) break;

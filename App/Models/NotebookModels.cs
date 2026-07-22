@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
 namespace App.Models
@@ -5,13 +6,22 @@ namespace App.Models
     internal sealed class NotebookEntry
     {
         [JsonPropertyName("type")]
-        public string Type { get; set; } = "paragraph";
+        public string Type { get; set; } = "note";
 
         [JsonPropertyName("content")]
         public string Content { get; set; } = string.Empty;
 
         [JsonPropertyName("index")]
         public int Index { get; set; }
+    }
+
+    internal sealed class NotebookDocument
+    {
+        [JsonPropertyName("version")]
+        public int Version { get; set; } = 2;
+
+        [JsonPropertyName("entries")]
+        public List<NotebookEntry> Entries { get; set; } = [];
     }
 
     internal sealed class NotebookSearchResult

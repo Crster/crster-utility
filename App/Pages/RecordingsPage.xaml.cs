@@ -67,6 +67,11 @@ namespace App.Pages
             await StartRecordingAsync();
         }
 
+        private async void NewRecordingButton_Click(object sender, RoutedEventArgs e)
+        {
+            await StartRecordingAsync();
+        }
+
         private async Task StartRecordingAsync()
         {
             if (App.MainWindow is null)
@@ -95,7 +100,7 @@ namespace App.Pages
             HideMainWindowForRecording();
             OpenRecordingToolbar();
             RecordingButtonLabel.Text = "Stop Recording";
-            RecordingButtonBase.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.IndianRed);
+            RecordingButton.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.IndianRed);
             LatestRecordingCard.Visibility = Visibility.Collapsed;
             InfoPanel.Visibility = Visibility.Collapsed;
             StartRecordingWave();
@@ -168,10 +173,15 @@ namespace App.Pages
             _isAwaitingSavePath = false;
             _isFinalVideoReady = false;
             _isFinalizingSave = false;
-            RecordingButtonLabel.Text = "Start Recording";
-            RecordingButtonBase.Background = GetAccentButtonBrush();
+            // Keep the initial call to action concise, but make the post-preview
+            // action explicit so it is clear that the saved recording is retained.
+            RecordingButtonLabel.Text = showInfoPanel
+                ? "Start Recording"
+                : "Start a new recording";
+            RecordingButton.Background = GetAccentButtonBrush();
             RecordingButton.IsEnabled = true;
             InfoPanel.Visibility = showInfoPanel ? Visibility.Visible : Visibility.Collapsed;
+            RecordingActionPanel.Visibility = showInfoPanel ? Visibility.Visible : Visibility.Collapsed;
             FinalizingPanel.Visibility = Visibility.Collapsed;
             _finalizingTimer.Stop();
             StopRecordingWave();
@@ -396,6 +406,7 @@ namespace App.Pages
             _estimatedFinalizingSeconds = Math.Max(5, (int)Math.Ceiling(recordingDuration.TotalSeconds * 0.15));
             FinalizingPanel.Visibility = Visibility.Visible;
             InfoPanel.Visibility = Visibility.Collapsed;
+            RecordingActionPanel.Visibility = Visibility.Collapsed;
             LatestRecordingCard.Visibility = Visibility.Collapsed;
             FinalizingStatusText.Text = "Writing your video and mixing audio…";
             UpdateFinalizingCountdown();

@@ -8,16 +8,9 @@
 
     <ScrollViewer VerticalScrollBarVisibility="Auto"
                   HorizontalScrollMode="Disabled"
-                  Padding="32,32,32,48">
+                  Padding="20,16,20,32">
         <Grid MaxWidth="840" HorizontalAlignment="Center">
-            <StackPanel Spacing="28">
-                <StackPanel Spacing="6">
-                    <TextBlock Text="Tools" Style="{StaticResource TitleTextBlockStyle}" />
-                    <TextBlock Text="Helpful utilities for your desktop workflow."
-                               Style="{StaticResource SubtitleTextBlockStyle}"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                </StackPanel>
-
+            <StackPanel>
                 <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                         BorderThickness="1"

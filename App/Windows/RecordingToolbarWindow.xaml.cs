@@ -22,6 +22,8 @@ namespace App.Windows
         private const uint SwpNoMove = 0x0002;
         private const uint SwpNoZOrder = 0x0004;
         private const uint SwpFrameChanged = 0x0020;
+        private const uint SwpNoActivate = 0x0010;
+        private static readonly IntPtr HwndTopmost = new(-1);
         private readonly RecordingSessionController _controller;
         private readonly DispatcherTimer _statsTimer;
         private bool _isProgrammaticClose;
@@ -63,7 +65,16 @@ namespace App.Windows
             var extendedStyle = GetWindowLong(windowHandle, GwlExStyle).ToInt64();
             SetWindowLong(windowHandle, GwlExStyle, new IntPtr(extendedStyle | WsExLayered));
             SetLayeredWindowAttributes(windowHandle, 0, 0, LwaColorKey);
-            SetWindowPos(windowHandle, IntPtr.Zero, 0, 0, 0, 0, SwpNoSize | SwpNoMove | SwpNoZOrder | SwpFrameChanged);
+            // The toolbar must remain reachable while another app, or one of its
+            // transient controls such as a dropdown, owns focus.
+            SetWindowPos(
+                windowHandle,
+                HwndTopmost,
+                0,
+                0,
+                0,
+                0,
+                SwpNoSize | SwpNoMove | SwpNoActivate | SwpFrameChanged);
         }
 
         private void CenterOnTopOfCurrentScreen()

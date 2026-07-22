@@ -3,15 +3,16 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using App.Models;
+using App.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 using Windows.Storage.FileProperties;
 using Windows.System;
@@ -21,12 +22,13 @@ namespace App.Controls
     public sealed partial class Noteblock : UserControl
     {
         private NotebookEntry? _entry;
-        private Func<string, string>? _resolveAttachmentPath;
-        private Control? _editor;
+        private NotebookAttachmentStorageService? _attachmentStorage;
+        private TextBox? _editor;
         private bool _isPointerOver;
         private bool _isEditorFocused;
-        private readonly DispatcherTimer _initialFocusTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
         private bool _isInitialEditorFocus;
+        private bool _isSearchHighlighted;
+        private readonly DispatcherTimer _initialFocusTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
 
         public event EventHandler? ContentChanged;
         public event EventHandler? RemoveRequested;
@@ -40,21 +42,15 @@ namespace App.Controls
         {
             InitializeComponent();
             HorizontalAlignment = HorizontalAlignment.Stretch;
-            Root.PointerPressed += Root_PointerPressed;
-            AddHandler(TappedEvent, new TappedEventHandler(Noteblock_Tapped), true);
-            _initialFocusTimer.Tick += (_, _) =>
-            {
-                _initialFocusTimer.Stop();
-                _isInitialEditorFocus = false;
-            };
+            AddHandler(DoubleTappedEvent, new DoubleTappedEventHandler(Noteblock_DoubleTapped), true);
+            _initialFocusTimer.Tick += (_, _) => { _initialFocusTimer.Stop(); _isInitialEditorFocus = false; };
         }
 
-        internal void Configure(NotebookEntry entry, Func<string, string> resolveAttachmentPath, bool startInEditMode = false)
+        internal void Configure(NotebookEntry entry, NotebookAttachmentStorageService attachmentStorage, bool startInEditMode = false)
         {
             _entry = entry;
-            _resolveAttachmentPath = resolveAttachmentPath;
-            if (startInEditMode) ShowEditorContent();
-            else ShowPreview();
+            _attachmentStorage = attachmentStorage;
+            if (startInEditMode) ShowEditorContent(); else ShowPreview();
         }
 
         internal void ShowEditor()
@@ -63,58 +59,73 @@ namespace App.Controls
             ShowEditorContent();
         }
 
-        internal void HighlightSearchResult()
-        {
-            Root.Background = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(72, 0, 120, 212));
-            var highlightTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-            highlightTimer.Tick += (_, _) =>
-            {
-                highlightTimer.Stop();
-                if (_editor is null)
-                    Root.Background = _isPointerOver
-                        ? (Brush)Application.Current.Resources["SubtleFillColorSecondaryBrush"]
-                        : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
-            };
-            highlightTimer.Start();
-        }
-
-        private void Noteblock_Tapped(object sender, TappedRoutedEventArgs e)
+        internal void InsertSyntax((string Prefix, string Suffix) syntax)
         {
             ShowEditor();
+            if (_editor is null) return;
+            var selected = _editor.SelectedText;
+            _editor.SelectedText = syntax.Prefix + selected + syntax.Suffix;
+            _editor.SelectionStart -= syntax.Suffix.Length;
+            _editor.SelectionLength = selected.Length;
+            _editor.Focus(FocusState.Keyboard);
         }
 
-        private async void Root_PointerPressed(object sender, PointerRoutedEventArgs e)
+        internal void InsertText(string text)
         {
-            if (!e.KeyModifiers.HasFlag(VirtualKeyModifiers.Control) || _editor is not null || _entry?.Type is not ("image" or "file")) return;
+            ShowEditor();
+            if (_editor is null) return;
+            var separator = _editor.SelectionStart > 0 && _editor.Text[_editor.SelectionStart - 1] is not ('\r' or '\n') ? Environment.NewLine : string.Empty;
+            _editor.SelectedText = separator + text;
+            _editor.SelectionStart += (separator + text).Length;
+            _editor.SelectionLength = 0;
+            _editor.Focus(FocusState.Keyboard);
+        }
 
-            var attachment = ParseAttachmentContent(_entry.Content);
-            var path = ResolveAttachmentPath(attachment.Path);
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+        internal void HighlightSearchResult()
+        {
+            _isSearchHighlighted = true;
+            SetHoverBackground();
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                _isSearchHighlighted = false;
+                if (_editor is null) SetHoverBackground();
+            };
+            timer.Start();
+        }
 
+        private void Noteblock_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+        {
             e.Handled = true;
-            try
-            {
-                var file = await StorageFile.GetFileFromPathAsync(path);
-                await Launcher.LaunchFileAsync(file);
-            }
-            catch (Exception)
-            {
-                // Ignore unavailable files and keep the block usable for editing.
-            }
+            ShowEditor();
         }
 
         private void Root_PointerEntered(object sender, PointerRoutedEventArgs e)
         {
             _isPointerOver = true;
-            if (_editor is null) Root.Background = (Brush)Application.Current.Resources["SubtleFillColorSecondaryBrush"];
+            if (_editor is null) SetHoverBackground();
             InteractionStateChanged?.Invoke(this, EventArgs.Empty);
         }
 
         private void Root_PointerExited(object sender, PointerRoutedEventArgs e)
         {
             _isPointerOver = false;
-            if (_editor is null) Root.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            if (_editor is null) SetHoverBackground();
             InteractionStateChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void SetHoverBackground()
+        {
+            if (_isSearchHighlighted)
+            {
+                Root.Background = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(96, 0, 120, 212));
+                return;
+            }
+
+            Root.Background = _isPointerOver
+                ? (Brush)Application.Current.Resources["SubtleFillColorSecondaryBrush"]
+                : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
         }
 
         private void ShowPreview()
@@ -123,205 +134,113 @@ namespace App.Controls
             _isInitialEditorFocus = false;
             _editor = null;
             Root.Padding = new Thickness(10);
-            Root.Background = _isPointerOver
-                ? (Brush)Application.Current.Resources["SubtleFillColorSecondaryBrush"]
-                : new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            SetHoverBackground();
             ContentHost.Children.Clear();
             if (_entry is null) return;
 
-            ContentHost.Children.Add(_entry.Type switch
-            {
-                "image" => CreateImagePreview(),
-                "file" => CreateFilePreview(),
-                "table" => CreateTablePreview(_entry.Content),
-                "todo" => CreateTodoPreview(_entry.Content),
-                _ => CreateMarkdownPreview(_entry.Content)
-            });
-            ContentChanged?.Invoke(this, EventArgs.Empty);
+            var panel = new StackPanel { Spacing = 8 };
+            foreach (var section in NotebookFormat.Parse(_entry.Content)) panel.Children.Add(CreateSection(section));
+            ContentHost.Children.Add(panel);
         }
 
-        private void ShowEditorContent()
+        private FrameworkElement CreateSection(NoteSection section) => section.Kind switch
         {
-            if (_entry is null) return;
-            _isInitialEditorFocus = true;
-            ContentHost.Children.Clear();
-            Root.Padding = new Thickness(0);
-            Root.Background = (Brush)Application.Current.Resources["LayerOnMicaBaseAltFillColorDefaultBrush"];
+            NoteSectionKind.Title => CreateRichText(section.Content, 28, Microsoft.UI.Text.FontWeights.SemiBold),
+            NoteSectionKind.Description => CreateRichText(section.Content, 13, Microsoft.UI.Text.FontWeights.Normal, (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]),
+            NoteSectionKind.Password => CreatePassword(section.Content),
+            NoteSectionKind.File => CreateAttachment(section.Content, false),
+            NoteSectionKind.Image => CreateAttachment(section.Content, true),
+            NoteSectionKind.Table => CreateTable(section.Content),
+            NoteSectionKind.Todo => CreateTodo(section),
+            _ => CreateRichText(section.Content, 14, Microsoft.UI.Text.FontWeights.Normal)
+        };
 
-            var editor = new TextBox
-            {
-                AcceptsReturn = true,
-                TextWrapping = TextWrapping.Wrap,
-                MinHeight = 0,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                VerticalAlignment = VerticalAlignment.Top,
-                Padding = new Thickness(10),
-                Margin = new Thickness(0),
-                BorderThickness = new Thickness(0),
-                Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent)
-            };
-            ScrollViewer.SetVerticalScrollBarVisibility(editor, ScrollBarVisibility.Disabled);
-            editor.Text = NormalizeEditorText(_entry.Content);
-            editor.TextChanged += (_, _) =>
-            {
-                _entry.Content = editor.Text;
-                ResizeEditor(editor, editor.Text);
-                ContentChanged?.Invoke(this, EventArgs.Empty);
-            };
-            editor.KeyDown += Editor_KeyDown;
-            editor.GotFocus += Editor_GotFocus;
-            ResizeEditor(editor, _entry.Content);
-            _editor = editor;
+        private static RichTextBlock CreateRichText(string text, double size, global::Windows.UI.Text.FontWeight weight, Brush? foreground = null)
+        {
+            var block = new RichTextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = false };
+            var paragraph = new Paragraph { FontSize = size, FontWeight = weight };
+            if (foreground is not null) paragraph.Foreground = foreground;
+            AddCustomInlines(paragraph, text);
+            block.Blocks.Add(paragraph);
+            return block;
+        }
 
-            ContentHost.Children.Add(_editor);
-            var editorToFocus = _editor;
-            void FocusEditorAfterLayout(object? sender, object e)
+        private static void AddCustomInlines(Paragraph paragraph, string text)
+        {
+            var position = 0;
+            while (position < text.Length)
             {
-                LayoutUpdated -= FocusEditorAfterLayout;
-                _ = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
-                {
-                    editorToFocus.Focus(FocusState.Keyboard);
-                    if (editorToFocus is TextBox textBox)
-                    {
-                        ResizeEditor(textBox, _entry.Content!);
-                        textBox.SelectionStart = textBox.Text.Length;
-                        textBox.SelectionLength = 0;
-                    }
-                });
+                var markerIndex = FindNextMarker(text, position, out var marker, out var closing);
+                if (markerIndex < 0) { paragraph.Inlines.Add(new Run { Text = text[position..] }); break; }
+                if (markerIndex > position) paragraph.Inlines.Add(new Run { Text = text[position..markerIndex] });
+                var closeIndex = text.IndexOf(closing, markerIndex + 1);
+                if (closeIndex < 0) { paragraph.Inlines.Add(new Run { Text = text[markerIndex..] }); break; }
+                var value = text[(markerIndex + 1)..closeIndex];
+                if (marker == '"') paragraph.Inlines.Add(new Bold { Inlines = { new Run { Text = value } } });
+                else if (marker == '\'') paragraph.Inlines.Add(new Run { Text = value, FontFamily = new FontFamily("Cascadia Mono") });
+                else paragraph.Inlines.Add(new Italic { Inlines = { new Run { Text = value } } });
+                position = closeIndex + 1;
+            }
+            if (text.Length == 0) paragraph.Inlines.Add(new Run { Text = string.Empty });
+        }
+
+        private static int FindNextMarker(string text, int start, out char marker, out char closing)
+        {
+            var candidates = new[] { ('"', '"'), ('\'', '\''), ('(', ')') };
+            var best = -1;
+            marker = closing = '\0';
+            foreach (var candidate in candidates)
+            {
+                var index = text.IndexOf(candidate.Item1, start);
+                if (index >= 0 && (best < 0 || index < best)) { best = index; marker = candidate.Item1; closing = candidate.Item2; }
+            }
+            return best;
+        }
+
+        private static FrameworkElement CreatePassword(string value)
+        {
+            var password = new PasswordBox { Password = value, PasswordRevealMode = PasswordRevealMode.Hidden, MinWidth = 220, IsTabStop = false, IsHitTestVisible = false };
+            var toggle = new Button { Content = new SymbolIcon(Symbol.View), Width = 36, Height = 32, Padding = new Thickness(6) };
+            toggle.Click += (_, _) => password.PasswordRevealMode = password.PasswordRevealMode == PasswordRevealMode.Hidden ? PasswordRevealMode.Visible : PasswordRevealMode.Hidden;
+            var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            panel.Children.Add(password); panel.Children.Add(toggle);
+            return panel;
+        }
+
+        private FrameworkElement CreateAttachment(string storedPath, bool isImage)
+        {
+            var fullPath = ResolvePath(storedPath);
+            FrameworkElement visual;
+            if (isImage)
+            {
+                var image = new Image { Stretch = Stretch.Uniform, MaxWidth = 220, MaxHeight = 180 };
+                if (fullPath is not null && File.Exists(fullPath)) image.Source = new BitmapImage(new Uri(fullPath));
+                visual = image;
+            }
+            else
+            {
+                var grid = new Grid { Width = 72, Height = 72 };
+                grid.Children.Add(new Border { CornerRadius = new CornerRadius(8), Background = (Brush)Application.Current.Resources["SubtleFillColorSecondaryBrush"] });
+                grid.Children.Add(new SymbolIcon { Symbol = Symbol.Document, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+                if (fullPath is not null && File.Exists(fullPath)) _ = LoadFileThumbnailAsync(fullPath, grid);
+                visual = grid;
             }
 
-            LayoutUpdated += FocusEditorAfterLayout;
-        }
-
-        private void Editor_GotFocus(object sender, RoutedEventArgs e)
-        {
-            if (sender is not Control editor || !ReferenceEquals(sender, _editor)) return;
-            _isEditorFocused = true;
-            editor.GotFocus -= Editor_GotFocus;
-            editor.LostFocus += Editor_LostFocus;
-            _initialFocusTimer.Stop();
-            _initialFocusTimer.Start();
-            InteractionStateChanged?.Invoke(this, EventArgs.Empty);
-        }
-
-        private void ResizeEditor(TextBox editor, string content)
-        {
-            var normalizedContent = content.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-            var lineCount = normalizedContent.Count(character => character == '\n') + 1;
-            editor.Height = Math.Max(40, lineCount * 22 + 20);
-            editor.InvalidateMeasure();
-            ContentHost.InvalidateMeasure();
-            Root.InvalidateMeasure();
-        }
-
-        private static string NormalizeEditorText(string content) => content.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", "\r\n", StringComparison.Ordinal);
-
-        private void Editor_LostFocus(object sender, RoutedEventArgs e)
-        {
-            if (!ReferenceEquals(sender, _editor)) return;
-            _isEditorFocused = false;
-            InteractionStateChanged?.Invoke(this, EventArgs.Empty);
-            if (_isInitialEditorFocus)
-            {
-                if (sender is Control editor)
-                {
-                    _ = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => editor.Focus(FocusState.Keyboard));
-                }
-                return;
-            }
-
-            if (RemoveIfContentEmpty()) return;
-            ShowPreview();
-        }
-
-        private void Editor_KeyDown(object sender, KeyRoutedEventArgs e)
-        {
-            if (e.Key != global::Windows.System.VirtualKey.Escape || _entry is null) return;
-            e.Handled = true;
-            if (RemoveIfContentEmpty()) return;
-
-            ShowPreview();
-        }
-
-        private bool RemoveIfContentEmpty()
-        {
-            if (_entry is null || !string.IsNullOrWhiteSpace(_entry.Content)) return false;
-            RemoveRequested?.Invoke(this, EventArgs.Empty);
-            return true;
-        }
-
-        private FrameworkElement CreateImagePreview()
-        {
-            var attachment = ParseAttachmentContent(_entry!.Content);
-            var image = new Image
-            {
-                Stretch = Stretch.Uniform,
-                MaxWidth = 200,
-                MaxHeight = 200
-            };
-            var path = ResolveAttachmentPath(attachment.Path);
-            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path)) image.Source = new BitmapImage(new Uri(path));
-            return CreateAttachmentLayout(image, attachment.Description, Path.GetFileName(attachment.Path));
-        }
-
-        private FrameworkElement CreateFilePreview()
-        {
-            var attachment = ParseAttachmentContent(_entry!.Content);
-            var path = ResolveAttachmentPath(attachment.Path);
-            var filePreview = new Grid();
-            filePreview.Children.Add(new Border { CornerRadius = new CornerRadius(8), Background = (Brush)Application.Current.Resources["SubtleFillColorSecondaryBrush"] });
-            filePreview.Children.Add(new SymbolIcon
-            {
-                Symbol = Symbol.Document,
-                Width = 64,
-                Height = 64,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path)) _ = LoadFileThumbnailAsync(path, filePreview);
-            return CreateAttachmentLayout(filePreview, attachment.Description, Path.GetFileName(attachment.Path));
-        }
-
-        private static FrameworkElement CreateAttachmentLayout(FrameworkElement visual, string description, string? title = null)
-        {
-            var layout = new Grid();
-            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
-            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            Grid.SetColumn(visual, 0);
+            var layout = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
             layout.Children.Add(visual);
-
-            if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(description)) return layout;
-
-            var details = new StackPanel { Spacing = 8, VerticalAlignment = VerticalAlignment.Top };
-            if (!string.IsNullOrWhiteSpace(title))
+            layout.Children.Add(new TextBlock { Text = Path.GetFileName(storedPath), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
+            layout.PointerPressed += async (_, e) =>
             {
-                details.Children.Add(new TextBlock
-                {
-                    Text = title,
-                    TextWrapping = TextWrapping.Wrap,
-                    FontSize = 15,
-                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
-                });
-            }
-
-            if (!string.IsNullOrWhiteSpace(description)) details.Children.Add(CreateAttachmentDescription(description));
-            Grid.SetColumn(details, 2);
-            layout.Children.Add(details);
+                if (!e.KeyModifiers.HasFlag(VirtualKeyModifiers.Control) || fullPath is null || !File.Exists(fullPath)) return;
+                e.Handled = true;
+                try { await Launcher.LaunchFileAsync(await StorageFile.GetFileFromPathAsync(fullPath)); } catch { }
+            };
             return layout;
         }
 
-        private static TextBlock CreateAttachmentDescription(string description) => new()
-        {
-            MaxWidth = 420,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Text = description,
-            TextWrapping = TextWrapping.Wrap,
-            FontSize = 13,
-            FontFamily = new FontFamily("Cascadia Mono")
-        };
+        private string? ResolvePath(string path) => string.IsNullOrWhiteSpace(path) ? null : Path.IsPathFullyQualified(path) ? path : _attachmentStorage?.GetFullPath(path);
 
-        private static async Task LoadFileThumbnailAsync(string path, Grid filePreview)
+        private static async Task LoadFileThumbnailAsync(string path, Grid host)
         {
             try
             {
@@ -330,59 +249,54 @@ namespace App.Controls
                 if (thumbnail is null) return;
                 var bitmap = new BitmapImage();
                 await bitmap.SetSourceAsync(thumbnail);
-                filePreview.Children.Add(new Image { Source = bitmap, Stretch = Stretch.Uniform, MaxWidth = 200, MaxHeight = 200 });
+                host.Children.Add(new Image { Source = bitmap, Stretch = Stretch.Uniform });
             }
-            catch (Exception)
-            {
-                // Keep the document fallback when Windows cannot provide a thumbnail or file-type icon.
-            }
+            catch { }
         }
 
-        private string? ResolveAttachmentPath(string path) => Path.IsPathFullyQualified(path) ? path : _resolveAttachmentPath?.Invoke(path);
-
-        private static (string Path, string Description) ParseAttachmentContent(string content)
+        private FrameworkElement CreateTodo(NoteSection section)
         {
-            var normalizedContent = content.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-            var firstLineEnd = normalizedContent.IndexOf('\n');
-            var path = firstLineEnd >= 0 ? normalizedContent[..firstLineEnd] : normalizedContent;
-            var description = firstLineEnd >= 0 ? normalizedContent[(firstLineEnd + 1)..].TrimStart('\n') : string.Empty;
-            return (path.Trim(), description.Trim());
-        }
-
-        private static FrameworkElement CreateTodoPreview(string content)
-        {
-            var panel = new StackPanel { Spacing = 0 };
-            var normalizedContent = content.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-            foreach (var line in normalizedContent.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            var panel = new StackPanel { Spacing = 2 };
+            var lines = section.Content.Split('\n');
+            for (var index = 0; index < lines.Length; index++)
             {
-                var item = line.TrimStart();
-                var done = item.StartsWith('+');
-                var isTodo = done || item.StartsWith('-');
-                var text = isTodo ? item[1..].TrimStart() : line;
-                var checkBox = new CheckBox
+                var trimmed = lines[index].TrimStart();
+                if (!trimmed.StartsWith('-') && !trimmed.StartsWith('+'))
                 {
-                    IsChecked = done,
-                    IsEnabled = false,
-                    Width = 22,
-                    MinWidth = 0,
-                    Height = 22,
-                    MinHeight = 0,
-                    Padding = new Thickness(0),
-                    HorizontalAlignment = HorizontalAlignment.Left
-                };
-                var todoItem = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3, Height = 22 };
-                todoItem.Children.Add(checkBox);
-                todoItem.Children.Add(new TextBlock { Text = text, FontSize = 14, VerticalAlignment = VerticalAlignment.Center });
-                panel.Children.Add(todoItem);
+                    panel.Children.Add(new TextBlock { Text = lines[index], TextWrapping = TextWrapping.Wrap });
+                    continue;
+                }
+                var lineIndex = index;
+                var checkBox = new CheckBox { Content = trimmed[1..].TrimStart(), IsChecked = trimmed[0] == '+', Tag = lineIndex };
+                checkBox.Click += (_, _) => UpdateTodo(section, lineIndex, checkBox.IsChecked == true);
+                panel.Children.Add(checkBox);
             }
             return panel;
         }
 
-        private static FrameworkElement CreateTablePreview(string content)
+        private void UpdateTodo(NoteSection section, int lineIndex, bool done)
+        {
+            if (_entry is null) return;
+            var content = NotebookFormat.Normalize(_entry.Content);
+            var lines = section.Content.Split('\n');
+            var relative = 0;
+            for (var index = 0; index < lineIndex; index++) relative += lines[index].Length + 1;
+            var marker = relative;
+            while (marker < relative + lines[lineIndex].Length && char.IsWhiteSpace(lines[lineIndex][marker - relative])) marker++;
+            var openingLineEnd = content.IndexOf('\n', section.SourceStart);
+            if (openingLineEnd < 0) return;
+            var absolute = openingLineEnd + 1 + marker;
+            if (absolute >= content.Length) return;
+            content = content[..absolute] + (done ? '+' : '-') + content[(absolute + 1)..];
+            _entry.Content = content;
+            ShowPreview();
+            ContentChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private static FrameworkElement CreateTable(string content)
         {
             var rows = ParseCsvRows(content);
             if (rows.Count == 0) return new TextBlock { Text = content, TextWrapping = TextWrapping.Wrap };
-
             var grid = new Grid();
             for (var column = 0; column < rows.Max(row => row.Length); column++) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             for (var row = 0; row < rows.Count; row++)
@@ -399,78 +313,110 @@ namespace App.Controls
 
         private static List<string[]> ParseCsvRows(string content)
         {
-            var rows = new List<string[]>();
-            var row = new List<string>();
-            var field = new StringBuilder();
-            var isQuoted = false;
-
+            var rows = new List<string[]>(); var row = new List<string>(); var field = new StringBuilder(); var quoted = false;
             for (var index = 0; index < content.Length; index++)
             {
                 var character = content[index];
                 if (character == '"')
                 {
-                    if (isQuoted && index + 1 < content.Length && content[index + 1] == '"')
-                    {
-                        field.Append(character);
-                        index++;
-                    }
-                    else isQuoted = !isQuoted;
+                    if (quoted && index + 1 < content.Length && content[index + 1] == '"') { field.Append('"'); index++; }
+                    else quoted = !quoted;
                 }
-                else if (character == ',' && !isQuoted)
-                {
-                    row.Add(field.ToString());
-                    field.Clear();
-                }
-                else if ((character == '\r' || character == '\n') && !isQuoted)
-                {
-                    if (character == '\r' && index + 1 < content.Length && content[index + 1] == '\n') index++;
-                    row.Add(field.ToString());
-                    rows.Add([.. row]);
-                    row.Clear();
-                    field.Clear();
-                }
+                else if (character == ',' && !quoted) { row.Add(field.ToString()); field.Clear(); }
+                else if (character == '\n' && !quoted) { row.Add(field.ToString()); rows.Add([.. row]); row.Clear(); field.Clear(); }
                 else field.Append(character);
             }
-
-            if (field.Length > 0 || row.Count > 0)
-            {
-                row.Add(field.ToString());
-                rows.Add([.. row]);
-            }
-
+            if (field.Length > 0 || row.Count > 0) { row.Add(field.ToString()); rows.Add([.. row]); }
             return rows;
         }
 
-        private static FrameworkElement CreateMarkdownPreview(string content)
+        private void ShowEditorContent()
         {
-            var richText = new RichTextBlock { TextWrapping = TextWrapping.Wrap };
-            foreach (var line in content.Split('\n'))
-            {
-                var paragraph = new Paragraph { FontSize = line.StartsWith("# ") ? 28 : line.StartsWith("## ") ? 22 : line.StartsWith("### ") ? 18 : 14 };
-                AddMarkdownInlines(paragraph, line.StartsWith("- ") ? $"• {line[2..]}" : line.TrimStart('#', ' '));
-                richText.Blocks.Add(paragraph);
-            }
-            return richText;
+            if (_entry is null) return;
+            _isInitialEditorFocus = true;
+            ContentHost.Children.Clear();
+            Root.Padding = new Thickness(0);
+            Root.Background = (Brush)Application.Current.Resources["LayerOnMicaBaseAltFillColorDefaultBrush"];
+            var editor = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(10), BorderThickness = new Thickness(0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), Text = _entry.Content };
+            ScrollViewer.SetVerticalScrollBarVisibility(editor, ScrollBarVisibility.Disabled);
+            editor.TextChanged += Editor_TextChanged;
+            editor.KeyDown += Editor_KeyDown;
+            editor.GotFocus += Editor_GotFocus;
+            editor.Paste += Editor_Paste;
+            ResizeEditor(editor);
+            _editor = editor;
+            ContentHost.Children.Add(editor);
+            _ = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { editor.Focus(FocusState.Keyboard); editor.SelectionStart = editor.Text.Length; });
         }
 
-        private static void AddMarkdownInlines(Paragraph paragraph, string text)
+        private void Editor_TextChanged(object sender, TextChangedEventArgs e)
         {
-            const string pattern = "(~~.+?~~|\\*\\*.+?\\*\\*|(?<!\\*)\\*[^*]+?\\*(?!\\*)|`.+?`|\\[[^]]+\\]\\([^)]+\\))";
-            var position = 0;
-            foreach (Match match in Regex.Matches(text, pattern))
-            {
-                if (match.Index > position) paragraph.Inlines.Add(new Run { Text = text[position..match.Index] });
-                var token = match.Value;
-                if (token.StartsWith("~~")) paragraph.Inlines.Add(new Run { Text = "****", FontFamily = new FontFamily("Cascadia Mono") });
-                else if (token.StartsWith("**")) paragraph.Inlines.Add(new Bold { Inlines = { new Run { Text = token[2..^2] } } });
-                else if (token.StartsWith('*')) paragraph.Inlines.Add(new Italic { Inlines = { new Run { Text = token[1..^1] } } });
-                else if (token.StartsWith('`')) paragraph.Inlines.Add(new Run { Text = token[1..^1], FontFamily = new FontFamily("Cascadia Mono") });
-                else paragraph.Inlines.Add(new Run { Text = token[1..token.IndexOf("](", StringComparison.Ordinal)] });
-                position = match.Index + match.Length;
-            }
-            if (position < text.Length) paragraph.Inlines.Add(new Run { Text = text[position..] });
+            if (_entry is null || sender is not TextBox editor) return;
+            _entry.Content = editor.Text;
+            ResizeEditor(editor);
+            ContentChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        private static string FormatBytes(long bytes) => bytes >= 1_048_576 ? $"{bytes / 1_048_576d:0.0} MB" : bytes >= 1024 ? $"{bytes / 1024d:0.0} KB" : $"{bytes} B";
+        private async void Editor_Paste(object sender, TextControlPasteEventArgs e)
+        {
+            if (sender is not TextBox editor || _attachmentStorage is null) return;
+            var package = Clipboard.GetContent();
+            try
+            {
+                if (package.Contains(StandardDataFormats.Bitmap))
+                {
+                    e.Handled = true;
+                    var bitmapPath = await _attachmentStorage.CopyBitmapAsync(await package.GetBitmapAsync());
+                    InsertText($"@image: {bitmapPath}");
+                    return;
+                }
+                if (!package.Contains(StandardDataFormats.Text)) return;
+                var text = (await package.GetTextAsync()).Trim();
+                if (text.Contains('\r') || text.Contains('\n') || !File.Exists(text)) return;
+                e.Handled = true;
+                var attachmentPath = await _attachmentStorage.CopyFromPathAsync(text);
+                InsertText($"@{(NotebookAttachmentStorageService.IsImagePath(text) ? "image" : "file")}: {attachmentPath}");
+            }
+            catch { }
+        }
+
+        private void Editor_GotFocus(object sender, RoutedEventArgs e)
+        {
+            if (!ReferenceEquals(sender, _editor)) return;
+            _isEditorFocused = true;
+            if (sender is Control editor) { editor.GotFocus -= Editor_GotFocus; editor.LostFocus += Editor_LostFocus; }
+            _initialFocusTimer.Stop(); _initialFocusTimer.Start();
+            InteractionStateChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void Editor_LostFocus(object sender, RoutedEventArgs e)
+        {
+            if (!ReferenceEquals(sender, _editor)) return;
+            _isEditorFocused = false;
+            InteractionStateChanged?.Invoke(this, EventArgs.Empty);
+            if (_isInitialEditorFocus) { _ = DispatcherQueue.TryEnqueue(() => _editor?.Focus(FocusState.Keyboard)); return; }
+            if (RemoveIfEmpty()) return;
+            ShowPreview();
+        }
+
+        private void Editor_KeyDown(object sender, KeyRoutedEventArgs e)
+        {
+            if (e.Key != VirtualKey.Escape) return;
+            e.Handled = true;
+            if (!RemoveIfEmpty()) ShowPreview();
+        }
+
+        private bool RemoveIfEmpty()
+        {
+            if (_entry is null || !string.IsNullOrWhiteSpace(_entry.Content)) return false;
+            RemoveRequested?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+
+        private static void ResizeEditor(TextBox editor)
+        {
+            var lines = NotebookFormat.Normalize(editor.Text).Count(character => character == '\n') + 1;
+            editor.Height = Math.Max(40, lines * 22 + 20);
+        }
     }
 }

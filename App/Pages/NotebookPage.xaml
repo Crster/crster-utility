@@ -4,16 +4,45 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:App.Controls">
 
-    <Grid Padding="24">
-        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="16" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+    <Grid Padding="20,16,20,12">
+        <Grid x:Name="NotebookSurface" MaxWidth="920" HorizontalAlignment="Stretch">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="14" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
 
-        <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="4">
-            <ToggleButton x:Name="ParagraphTool" Tag="paragraph" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Paragraph"><SymbolIcon Symbol="Font" /></ToggleButton>
-            <ToggleButton x:Name="ImageTool" Tag="image" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Image"><SymbolIcon Symbol="Pictures" /></ToggleButton>
-            <ToggleButton x:Name="FileTool" Tag="file" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="File"><SymbolIcon Symbol="Attach" /></ToggleButton>
-            <ToggleButton x:Name="TableTool" Tag="table" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Table"><FontIcon Glyph="&#xF232;" /></ToggleButton>
-            <ToggleButton x:Name="TodoTool" Tag="todo" Click="ToolButton_Click" Width="36" Height="36" Padding="6" ToolTipService.ToolTip="Todo"><SymbolIcon Symbol="Bullets" /></ToggleButton>
-        </StackPanel>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Border Padding="6" HorizontalAlignment="Left" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                    <StackPanel Orientation="Horizontal" Spacing="2">
+                        <Button Tag="title" Click="ToolButton_Click" Width="34" Height="32" Padding="3" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Title"><TextBlock Text="#" FontSize="18" FontWeight="SemiBold" /></Button>
+                        <Button Tag="description" Click="ToolButton_Click" Width="34" Height="32" Padding="3" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Description"><TextBlock Text="##" FontSize="13" /></Button>
+                        <Button Tag="important" Click="ToolButton_Click" Width="34" Height="32" Padding="3" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Important"><TextBlock Text="&quot;A&quot;" FontWeight="Bold" /></Button>
+                        <Button Tag="mono" Click="ToolButton_Click" Width="34" Height="32" Padding="3" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Monospace"><TextBlock Text="'A'" FontFamily="Cascadia Mono" FontSize="12" /></Button>
+                        <Button Tag="italic" Click="ToolButton_Click" Width="34" Height="32" Padding="3" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Italic"><TextBlock Text="(A)" FontStyle="Italic" /></Button>
+                        <Border Width="1" Height="20" Margin="5,0" Background="{ThemeResource CardStrokeColorDefaultBrush}" />
+                        <Button Tag="password" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Password"><FontIcon Glyph="&#xE72E;" /></Button>
+                        <Button Tag="file" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="File"><SymbolIcon Symbol="Attach" /></Button>
+                        <Button Tag="image" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Image"><SymbolIcon Symbol="Pictures" /></Button>
+                        <Button Tag="table" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Table"><FontIcon Glyph="&#xF232;" /></Button>
+                        <Button Tag="todo" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Todo"><SymbolIcon Symbol="Bullets" /></Button>
+                    </StackPanel>
+                </Border>
+                <Button Grid.Column="1" Tag="new" Click="ToolButton_Click" Content="New note" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False">
+                    <Button.ContentTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE710;" FontSize="12" />
+                                <TextBlock Text="{Binding}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </Button.ContentTemplate>
+                </Button>
+            </Grid>
 
         <ListView x:Name="BlocksHost"
                   Grid.Row="2"
@@ -25,10 +54,8 @@
                   ScrollViewer.VerticalScrollBarVisibility="Auto"
                   ScrollViewer.VerticalScrollMode="Enabled"
                   ScrollViewer.HorizontalScrollMode="Disabled"
-                  Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                  BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                  BorderThickness="1"
-                  CornerRadius="12">
+                  Background="Transparent"
+                  BorderThickness="0">
             <ListView.ItemTemplate>
                 <DataTemplate>
                     <controls:Noteblock Loaded="Block_Loaded" />
@@ -61,5 +88,6 @@
                 </ItemsPanelTemplate>
             </ListView.ItemsPanel>
         </ListView>
+        </Grid>
     </Grid>
 </Page>

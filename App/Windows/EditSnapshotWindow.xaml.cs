@@ -627,7 +627,7 @@ namespace App.Windows
             var image = new BitmapImage();
             await image.SetSourceAsync(stream);
 
-            var palette = ColorPaletteService.ExtractBootstrapTheme(bitmap);
+            var palette = ColorPaletteService.ExtractTopUniqueColors(bitmap);
 
             bitmap.Dispose();
             return new SavedImageResult

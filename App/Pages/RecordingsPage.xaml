@@ -29,28 +29,14 @@
 
     <ScrollViewer VerticalScrollBarVisibility="Auto"
                  HorizontalScrollMode="Disabled"
-                 Padding="32,0,32,32">
-        <Grid MaxWidth="960"
-              HorizontalAlignment="Center">
+                 Padding="20,16,20,32">
+        <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
+                <RowDefinition Height="14" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-
-            <!-- Header -->
-            <StackPanel Grid.Row="0"
-                        Margin="0,32,0,32">
-                <TextBlock Text="Screen Recorder"
-                          Style="{StaticResource TitleTextBlockStyle}"
-                          HorizontalAlignment="Center" />
-                <TextBlock Text="Capture your screen and save it as an MP4 video"
-                          Style="{StaticResource CaptionTextBlockStyle}"
-                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                          HorizontalAlignment="Center"
-                          Margin="0,4,0,0" />
-            </StackPanel>
 
             <Border Grid.Row="2"
                     x:Name="FinalizingPanel"
@@ -60,63 +46,43 @@
                     BorderThickness="1"
                     CornerRadius="12"
                     Padding="24"
-                    Margin="0,32,0,0">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="Finalizing recording"
-                               Style="{StaticResource SubtitleTextBlockStyle}" />
-                    <TextBlock x:Name="FinalizingStatusText"
-                               Text="Writing your video…"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <ProgressBar IsIndeterminate="True" Height="6" />
-                    <TextBlock x:Name="FinalizingCountdownText"
-                               Text="About a few seconds remaining"
-                               Style="{StaticResource CaptionTextBlockStyle}"
-                               Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                </StackPanel>
+                    MinHeight="240"
+                    Margin="0">
+                <Grid>
+                    <StackPanel Width="380"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Spacing="14">
+                        <ProgressRing Width="40"
+                                      Height="40"
+                                      IsActive="True"
+                                      HorizontalAlignment="Center" />
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="Saving your recording"
+                                       Style="{StaticResource SubtitleTextBlockStyle}"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock Text="Please keep this window open while we prepare your video."
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                        <TextBlock x:Name="FinalizingStatusText"
+                                   Text="Writing your video…"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   HorizontalAlignment="Center" />
+                        <ProgressBar Width="280"
+                                     Height="6"
+                                     IsIndeterminate="True"
+                                     HorizontalAlignment="Center" />
+                        <TextBlock x:Name="FinalizingCountdownText"
+                                   Text="About a few seconds remaining"
+                                   Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Grid>
             </Border>
-
-            <!-- Controls -->
-            <StackPanel Grid.Row="1"
-                        HorizontalAlignment="Center"
-                        Spacing="16">
-                <Button x:Name="RecordingButton"
-                          Background="Transparent"
-                          BorderThickness="0"
-                          Padding="0"
-                          Click="RecordingButton_Click">
-                    <Grid MinWidth="145"
-                          MinHeight="40">
-                        <Border x:Name="RecordingButtonBase"
-                                Background="{ThemeResource AccentFillColorDefaultBrush}"
-                                CornerRadius="4">
-                            <Grid>
-                                <Border x:Name="RecordingWave"
-                                        Width="112"
-                                        HorizontalAlignment="Left"
-                                        VerticalAlignment="Stretch"
-                                        CornerRadius="4"
-                                        Background="#55FFFFFF"
-                                        Opacity="0"
-                                        IsHitTestVisible="False"
-                                        RenderTransformOrigin="0.5,0.5">
-                                    <Border.RenderTransform>
-                                        <TranslateTransform x:Name="RecordingWaveTransform"
-                                                            X="-150" />
-                                    </Border.RenderTransform>
-                                </Border>
-                                <TextBlock x:Name="RecordingButtonLabel"
-                                           Text="Start Recording"
-                                           Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
-                                           FontSize="14"
-                                           FontWeight="Normal"
-                                           HorizontalAlignment="Center"
-                                           VerticalAlignment="Center"
-                                           Margin="24,12" />
-                            </Grid>
-                        </Border>
-                    </Grid>
-                </Button>
-            </StackPanel>
 
             <!-- Latest Recording -->
             <Border Grid.Row="2"
@@ -126,9 +92,29 @@
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="{StaticResource CardCornerRadius}"
-                    Margin="0,24,0,0">
+                    Margin="0">
                 <StackPanel Padding="{StaticResource CardPadding}"
                             Spacing="18">
+                    <Grid ColumnSpacing="20">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2">
+                            <TextBlock Text="Recording saved"
+                                       Style="{StaticResource SubtitleTextBlockStyle}" />
+                            <TextBlock Text="Your video is ready to view."
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <Button x:Name="NewRecordingButton"
+                                Grid.Column="1"
+                                Content="Start a new recording"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Padding="16,10"
+                                VerticalAlignment="Center"
+                                Click="NewRecordingButton_Click" />
+                    </Grid>
                     <Button x:Name="LatestRecordingButton"
                             Background="Transparent"
                             BorderThickness="0"
@@ -188,24 +174,63 @@
                 </StackPanel>
             </Border>
 
-            <!-- Info -->
-            <StackPanel Grid.Row="2"
-                        x:Name="InfoPanel"
-                        Margin="0,32,0,0"
-                        HorizontalAlignment="Center">
-                <FontIcon Glyph="&#xE7F4;"
-                          FontSize="64"
-                          Foreground="{ThemeResource TextFillColorDisabledBrush}"
-                          HorizontalAlignment="Center" />
-                <TextBlock Text="Captures the primary display"
-                          Style="{StaticResource SubtitleTextBlockStyle}"
-                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            <!-- Empty state and recording control -->
+            <StackPanel x:Name="RecordingActionPanel"
+                        Grid.Row="3"
+                        Margin="0,48,0,0"
+                        HorizontalAlignment="Center"
+                        Spacing="24">
+                <StackPanel x:Name="InfoPanel">
+                    <FontIcon Glyph="&#xE7F4;"
+                              FontSize="64"
+                              Foreground="{ThemeResource TextFillColorDisabledBrush}"
+                              HorizontalAlignment="Center" />
+                    <TextBlock Text="Captures the primary display"
+                              Style="{StaticResource SubtitleTextBlockStyle}"
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                              HorizontalAlignment="Center"
+                              Margin="0,16,0,4" />
+                    <TextBlock Text="Click Start Recording to capture the entire screen"
+                              Style="{StaticResource CaptionTextBlockStyle}"
+                              Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                              HorizontalAlignment="Center" />
+                </StackPanel>
+                <Button x:Name="RecordingButton"
+                          Style="{StaticResource AccentButtonStyle}"
+                          Padding="0"
                           HorizontalAlignment="Center"
-                          Margin="0,16,0,4" />
-                <TextBlock Text="Click Start Recording to capture the entire screen"
-                          Style="{StaticResource CaptionTextBlockStyle}"
-                          Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                          HorizontalAlignment="Center" />
+                          Click="RecordingButton_Click">
+                    <Grid MinWidth="145"
+                          MinHeight="40">
+                        <Border x:Name="RecordingButtonBase"
+                                Background="Transparent"
+                                CornerRadius="4">
+                            <Grid>
+                                <Border x:Name="RecordingWave"
+                                        Width="112"
+                                        HorizontalAlignment="Left"
+                                        VerticalAlignment="Stretch"
+                                        CornerRadius="4"
+                                        Background="#55FFFFFF"
+                                        Opacity="0"
+                                        IsHitTestVisible="False"
+                                        RenderTransformOrigin="0.5,0.5">
+                                    <Border.RenderTransform>
+                                        <TranslateTransform x:Name="RecordingWaveTransform"
+                                                            X="-150" />
+                                    </Border.RenderTransform>
+                                </Border>
+                                <TextBlock x:Name="RecordingButtonLabel"
+                                           Text="Start Recording"
+                                           FontSize="14"
+                                           FontWeight="Normal"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           Margin="24,12" />
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Button>
             </StackPanel>
         </Grid>
     </ScrollViewer>
