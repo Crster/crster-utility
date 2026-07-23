@@ -1,4 +1,5 @@
 using App.Services;
+using Microsoft.Windows.AppLifecycle;
 using Microsoft.UI.Xaml;
 
 namespace App
@@ -7,6 +8,8 @@ namespace App
     {
         public static Window? MainWindow { get; private set; }
         public static NotifyIconService? SystemTray { get; private set; }
+        internal static SecureSettingsService Settings { get; } = new();
+        private KeyboardService? _keyboard;
 
         public App()
         {
@@ -15,16 +18,28 @@ namespace App
 
         protected override void OnLaunched(LaunchActivatedEventArgs args)
         {
+            var isStartupActivation = AppInstance.GetCurrent().GetActivatedEventArgs()?.Kind == ExtendedActivationKind.StartupTask;
+            Settings.Load();
             App.MainWindow = new Windows.MainWindow();
             App.MainWindow.Activate();
 
             App.SystemTray = new NotifyIconService(App.MainWindow);
             App.SystemTray.TrayLeftClick += SystemTray_TrayLeftClick;
+            App.SystemTray.TrayShowRequested += SystemTray_TrayLeftClick;
+            App.SystemTray.TrayExitRequested += () => (App.MainWindow as Windows.MainWindow)?.ExitFromTray();
+            _keyboard = new KeyboardService(App.MainWindow.DispatcherQueue);
+            _keyboard.Configure(Settings.Current.SnapshotShortcut, Settings.Current.CaffeineShortcut);
+            _keyboard.SnapshotPressed += (_, _) => (App.MainWindow as Windows.MainWindow)?.CaptureSnapshotFromHotkey();
+            _keyboard.CaffeinePressed += (_, _) => (App.MainWindow as Windows.MainWindow)?.ToggleCaffeineFromHotkey();
+            _keyboard.Start();
+            Settings.Changed += (_, settings) => _keyboard.Configure(settings.SnapshotShortcut, settings.CaffeineShortcut);
+            if (isStartupActivation)
+                (App.MainWindow as Windows.MainWindow)?.HideToTray();
         }
 
         private void SystemTray_TrayLeftClick()
         {
-            App.MainWindow?.Activate();
+            if (App.MainWindow is Windows.MainWindow mainWindow) mainWindow.ShowFromTray();
         }
     }
 }

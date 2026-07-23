@@ -121,7 +121,8 @@ namespace App.Services
             string outputFilePath,
             uint bitrateBps = 12_000_000,
             uint frameRate = 30,
-            bool includeCursor = true)
+            bool includeCursor = true,
+            string? microphoneDeviceId = null)
         {
             lock (_lock)
             {
@@ -242,7 +243,7 @@ namespace App.Services
                 _micEmptyCallbacks = 0;
 
                 // Start loopback + mic audio recording
-                StartAudioRecording(audioTempPath);
+                StartAudioRecording(audioTempPath, microphoneDeviceId);
                 _session.StartCapture();
                 Trace("Capture started; waiting for transcoder completion");
 
@@ -538,7 +539,7 @@ namespace App.Services
         // Audio Capture & Mixing Implementation (NAudio)
         // ==========================================
 
-        private void StartAudioRecording(string audioBasePath)
+        private void StartAudioRecording(string audioBasePath, string? microphoneDeviceId)
         {
             _isAudioRecording = true;
             string loopbackPath = audioBasePath.Replace(".wav", "_loopback.wav");
@@ -595,10 +596,13 @@ namespace App.Services
                 _loopbackCapture = null;
             }
 
-            // 2. Microphone Capture - Independent writer
+            // 2. Microphone Capture - Independent writer. An empty id explicitly disables mic input.
+            if (string.IsNullOrWhiteSpace(microphoneDeviceId)) return;
             try
             {
-                _micCapture = new WasapiCapture();
+                using var enumerator = new MMDeviceEnumerator();
+                var microphone = enumerator.GetDevice(microphoneDeviceId);
+                _micCapture = new WasapiCapture(microphone);
                 _micWaveFormat = _micCapture.WaveFormat;
                 _micWriter = new WaveFileWriter(micPath, _micWaveFormat);
                 Trace($"Mic capture created format={_micWaveFormat.Encoding} {_micWaveFormat.SampleRate}Hz {_micWaveFormat.Channels}ch {_micWaveFormat.BitsPerSample}bit");

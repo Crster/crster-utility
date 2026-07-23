@@ -1,59 +1,124 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
+using System.Linq;
 using System.Threading.Tasks;
-using Windows.Storage;
 
 namespace App.Services
 {
     internal sealed class SecureSettingsService
     {
-        private readonly string _path = Path.Combine(ApplicationData.Current.LocalFolder.Path, "settings.json");
+        private const string SettingsDirectoryName = "crster\\utility";
+        private readonly string _path;
 
-        public async Task<AppSettings> LoadAsync()
+        public SecureSettingsService()
         {
-            if (!File.Exists(_path)) return new AppSettings();
+            _path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), SettingsDirectoryName, "setting.ini");
+        }
+
+        public string Path => _path;
+        public AppSettings Current { get; private set; } = AppSettings.CreateDefault();
+        public event EventHandler<AppSettings>? Changed;
+
+        public AppSettings Load()
+        {
             try
             {
-                await using var stream = File.OpenRead(_path);
-                var stored = await JsonSerializer.DeserializeAsync<StoredSettings>(stream) ?? new StoredSettings();
-                var apiKey = string.IsNullOrWhiteSpace(stored.ProtectedGeminiApiKey)
-                    ? string.Empty
-                    : Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(stored.ProtectedGeminiApiKey), null, DataProtectionScope.CurrentUser));
-                return new AppSettings { GeminiApiKey = apiKey, LastGeminiModel = stored.LastGeminiModel };
-            }
-            catch (Exception)
-            {
-                return new AppSettings();
-            }
-        }
-
-        public async Task SaveAsync(AppSettings settings)
-        {
-            var protectedKey = string.IsNullOrWhiteSpace(settings.GeminiApiKey) ? string.Empty : Convert.ToBase64String(
-                ProtectedData.Protect(Encoding.UTF8.GetBytes(settings.GeminiApiKey), null, DataProtectionScope.CurrentUser));
-            var temporaryPath = $"{_path}.{Guid.NewGuid():N}.tmp";
-            await using (var stream = File.Create(temporaryPath))
-                await JsonSerializer.SerializeAsync(stream, new StoredSettings
+                if (!File.Exists(_path))
                 {
-                    ProtectedGeminiApiKey = protectedKey,
-                    LastGeminiModel = settings.LastGeminiModel
-                }, new JsonSerializerOptions { WriteIndented = true });
-            File.Move(temporaryPath, _path, true);
+                    Current = AppSettings.CreateDefault();
+                    Save(Current);
+                    return Current;
+                }
+
+                var values = Parse(File.ReadAllLines(_path));
+                Current = AppSettings.FromValues(values);
+            }
+            catch
+            {
+                Current = AppSettings.CreateDefault();
+            }
+            return Current;
         }
 
-        private sealed class StoredSettings
+        public Task<AppSettings> LoadAsync() => Task.FromResult(Load());
+
+        public void Save(AppSettings settings)
         {
-            public string ProtectedGeminiApiKey { get; set; } = string.Empty;
-            public string LastGeminiModel { get; set; } = string.Empty;
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
+            var temp = $"{_path}.{Guid.NewGuid():N}.tmp";
+            File.WriteAllLines(temp, settings.ToIniLines());
+            File.Move(temp, _path, true);
+            Current = settings;
+            Changed?.Invoke(this, settings);
+        }
+
+        public Task SaveAsync(AppSettings settings)
+        {
+            Save(settings);
+            return Task.CompletedTask;
+        }
+
+        private static Dictionary<string, string> Parse(IEnumerable<string> lines)
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var section = string.Empty;
+            foreach (var raw in lines)
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith(';') || line.StartsWith('#')) continue;
+                if (line.StartsWith('[') && line.EndsWith(']')) { section = line[1..^1]; continue; }
+                var separator = line.IndexOf('=');
+                if (separator <= 0) continue;
+                result[$"{section}.{line[..separator].Trim()}"] = line[(separator + 1)..].Trim();
+            }
+            return result;
         }
     }
 
     internal sealed class AppSettings
     {
+        public bool StartWithWindows { get; set; }
+        public string NotebookDataPath { get; set; } = string.Empty;
         public string GeminiApiKey { get; set; } = string.Empty;
+        public string SnapshotShortcut { get; set; } = "PrintScreen";
+        public bool SnapshotCaptureMouseCursor { get; set; } = true;
+        public string RecordingMicrophoneDeviceId { get; set; } = string.Empty;
+        public string CaffeineShortcut { get; set; } = "Ctrl+Shift+Alt+F12";
         public string LastGeminiModel { get; set; } = string.Empty;
+
+        public static AppSettings CreateDefault() => new()
+        {
+            NotebookDataPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "crster", "utility", "notebook")
+        };
+
+        public static AppSettings FromValues(IReadOnlyDictionary<string, string> values)
+        {
+            var settings = CreateDefault();
+            settings.StartWithWindows = ReadBool("General.StartWithWindows", settings.StartWithWindows);
+            settings.NotebookDataPath = Read("Notebook.DataPath", settings.NotebookDataPath);
+            settings.GeminiApiKey = Read("Gemini.ApiKey", settings.GeminiApiKey);
+            settings.LastGeminiModel = Read("Gemini.LastModel", settings.LastGeminiModel);
+            settings.SnapshotShortcut = Read("Snapshot.Shortcut", settings.SnapshotShortcut);
+            settings.SnapshotCaptureMouseCursor = ReadBool("Snapshot.CaptureMouseCursor", settings.SnapshotCaptureMouseCursor);
+            settings.RecordingMicrophoneDeviceId = Read("Recording.MicrophoneDeviceId", settings.RecordingMicrophoneDeviceId);
+            settings.CaffeineShortcut = Read("Caffeine.Shortcut", settings.CaffeineShortcut);
+            return settings;
+
+            string Read(string key, string fallback) => values.TryGetValue(key, out var value) ? value : fallback;
+            bool ReadBool(string key, bool fallback) => values.TryGetValue(key, out var value) && bool.TryParse(value, out var parsed) ? parsed : fallback;
+        }
+
+        public AppSettings Clone() => (AppSettings)MemberwiseClone();
+
+        public IEnumerable<string> ToIniLines() =>
+        [
+            "[General]", $"StartWithWindows={StartWithWindows}", "",
+            "[Notebook]", $"DataPath={NotebookDataPath}", "",
+            "[Gemini]", $"ApiKey={GeminiApiKey}", $"LastModel={LastGeminiModel}", "",
+            "[Snapshot]", $"Shortcut={SnapshotShortcut}", $"CaptureMouseCursor={SnapshotCaptureMouseCursor}", "",
+            "[Recording]", $"MicrophoneDeviceId={RecordingMicrophoneDeviceId}", "",
+            "[Caffeine]", $"Shortcut={CaffeineShortcut}"
+        ];
     }
 }

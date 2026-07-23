@@ -113,7 +113,8 @@ namespace App.Pages
                     _currentTempOutputPath,
                     bitrateBps: 12_000_000,
                     frameRate: 30,
-                    includeCursor: true);
+                    includeCursor: true,
+                    microphoneDeviceId: App.Settings.Current.RecordingMicrophoneDeviceId);
             }
             catch (Exception ex)
             {

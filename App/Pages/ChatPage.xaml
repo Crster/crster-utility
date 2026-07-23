@@ -56,7 +56,7 @@
                     </Button>
                     <Button Width="36" Height="36" Padding="0" Margin="0,15,0,0" Click="ClearButton_Click"
                             ToolTipService.ToolTip="Clear conversation">
-                        <FontIcon Glyph="&#xE74D;" FontSize="15" />
+                        <FontIcon FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&#xEA99;" FontSize="16" />
                     </Button>
                 </StackPanel>
             </Grid>
@@ -64,7 +64,7 @@
 
         <Grid Grid.Row="1">
             <ScrollViewer x:Name="ConversationScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled">
-                <StackPanel x:Name="ConversationHost" MaxWidth="960" HorizontalAlignment="Stretch" Spacing="14" Padding="4,8,8,16">
+                <StackPanel x:Name="ConversationHost" MaxWidth="960" HorizontalAlignment="Center" Spacing="14" Padding="4,8,8,16">
                     <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10" Margin="0,76,0,0">
                         <Border Width="64" Height="64" CornerRadius="20" Background="{ThemeResource AccentFillColorSecondaryBrush}">
                             <FontIcon Glyph="&#xE8BD;" FontSize="26" HorizontalAlignment="Center" VerticalAlignment="Center" />

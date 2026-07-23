@@ -32,4 +32,15 @@ namespace App.Models
 
         public required string Details { get; init; }
     }
+
+    internal sealed class FeatureSearchResult
+    {
+        public required string Title { get; init; }
+
+        public required string Details { get; init; }
+
+        public required string SearchTerms { get; init; }
+
+        public required string Destination { get; init; }
+    }
 }

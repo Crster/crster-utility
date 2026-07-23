@@ -16,6 +16,7 @@ namespace App.Pages
 {
     public sealed partial class SnapshotsPage : Page
     {
+        internal static SnapshotsPage? Current { get; private set; }
         private bool IsMainWindowVisible = false;
         private CanvasBitmap? Snapshot;
 
@@ -32,22 +33,28 @@ namespace App.Pages
         public SnapshotsPage()
         {
             this.InitializeComponent();
+            Current = this;
+            Unloaded += (_, _) => { if (ReferenceEquals(Current, this)) Current = null; };
         }
 
-        private async void CaptureScreenButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        internal Task CaptureFromShortcutAsync() => CaptureScreenAsync();
+
+        private async void CaptureScreenButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => await CaptureScreenAsync();
+
+        private async Task CaptureScreenAsync()
         {
             if (App.MainWindow is null) throw new Exception("App.MainWindow is not set");
 
             IsMainWindowVisible = false;
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow);
-            if (App.MainWindow.Visible)
+            if (App.MainWindow.Visible && App.MainWindow is not MainWindow { IsHiddenToTray: true })
             {
                 IsMainWindowVisible = true;
                 SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_HIDEWINDOW);
                 Thread.Sleep(100);
             }
 
-            Snapshot = await ScreenCaptureService.CaptureAsync();
+            Snapshot = await ScreenCaptureService.CaptureAsync(App.Settings.Current.SnapshotCaptureMouseCursor);
 
             if (Snapshot is null) throw new Exception("Failed to capture desktop");
 

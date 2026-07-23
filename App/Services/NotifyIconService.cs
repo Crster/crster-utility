@@ -17,6 +17,13 @@ namespace App.Services
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
 
+        [LibraryImport("user32.dll")] private static partial IntPtr CreatePopupMenu();
+        [LibraryImport("user32.dll", EntryPoint = "AppendMenuW", StringMarshalling = StringMarshalling.Utf16)] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool AppendMenu(IntPtr menu, uint flags, nuint id, string text);
+        [LibraryImport("user32.dll")] private static partial uint TrackPopupMenu(IntPtr menu, uint flags, int x, int y, int reserved, IntPtr window, IntPtr rectangle);
+        [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool DestroyMenu(IntPtr menu);
+        [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool GetCursorPos(out POINT point);
+        [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool SetForegroundWindow(IntPtr window);
+
         [DllImport("user32.dll")]
         private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, WndProcDelegate newProc);
 
@@ -37,6 +44,14 @@ namespace App.Services
         private const int WM_RBUTTONUP = 0x0205;
         private const int WM_LBUTTONDBLCLK = 0x0203;
         private const int GWLP_WNDPROC = -4;
+        private const uint MF_STRING = 0x0000;
+        private const uint MF_SEPARATOR = 0x0800;
+        private const uint TPM_RIGHTBUTTON = 0x0002;
+        private const uint TPM_RETURNCMD = 0x0100;
+        private const nuint ShowCommand = 1;
+        private const nuint ExitCommand = 2;
+
+        [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X; public int Y; }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct NOTIFYICONDATA
@@ -76,9 +91,15 @@ namespace App.Services
         public event Action? TrayLeftClick;
         public event Action? TrayRightClick;
         public event Action? TrayDoubleClick;
+        public event Action? TrayShowRequested;
+        public event Action? TrayExitRequested;
 
         private void OnTrayLeftClick() => TrayLeftClick?.Invoke();
-        private void OnTrayRightClick() => TrayRightClick?.Invoke();
+        private void OnTrayRightClick()
+        {
+            TrayRightClick?.Invoke();
+            ShowContextMenu();
+        }
         private void OnTrayDoubleClick() => TrayDoubleClick?.Invoke();
 
         public NotifyIconService(Window window)
@@ -132,6 +153,24 @@ namespace App.Services
             }
 
             return CallWindowProc(oldWndProc, hWnd, msg, wParam, lParam);
+        }
+
+        private void ShowContextMenu()
+        {
+            var menu = CreatePopupMenu();
+            if (menu == IntPtr.Zero || !GetCursorPos(out var point)) return;
+            try
+            {
+                _ = AppendMenu(menu, MF_STRING, ShowCommand, "Show");
+                _ = AppendMenu(menu, MF_SEPARATOR, 0, string.Empty);
+                _ = AppendMenu(menu, MF_STRING, ExitCommand, "Exit");
+                var hwnd = WindowNative.GetWindowHandle(window);
+                _ = SetForegroundWindow(hwnd);
+                var selected = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, point.X, point.Y, 0, hwnd, IntPtr.Zero);
+                if (selected == ShowCommand) TrayShowRequested?.Invoke();
+                else if (selected == ExitCommand) TrayExitRequested?.Invoke();
+            }
+            finally { _ = DestroyMenu(menu); }
         }
 
         public void SetTitle(string title)

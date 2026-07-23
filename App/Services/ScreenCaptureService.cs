@@ -16,7 +16,7 @@ namespace App.Services
     {
         public static Task<GraphicsCaptureItem?> GetMainDisplayItemAsync() => GetMainDisplayItem();
 
-        public static async Task<CanvasBitmap?> CaptureAsync()
+        public static async Task<CanvasBitmap?> CaptureAsync(bool includeCursor = true)
         {
             try
             {
@@ -31,7 +31,7 @@ namespace App.Services
                     item.Size);
 
                 using var session = framePool.CreateCaptureSession(item);
-                session.IsCursorCaptureEnabled = true;
+                session.IsCursorCaptureEnabled = includeCursor;
                 session.StartCapture();
 
                 var tcs = new TaskCompletionSource<Direct3D11CaptureFrame>();

@@ -22,13 +22,68 @@ namespace App.Services
 
         public NotebookDatabaseService()
         {
-            RootPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, "Notebook");
-            Directory.CreateDirectory(RootPath);
+            var configuredPath = App.Settings.Current.NotebookDataPath;
+            RootPath = GetUsableRootPath(configuredPath);
+            if (!string.Equals(configuredPath, RootPath, StringComparison.OrdinalIgnoreCase))
+            {
+                var fallbackSettings = App.Settings.Current.Clone();
+                fallbackSettings.NotebookDataPath = RootPath;
+                try { App.Settings.Save(fallbackSettings); } catch { }
+            }
             _documentPath = Path.Combine(RootPath, "notebook.json");
             _indexPath = Path.Combine(RootPath, "notebook-index.b59vdb");
         }
 
         public string RootPath { get; }
+
+        private static string GetUsableRootPath(string configuredPath)
+        {
+            if (CanAccessDirectory(configuredPath)) return configuredPath;
+            var fallbackPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, "Notebook");
+            if (!CanAccessDirectory(fallbackPath))
+                throw new IOException("The configured notebook folder is unavailable and the app-data fallback could not be accessed.");
+            return fallbackPath;
+        }
+
+        private static bool CanAccessDirectory(string path)
+        {
+            try
+            {
+                Directory.CreateDirectory(path);
+                var probePath = Path.Combine(path, $".crster-access-{Guid.NewGuid():N}.tmp");
+                using (File.Create(probePath)) { }
+                File.Delete(probePath);
+                if (File.Exists(Path.Combine(path, "notebook.json")))
+                    using (File.Open(Path.Combine(path, "notebook.json"), FileMode.Open, FileAccess.Read, FileShare.Read)) { }
+                return true;
+            }
+            catch { return false; }
+        }
+
+        public static async Task MigrateAsync(string sourcePath, string destinationPath)
+        {
+            sourcePath = Path.GetFullPath(sourcePath);
+            destinationPath = Path.GetFullPath(destinationPath);
+            if (string.Equals(sourcePath, destinationPath, StringComparison.OrdinalIgnoreCase)) return;
+            if (destinationPath.StartsWith(sourcePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The new notebook folder cannot be inside the current notebook folder.");
+            if (!Directory.Exists(sourcePath)) { Directory.CreateDirectory(destinationPath); return; }
+
+            await Task.Run(() =>
+            {
+                Directory.CreateDirectory(destinationPath);
+                foreach (var directory in Directory.GetDirectories(sourcePath, "*", SearchOption.AllDirectories))
+                    Directory.CreateDirectory(Path.Combine(destinationPath, Path.GetRelativePath(sourcePath, directory)));
+                foreach (var file in Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories))
+                    File.Copy(file, Path.Combine(destinationPath, Path.GetRelativePath(sourcePath, file)), true);
+                Directory.Delete(sourcePath, true);
+            });
+            lock (SearchIndexLock)
+            {
+                _searchIndex = null;
+                _searchIndexTask = null;
+            }
+        }
 
         public async Task<List<NotebookEntry>> LoadAsync()
         {

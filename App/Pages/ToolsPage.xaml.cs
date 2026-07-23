@@ -8,6 +8,7 @@ namespace App.Pages
 {
     public sealed partial class ToolsPage : Page
     {
+        private static ToolsPage? Current;
         private const int StopDistancePixels = 100;
         private const int BrowserTabCount = 3;
         private const int MaximumVirtualScrollOffset = 3;
@@ -35,10 +36,17 @@ namespace App.Pages
         public ToolsPage()
         {
             InitializeComponent();
+            Current = this;
             _activityTimer.Tick += ActivityTimer_Tick;
             _mouseMonitorTimer.Interval = TimeSpan.FromMilliseconds(100);
             _mouseMonitorTimer.Tick += MouseMonitorTimer_Tick;
             Unloaded += ToolsPage_Unloaded;
+        }
+
+        internal static void ToggleFromShortcut()
+        {
+            if (Current is null) return;
+            if (Current._isRunning) Current.StopCaffeine(); else Current.StartCaffeine();
         }
 
         private void CaffeineButton_Click(object sender, RoutedEventArgs e)
@@ -72,7 +80,8 @@ namespace App.Pages
             _activityTimer.Stop();
             _mouseMonitorTimer.Stop();
             NativeInputService.RestoreTaskSwitcherVisibility(_caffeineWindowHandle, _caffeineWindowExtendedStyle);
-            NativeInputService.ActivateWindow(_caffeineWindowHandle);
+            if (App.MainWindow is not Windows.MainWindow { IsHiddenToTray: true })
+                NativeInputService.ActivateWindow(_caffeineWindowHandle);
             _caffeineWindowHandle = IntPtr.Zero;
             _caffeineWindowExtendedStyle = default;
             CaffeineButton.Content = "Start Caffeine";
@@ -188,7 +197,11 @@ namespace App.Pages
             return ref _browserTabScrollOffsets[_browserTabIndex];
         }
 
-        private void ToolsPage_Unloaded(object sender, RoutedEventArgs e) => StopCaffeine();
+        private void ToolsPage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            if (ReferenceEquals(Current, this)) Current = null;
+            StopCaffeine();
+        }
 
         private enum ActiveExternalApp
         {
