@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -208,7 +209,13 @@ namespace App.Pages
                                     ? await CaptureScreenRegionAsync(call)
                                     : await _tools.ExecuteAsync(call.Name, call.Arguments, _operationCancellation.Token);
                         }
-                        AddMessage(new ChatMessage(ChatItemKind.Tool, call.Name, toolResult.Output, Image: toolResult.Image));
+                        AddMessage(new ChatMessage(
+                            ChatItemKind.Tool,
+                            call.Name,
+                            toolResult.Output,
+                            Image: toolResult.Image,
+                            ToolArguments: (JsonObject)call.Arguments.DeepClone(),
+                            ToolSucceeded: toolResult.Success));
                         responses.Add(GeminiClient.CreateFunctionResult(call, toolResult));
                     }
                     nextSteps = responses;
@@ -780,40 +787,43 @@ namespace App.Pages
         private void RenderMessage(ChatMessage message)
         {
             EmptyState.Visibility = Visibility.Collapsed; if (EmptyState.Parent is Panel parent) parent.Children.Remove(EmptyState);
-            var body = new StackPanel { Spacing = message.Kind == ChatItemKind.Tool ? 4 : 7 };
+            if (message.Kind == ChatItemKind.Tool)
+            {
+                ConversationHost.Children.Add(CreateToolMessageView(message));
+                ScrollToLatestMessage();
+                return;
+            }
+
+            var body = new StackPanel { Spacing = 7 };
             var title = new TextBlock
             {
-                Text = message.Kind == ChatItemKind.Tool ? $"Tool · {message.Title}" : message.Title,
-                FontSize = message.Kind == ChatItemKind.Tool ? 10 : 14,
+                Text = message.Title,
+                FontSize = 14,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 Foreground = (Brush)Application.Current.Resources[message.Kind switch
                 {
                     ChatItemKind.Error => "SystemFillColorCriticalBrush",
-                    ChatItemKind.Tool => "TextFillColorSecondaryBrush",
                     _ => "TextFillColorPrimaryBrush"
                 }]
             };
-            if (message.Kind == ChatItemKind.Tool) title.FontFamily = new FontFamily("Cascadia Mono");
             body.Children.Add(title);
             if (message.AttachmentNames is not null) foreach (var name in message.AttachmentNames) body.Children.Add(new TextBlock { Text = $"📎 {name}", FontSize = 12, Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] });
             if (!string.IsNullOrWhiteSpace(message.Content))
                 body.Children.Add(message.Kind switch
                 {
                     ChatItemKind.Assistant or ChatItemKind.User => new MarkdownView { Markdown = message.Content },
-                    ChatItemKind.Tool => CreateToolResultView(message.Content),
                     _ => CreateNormalizedTextBlock(message.Content)
                 });
             if (message.Image is not null) body.Children.Add(CreateImagePanel(message.Image));
             var messageContainer = new Border
             {
-                Padding = message.Kind == ChatItemKind.Tool ? new Thickness(12, 8, 12, 8) : new Thickness(14, 11, 14, 12),
-                CornerRadius = new CornerRadius(message.Kind == ChatItemKind.Tool ? 9 : 12),
-                BorderThickness = new Thickness(message.Kind == ChatItemKind.Tool ? 0 : 1),
+                Padding = new Thickness(14, 11, 14, 12),
+                CornerRadius = new CornerRadius(12),
+                BorderThickness = new Thickness(1),
                 BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
                 Background = (Brush)Application.Current.Resources[message.Kind switch
                 {
                     ChatItemKind.User => "AccentFillColorTertiaryBrush",
-                    ChatItemKind.Tool => "SubtleFillColorSecondaryBrush",
                     _ => "CardBackgroundFillColorDefaultBrush"
                 }],
                 Child = body,
@@ -823,6 +833,146 @@ namespace App.Pages
             ConversationHost.Children.Add(messageContainer);
             ScrollToLatestMessage();
         }
+
+        private FrameworkElement CreateToolMessageView(ChatMessage message)
+        {
+            var details = new StackPanel
+            {
+                Spacing = 6,
+                Margin = new Thickness(10, 8, 10, 10),
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            details.Children.Add(CreateToolSectionHeader("Parameters:"));
+            details.Children.Add(CreateToolParameterLabels(message.ToolArguments));
+            details.Children.Add(CreateToolSectionHeader("Result:"));
+            details.Children.Add(CreateToolResultView(message.Content));
+
+            var consoleBody = new Border
+            {
+                Child = details,
+                Background = (Brush)Application.Current.Resources["ControlFillColorSecondaryBrush"],
+                CornerRadius = new CornerRadius(0, 0, 7, 7)
+            };
+            var detailsPanel = new Border
+            {
+                Child = consoleBody,
+                Visibility = Visibility.Collapsed,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            var chevron = new FontIcon
+            {
+                Glyph = "\uE76C",
+                FontSize = 10,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var headerSurface = new Grid
+            {
+                MinHeight = 28,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                CornerRadius = new CornerRadius(7, 7, 0, 0),
+                Padding = new Thickness(9, 0, 9, 0),
+                Background = (Brush)Application.Current.Resources["ControlFillColorDefaultBrush"]
+            };
+            headerSurface.Children.Add(CreateToolSummary(message, chevron));
+            var headerButton = new Button
+            {
+                Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(0),
+                MinHeight = 28,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                VerticalContentAlignment = VerticalAlignment.Center
+            };
+            headerButton.Resources["ButtonBackgroundPointerOver"] = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            headerButton.Resources["ButtonBackgroundPressed"] = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            headerSurface.Children.Add(headerButton);
+
+            var console = new StackPanel();
+            console.Children.Add(headerSurface);
+            console.Children.Add(detailsPanel);
+            var toolWindow = new Border
+            {
+                Child = console,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8)
+            };
+
+            ToolTipService.SetToolTip(headerButton, "Show tool details");
+            headerButton.Click += (_, _) =>
+            {
+                var isExpanded = detailsPanel.Visibility == Visibility.Visible;
+                detailsPanel.Visibility = isExpanded ? Visibility.Collapsed : Visibility.Visible;
+                chevron.Glyph = isExpanded ? "\uE76C" : "\uE70D";
+                ToolTipService.SetToolTip(headerButton, isExpanded ? "Show tool details" : "Hide tool details");
+            };
+
+            var panel = new StackPanel
+            {
+                Spacing = 6,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            panel.Children.Add(toolWindow);
+            if (message.Image is not null) panel.Children.Add(CreateImagePanel(message.Image));
+            return panel;
+        }
+
+        private static TextBlock CreateToolSectionHeader(string text) => new()
+        {
+            Text = text,
+            FontFamily = new FontFamily("Cascadia Mono"),
+            FontSize = 11,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+        };
+
+        private static FrameworkElement CreateToolParameterLabels(JsonObject? arguments)
+        {
+            var labels = new StackPanel
+            {
+                Spacing = 3,
+                Margin = new Thickness(10, 0, 10, 0)
+            };
+            foreach (var parameter in arguments ?? new JsonObject())
+                labels.Children.Add(CreateToolParameterLabel(parameter.Key, parameter.Value));
+
+            if (labels.Children.Count == 0)
+                labels.Children.Add(CreateToolParameterLabel("None", null));
+
+            return labels;
+        }
+
+        private static TextBlock CreateToolParameterLabel(string key, JsonNode? value)
+        {
+            var displayValue = value is null && key.Equals("None", StringComparison.OrdinalIgnoreCase)
+                ? "No parameters"
+                : FormatJsonValue(value);
+            return new TextBlock
+            {
+                Text = key.Equals("None", StringComparison.OrdinalIgnoreCase)
+                    ? displayValue
+                    : $"{HumanizeToolWord(key.Replace('_', ' '))}: {displayValue}",
+                FontFamily = new FontFamily("Cascadia Mono"),
+                FontSize = 11,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true
+            };
+        }
+
+        private static TextBlock CreateToolTextBlock(string content) => new()
+        {
+            Text = NormalizeText(content),
+            FontFamily = new FontFamily("Cascadia Mono"),
+            FontSize = 11,
+            IsTextSelectionEnabled = true,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+        };
 
         private void ScrollToLatestMessage()
         {
@@ -838,164 +988,152 @@ namespace App.Pages
             try
             {
                 var root = JsonNode.Parse(content);
-                if (root is null) return CreateCollapsedToolText(content);
-                var tree = new StackPanel { Spacing = 3, HorizontalAlignment = HorizontalAlignment.Stretch };
-                AddJsonChildren(tree, root, 0);
-                var status = root is JsonObject jsonObject ? jsonObject["status"]?.GetValue<string>() : null;
-                var summary = root is JsonObject summaryObject ? summaryObject["summary"]?.GetValue<string>() : null;
-                return new Expander
-                {
-                    Header = CreateToolSummary(status, summary),
-                    Content = new Border
-                    {
-                        Padding = new Thickness(8, 6, 0, 4),
-                        BorderThickness = new Thickness(1, 0, 0, 0),
-                        BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-                        Child = tree
-                    },
-                    IsExpanded = false,
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    HorizontalContentAlignment = HorizontalAlignment.Stretch
-                };
+                return CreateToolResultContainer(root is null ? CreateToolTextBlock(content) : CreateJsonTreeView(root));
             }
-            catch (System.Text.Json.JsonException)
+            catch (JsonException)
             {
-                return CreateCollapsedToolText(content);
+                return CreateToolResultContainer(CreateToolTextBlock(content));
             }
         }
 
-        private static Expander CreateCollapsedToolText(string content) => new()
+        private static Border CreateToolResultContainer(FrameworkElement content) => new()
         {
-            Header = CreateToolSummary(null, "View tool details"),
-            Content = new Border
-            {
-                Padding = new Thickness(8, 6, 0, 4),
-                BorderThickness = new Thickness(1, 0, 0, 0),
-                BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-                Child = CreateNormalizedTextBlock(content)
-            },
-            IsExpanded = false,
+            Padding = new Thickness(0),
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            HorizontalContentAlignment = HorizontalAlignment.Stretch
+            Child = content
         };
 
-        private static FrameworkElement CreateToolSummary(string? status, string? summary)
+        private static Grid CreateToolSummary(ChatMessage message, FontIcon chevron)
         {
-            var panel = new Grid { ColumnSpacing = 8 };
-            panel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-            var normalizedStatus = string.IsNullOrWhiteSpace(status) ? "result" : status.Replace('_', ' ');
-            panel.Children.Add(new Border
+            var status = message.ToolSucceeded ?? IsCompletedToolResult(message.Content);
+            var header = new Grid
             {
-                Padding = new Thickness(7, 2, 7, 2),
-                CornerRadius = new CornerRadius(8),
-                Background = (Brush)Application.Current.Resources["ControlFillColorSecondaryBrush"],
-                Child = new TextBlock
-                {
-                    Text = normalizedStatus,
-                    FontSize = 9,
-                    FontFamily = new FontFamily("Cascadia Mono"),
-                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                    Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
-                }
-            });
-
-            var summaryText = new TextBlock
+                ColumnSpacing = 8,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            header.Children.Add(new TextBlock
             {
-                Text = NormalizeText(string.IsNullOrWhiteSpace(summary) ? "View tool details" : summary),
-                FontSize = 10,
+                Text = $"{HumanizeToolName(message.Title)} ({(status ? "Success" : "Failed")})",
+                FontSize = 11,
                 FontFamily = new FontFamily("Cascadia Mono"),
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                VerticalAlignment = VerticalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            Grid.SetColumn(chevron, 1);
+            header.Children.Add(chevron);
+            return header;
+        }
+
+        private static bool IsCompletedToolResult(string content)
+        {
+            try
+            {
+                if (JsonNode.Parse(content) is not JsonObject root) return false;
+                return string.Equals(root["status"]?.GetValue<string>(), "completed", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        private static string HumanizeToolName(string name) => name switch
+        {
+            "execute_command_shell" => "Run PowerShell",
+            "execute_command_shell_admin" => "Run PowerShell as administrator",
+            "read_file" => "Read file",
+            "read_file_info" => "Read file information",
+            "write_file" => "Write file",
+            "delete_file" => "Delete file",
+            "list_directory" => "List directory",
+            "make_directory" => "Create directory",
+            "delete_directory" => "Delete directory",
+            "hash_file" => "Hash file",
+            "zip_file" => "Create ZIP archive",
+            "unzip_file" => "Extract ZIP archive",
+            "read_file_hex" => "Read file bytes",
+            "grep" => "Search files",
+            "kill_process" => "Terminate process",
+            "search_process" => "Search processes",
+            "list_special_folders" => "List special folders",
+            "list_environment_variable" => "Read environment variable",
+            "list_system_info" => "Read system information",
+            "screen_capture" => "Capture screen",
+            "fuzzy_search_file" => "Search files by topic",
+            "load_skill" => "Load skill research",
+            "search_notebook" => "Search notebook",
+            "list_personal_info" => "Read personal information",
+            "write_personal_info" => "Save personal information",
+            "list_environment" => "Read environment",
+            "new_session" => "Start new topic",
+            _ => string.Join(' ', name.Split('_', StringSplitOptions.RemoveEmptyEntries).Select(HumanizeToolWord))
+        };
+
+        private static string HumanizeToolWord(string word) => word.Length == 0
+            ? word
+            : char.ToUpperInvariant(word[0]) + word[1..].ToLowerInvariant();
+
+        private static TreeView CreateJsonTreeView(JsonNode root)
+        {
+            var tree = new TreeView
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Padding = new Thickness(0),
+                Margin = new Thickness(0),
+                FontFamily = new FontFamily("Cascadia Mono"),
+                FontSize = 11,
+                FontWeight = Microsoft.UI.Text.FontWeights.Normal,
                 Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
             };
-            Grid.SetColumn(summaryText, 1);
-            panel.Children.Add(summaryText);
-            return panel;
-        }
+            var itemStyle = new Style(typeof(TreeViewItem));
+            itemStyle.Setters.Add(new Setter(Control.FontFamilyProperty, new FontFamily("Cascadia Mono")));
+            itemStyle.Setters.Add(new Setter(Control.FontSizeProperty, 11d));
+            itemStyle.Setters.Add(new Setter(Control.FontWeightProperty, Microsoft.UI.Text.FontWeights.Normal));
+            itemStyle.Setters.Add(new Setter(Control.ForegroundProperty, (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]));
+            tree.ItemContainerStyle = itemStyle;
 
-        private static void AddJsonChildren(Panel target, JsonNode node, int depth)
-        {
-            if (node is JsonObject jsonObject)
-            {
+            if (root is JsonObject jsonObject)
                 foreach (var property in jsonObject)
-                    target.Children.Add(CreateJsonBranch(property.Key, property.Value, depth));
-                return;
-            }
-
-            if (node is JsonArray jsonArray)
-            {
+                    tree.RootNodes.Add(CreateJsonTreeNode(property.Key, property.Value, true));
+            else if (root is JsonArray jsonArray)
                 for (var index = 0; index < jsonArray.Count; index++)
-                    target.Children.Add(CreateJsonBranch($"[{index}]", jsonArray[index], depth));
-                return;
-            }
+                    tree.RootNodes.Add(CreateJsonTreeNode($"[{index}]", jsonArray[index], true));
+            else
+                tree.RootNodes.Add(CreateJsonTreeNode("result", root, true));
 
-            target.Children.Add(CreateJsonBranch("result", node, depth));
+            return tree;
         }
 
-        private static FrameworkElement CreateJsonBranch(string label, JsonNode? value, int depth)
+        private static TreeViewNode CreateJsonTreeNode(string label, JsonNode? value, bool expand)
         {
+            var node = new TreeViewNode
+            {
+                Content = $"{label}: {FormatJsonValue(value)}",
+                IsExpanded = expand
+            };
+
             if (value is JsonObject jsonObject)
-            {
-                var children = new StackPanel { Spacing = 3 };
-                AddJsonChildren(children, jsonObject, depth + 1);
-                return CreateTreeExpander(label, $"Object · {jsonObject.Count} field(s)", children, depth);
-            }
+                foreach (var property in jsonObject)
+                    node.Children.Add(CreateJsonTreeNode(property.Key, property.Value, false));
+            else if (value is JsonArray jsonArray)
+                for (var index = 0; index < jsonArray.Count; index++)
+                    node.Children.Add(CreateJsonTreeNode($"[{index}]", jsonArray[index], false));
 
-            if (value is JsonArray jsonArray)
-            {
-                var children = new StackPanel { Spacing = 3 };
-                AddJsonChildren(children, jsonArray, depth + 1);
-                return CreateTreeExpander(label, $"List · {jsonArray.Count} item(s)", children, depth);
-            }
-
-            var text = value is null ? "null" : value.GetValueKind() == System.Text.Json.JsonValueKind.String
-                ? NormalizeText(value.GetValue<string>())
-                : value.ToJsonString();
-            var leaf = CreateTreeLabel(label, text);
-            leaf.Margin = new Thickness(depth * 18, 2, 0, 2);
-            return leaf;
+            return node;
         }
 
-        private static Expander CreateTreeExpander(string label, string description, FrameworkElement children, int depth)
-        {
-            return new Expander
-            {
-                Header = CreateTreeLabel(label, description),
-                Content = children,
-                IsExpanded = true,
-                Margin = new Thickness(depth * 18, 0, 0, 0),
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                HorizontalContentAlignment = HorizontalAlignment.Stretch
-            };
-        }
-
-        private static FrameworkElement CreateTreeLabel(string label, string value)
-        {
-            var panel = new Grid { ColumnSpacing = 8 };
-            panel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            panel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            panel.Children.Add(new TextBlock
-            {
-                Text = label,
-                FontFamily = new FontFamily("Cascadia Mono"),
-                FontSize = 10,
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Top
-            });
-            var valueText = new TextBlock
-            {
-                Text = value,
-                FontFamily = new FontFamily("Cascadia Mono"),
-                FontSize = 10,
-                IsTextSelectionEnabled = true,
-                TextWrapping = TextWrapping.Wrap
-            };
-            Grid.SetColumn(valueText, 1);
-            panel.Children.Add(valueText);
-            return panel;
-        }
+        private static string FormatJsonValue(JsonNode? value) => value is null
+            ? "null"
+            : value is JsonObject jsonObject
+                ? $"Object ({jsonObject.Count} fields)"
+                : value is JsonArray jsonArray
+                    ? $"Array ({jsonArray.Count} items)"
+                    : value.GetValueKind() == JsonValueKind.String
+                        ? NormalizeText(value.GetValue<string>())
+                        : value.ToJsonString();
 
         private static TextBlock CreateNormalizedTextBlock(string content) => new()
         {

@@ -45,7 +45,14 @@ namespace App.Models
         public string? PathContext { get; set; }
     }
 
-    internal sealed record ChatMessage(ChatItemKind Kind, string Title, string Content, IReadOnlyList<string>? AttachmentNames = null, GeneratedImage? Image = null);
+    internal sealed record ChatMessage(
+        ChatItemKind Kind,
+        string Title,
+        string Content,
+        IReadOnlyList<string>? AttachmentNames = null,
+        GeneratedImage? Image = null,
+        JsonObject? ToolArguments = null,
+        bool? ToolSucceeded = null);
 
     internal enum ToolRiskLevel { Safe, Risky }
     internal enum ToolApprovalPolicy { None, AgentConditional, Always, AlwaysWithUac, ManualScreenSelection }
