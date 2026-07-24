@@ -27,6 +27,11 @@
                             </Border>
                         </StackPanel>
                     </Button>
+                    <Button x:Name="ClearChatButton" Width="36" Height="36" Padding="0"
+                            Click="ClearChatButton_Click" ToolTipService.ToolTip="Clear chat history"
+                            AutomationProperties.Name="Clear chat history">
+                        <FontIcon Glyph="&#xEA99;" />
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>

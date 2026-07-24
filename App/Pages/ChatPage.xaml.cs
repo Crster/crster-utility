@@ -483,6 +483,25 @@ namespace App.Pages
             ToolTipService.SetToolTip(ContextButton, ContextPanel.Visibility == Visibility.Visible ? "Hide conversation context" : "Show conversation context");
         }
 
+        private async void ClearChatButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isBusy || _changingPersonality) return;
+
+            _changingPersonality = true;
+            try
+            {
+                await ResetSessionAsync(_personality);
+                await DeleteRemoteAttachmentsAsync(_messageAttachments);
+                _messageAttachments.Clear();
+                ComposerBox.Text = string.Empty;
+                ContextPanel.Visibility = Visibility.Collapsed;
+                ToolTipService.SetToolTip(ContextButton, "Show conversation context");
+                RenderSession();
+                StatusText.Text = string.Empty;
+            }
+            finally { _changingPersonality = false; }
+        }
+
         private async void AddContextFileButton_Click(object sender, RoutedEventArgs e)
         {
             if (_client is null || App.MainWindow is null || _operationCancellation is not null) return;
@@ -703,6 +722,12 @@ namespace App.Pages
             foreach (var attachment in attachments.Where(item => !string.IsNullOrWhiteSpace(item.RemoteName))) try { await _client.DeleteFileAsync(attachment.RemoteName!, CancellationToken.None); } catch { }
         }
 
+        private async Task ResetSessionAsync(ChatPersonality personality)
+        {
+            await DeleteRemoteAttachmentsAsync(_sessions[personality]);
+            _sessions[personality] = new ChatSession();
+        }
+
         private async void PersonalityBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (PersonalityBox.SelectedItem is not ChatPersonality personality || _changingPersonality) return;
@@ -713,10 +738,10 @@ namespace App.Pages
                 {
                     _operationCancellation?.Cancel();
                     var previousPersonality = _personality;
-                    await DeleteRemoteAttachmentsAsync(_sessions[previousPersonality]);
-                    await DeleteRemoteAttachmentsAsync(_sessions[personality]);
-                    _sessions[previousPersonality] = new ChatSession();
-                    _sessions[personality] = new ChatSession();
+                    await ResetSessionAsync(previousPersonality);
+                    await ResetSessionAsync(personality);
+                    await DeleteRemoteAttachmentsAsync(_messageAttachments);
+                    _messageAttachments.Clear();
                     _personality = personality;
                     ComposerBox.Text = string.Empty;
                     ContextPanel.Visibility = Visibility.Collapsed;
@@ -1252,6 +1277,7 @@ namespace App.Pages
             SendButton.Background = (Brush)Application.Current.Resources[canStop ? "SystemFillColorCriticalBrush" : "AccentFillColorDefaultBrush"];
             AddContextFileButton.IsEnabled = !busy;
             PersonalityBox.IsEnabled = !busy;
+            ClearChatButton.IsEnabled = !busy;
             CompactButton.IsEnabled = !busy && Session.Messages.Count > 0;
             UpdateSendAvailability();
             StatusText.Text = status;
