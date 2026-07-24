@@ -10,6 +10,7 @@ namespace App
         public static NotifyIconService? SystemTray { get; private set; }
         internal static SecureSettingsService Settings { get; } = new();
         private KeyboardService? _keyboard;
+        private bool _redirectedLaunchPending;
 
         public App()
         {
@@ -36,6 +37,20 @@ namespace App
             _keyboard.CaffeinePressed += (_, _) => (App.MainWindow as Windows.MainWindow)?.ToggleCaffeineFromHotkey();
             _keyboard.Start();
             Settings.Changed += (_, settings) => _keyboard.Configure(settings.SnapshotShortcut, settings.CaffeineShortcut);
+
+            if (_redirectedLaunchPending)
+            {
+                _redirectedLaunchPending = false;
+                (App.MainWindow as Windows.MainWindow)?.ShowChatFromActivation();
+            }
+        }
+
+        internal void ActivateFromRedirectedLaunch()
+        {
+            if (App.MainWindow is Windows.MainWindow mainWindow)
+                mainWindow.ShowChatFromActivation();
+            else
+                _redirectedLaunchPending = true;
         }
 
         private void SystemTray_TrayLeftClick()

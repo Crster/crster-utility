@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using App.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Windows.Devices.Enumeration;
+using NAudio.CoreAudioApi;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 
@@ -54,7 +54,7 @@ namespace App.Pages
             _loading = false;
         }
 
-        private async Task LoadMicrophonesAsync()
+        private Task LoadMicrophonesAsync()
         {
             var choices = new List<MicrophoneChoice>
             {
@@ -63,15 +63,22 @@ namespace App.Pages
             };
             try
             {
-                var devices = await DeviceInformation.FindAllAsync(DeviceClass.AudioCapture);
+                using var enumerator = new MMDeviceEnumerator();
+                var devices = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
                 choices.AddRange(devices
-                    .Where(device => device.IsEnabled)
-                    .OrderBy(device => device.Name, StringComparer.CurrentCultureIgnoreCase)
-                    .Select(device => new MicrophoneChoice(device.Id, device.Name)));
+                    .Select(device =>
+                    {
+                        using (device)
+                        {
+                            return new MicrophoneChoice(device.ID, device.FriendlyName);
+                        }
+                    })
+                    .OrderBy(device => device.Name, StringComparer.CurrentCultureIgnoreCase));
             }
             catch { StatusText.Text = "Microphones could not be enumerated."; }
             MicrophoneBox.ItemsSource = choices;
             MicrophoneBox.SelectedItem = choices.FirstOrDefault(choice => choice.Id == _settings.RecordingMicrophoneDeviceId) ?? choices[0];
+            return Task.CompletedTask;
         }
 
         private async void StartupToggle_Toggled(object sender, RoutedEventArgs e)

@@ -15,7 +15,9 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 using Windows.Storage.FileProperties;
+using Windows.Storage.Pickers;
 using Windows.System;
+using WinRT.Interop;
 
 namespace App.Controls
 {
@@ -399,11 +401,89 @@ namespace App.Controls
             ShowPreview();
         }
 
-        private void Editor_KeyDown(object sender, KeyRoutedEventArgs e)
+        private async void Editor_KeyDown(object sender, KeyRoutedEventArgs e)
         {
-            if (e.Key != VirtualKey.Escape) return;
-            e.Handled = true;
-            if (!RemoveIfEmpty()) ShowPreview();
+            if (sender is not TextBox editor) return;
+
+            if (e.Key == VirtualKey.F1)
+            {
+                e.Handled = true;
+                var usage = await NotebookShortcutService.GetSystemUsageTextAsync();
+                InsertShortcutText(editor, usage);
+                return;
+            }
+
+            if (e.Key == VirtualKey.F2)
+            {
+                e.Handled = true;
+                await InsertSelectedFilePathAsync(editor);
+                return;
+            }
+
+            if (e.Key == VirtualKey.F5)
+            {
+                e.Handled = true;
+                InsertShortcutText(editor, DateTime.Now.ToString("g"));
+                return;
+            }
+
+            if (e.Key == VirtualKey.F6)
+            {
+                e.Handled = true;
+                InsertShortcutText(editor, NotebookShortcutService.CreateReadablePassword());
+                return;
+            }
+
+            if (e.Key == VirtualKey.F7)
+            {
+                e.Handled = true;
+                InsertShortcutText(editor, NotebookShortcutService.CreateSecretKey());
+                return;
+            }
+
+            if (e.Key == VirtualKey.F8)
+            {
+                e.Handled = true;
+                InsertShortcutText(editor, Guid.NewGuid().ToString());
+                return;
+            }
+
+            if (e.Key == VirtualKey.Escape)
+            {
+                e.Handled = true;
+                if (!RemoveIfEmpty()) ShowPreview();
+            }
+        }
+
+        private async Task InsertSelectedFilePathAsync(TextBox editor)
+        {
+            if (App.MainWindow is null) return;
+            var selectionStart = editor.SelectionStart;
+            var selectionLength = editor.SelectionLength;
+            var picker = new FileOpenPicker();
+            picker.FileTypeFilter.Add("*");
+            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow));
+            var file = await picker.PickSingleFileAsync();
+            if (file is null) return;
+
+            if (!ReferenceEquals(editor, _editor))
+            {
+                ShowEditor();
+                if (_editor is null) return;
+                editor = _editor;
+                editor.SelectionStart = Math.Min(selectionStart, editor.Text.Length);
+                editor.SelectionLength = Math.Min(selectionLength, editor.Text.Length - editor.SelectionStart);
+            }
+
+            InsertShortcutText(editor, file.Path);
+        }
+
+        private static void InsertShortcutText(TextBox editor, string text)
+        {
+            editor.SelectedText = text;
+            editor.SelectionStart += text.Length;
+            editor.SelectionLength = 0;
+            editor.Focus(FocusState.Keyboard);
         }
 
         private bool RemoveIfEmpty()

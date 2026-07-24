@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using App.Models;
 using App.Services;
+using WinRT.Interop;
 using Windows.Graphics;
 
 namespace App.Windows
@@ -64,6 +65,17 @@ namespace App.Windows
             IsHiddenToTray = false;
             AppWindow.Show();
             Activate();
+        }
+
+        internal void ShowChatFromActivation()
+        {
+            IsHiddenToTray = false;
+            AppWindow.Show();
+            SidebarNavigation.SelectedItem = ChatNavItem;
+            if (NavigationPresenter.CurrentSourcePageType != typeof(Pages.ChatPage))
+                NavigationPresenter.Navigate(typeof(Pages.ChatPage));
+
+            NativeInputService.ActivateWindow(WindowNative.GetWindowHandle(this));
         }
 
         internal void ExitFromTray()

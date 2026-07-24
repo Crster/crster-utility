@@ -602,9 +602,7 @@ namespace App.Services
             try
             {
                 using var enumerator = new MMDeviceEnumerator();
-                var microphone = string.Equals(microphoneDeviceId, DefaultMicrophoneDeviceId, StringComparison.Ordinal)
-                    ? enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia)
-                    : enumerator.GetDevice(microphoneDeviceId);
+                var microphone = ResolveMicrophoneDevice(enumerator, microphoneDeviceId);
                 _micCapture = new WasapiCapture(microphone);
                 _micWaveFormat = _micCapture.WaveFormat;
                 _micWriter = new WaveFileWriter(micPath, _micWaveFormat);
@@ -655,8 +653,10 @@ namespace App.Services
                                     var boostedBuffer = new byte[e.BytesRecorded];
                                     System.Buffer.BlockCopy(e.Buffer, 0, boostedBuffer, 0, e.BytesRecorded);
 
-                                    // If 32-bit float format, amplify the samples
-                                    if (_micWaveFormat != null && _micWaveFormat.BitsPerSample == 32)
+                                    // WasapiCapture can expose either 32-bit IEEE float or 32-bit PCM.
+                                    // Only reinterpret IEEE float samples as floats; treating PCM bytes
+                                    // as floats produces invalid audio and can result in silence.
+                                    if (_micWaveFormat?.Encoding == WaveFormatEncoding.IeeeFloat && _micWaveFormat.BitsPerSample == 32)
                                     {
                                         for (int i = 0; i < e.BytesRecorded; i += 4)
                                         {
@@ -715,6 +715,48 @@ namespace App.Services
                 _micCapture = null;
             }
         }
+
+        private static MMDevice ResolveMicrophoneDevice(MMDeviceEnumerator enumerator, string microphoneDeviceId)
+        {
+            if (string.Equals(microphoneDeviceId, DefaultMicrophoneDeviceId, StringComparison.Ordinal))
+            {
+                return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia);
+            }
+
+            try
+            {
+                return enumerator.GetDevice(microphoneDeviceId);
+            }
+            catch (Exception lookupException)
+            {
+                // Older builds stored Windows.Devices.Enumeration IDs, which wrap the
+                // Core Audio endpoint ID. Match that legacy form before giving up.
+                string? matchingId = null;
+                foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+                {
+                    using (device)
+                    {
+                        if (EndpointIdsMatch(microphoneDeviceId, device.ID))
+                        {
+                            matchingId = device.ID;
+                            break;
+                        }
+                    }
+                }
+
+                if (matchingId != null)
+                {
+                    return enumerator.GetDevice(matchingId);
+                }
+
+                throw new InvalidOperationException("The selected microphone is no longer available.", lookupException);
+            }
+        }
+
+        private static bool EndpointIdsMatch(string requestedId, string endpointId) =>
+            string.Equals(requestedId, endpointId, StringComparison.OrdinalIgnoreCase) ||
+            requestedId.Contains(endpointId, StringComparison.OrdinalIgnoreCase) ||
+            endpointId.Contains(requestedId, StringComparison.OrdinalIgnoreCase);
 
         private async Task StopAudioRecordingAsync()
         {

@@ -15,7 +15,7 @@
   <Identity
     Name="76371500-163b-4c74-974d-f79d90df175c"
     Publisher="CN=crster"
-    Version="1.0.5.0" />
+    Version="1.0.7.0" />
 
   <mp:PhoneIdentity PhoneProductId="76371500-163b-4c74-974d-f79d90df175c" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
