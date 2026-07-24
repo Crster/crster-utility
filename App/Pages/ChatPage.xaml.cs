@@ -40,6 +40,7 @@ namespace App.Pages
         private readonly ChatToolService _tools = new();
         private readonly ChatLogService _chatLog = new();
         private readonly Dictionary<ChatPersonality, ChatSession> _sessions = Enum.GetValues<ChatPersonality>().ToDictionary(item => item, _ => new ChatSession());
+        private readonly List<ChatAttachment> _messageAttachments = [];
         private AppSettings _settings = new();
         private GeminiClient? _client;
         private SecretaryMemoryService? _secretaryMemory;
@@ -88,8 +89,9 @@ namespace App.Pages
             if (_operationCancellation is not null) return;
             if (_client is null) throw new InvalidOperationException("Chat is not connected. Add a Gemini API key and reopen the Chat page.");
             var prompt = ComposerBox.Text.Trim();
-            if (prompt.Length == 0) return;
-            var attachments = Session.Attachments.ToList();
+            var messageAttachments = _messageAttachments.ToList();
+            if (prompt.Length == 0 && messageAttachments.Count == 0) return;
+            var attachments = Session.Attachments.Concat(messageAttachments).ToList();
             await _chatLog.WriteAsync("send.started",
                 ("personality", _personality),
                 ("model", Model()),
@@ -97,10 +99,13 @@ namespace App.Pages
                 ("attachmentCount", attachments.Count),
                 ("historyStepCount", Session.History.Count));
             ComposerBox.Text = string.Empty;
+            _messageAttachments.Clear();
+            RefreshMessageAttachments();
             DiscoverPathContext(prompt, attachments);
             AddMessage(new ChatMessage(ChatItemKind.User, "You", prompt, attachments.Select(item => item.DisplayName).ToList()));
             var userStep = _personality == ChatPersonality.Artist ? CreateArtistUserStep(prompt, attachments) : GeminiClient.CreateUserStep(prompt, attachments);
-            await RunInteractionAsync(userStep, prompt);
+            try { await RunInteractionAsync(userStep, prompt); }
+            finally { await DeleteRemoteAttachmentsAsync(messageAttachments); }
         }
 
         private JsonObject CreateArtistUserStep(string prompt, IReadOnlyList<ChatAttachment> attachments)
@@ -337,6 +342,8 @@ namespace App.Pages
 
             Work only on Windows support, troubleshooting, maintenance, and PC automation. You can inspect and operate across the PC when the available tools support the task. Diagnose before changing state, prefer dedicated tools over PowerShell, and use non-elevated PowerShell unless administration is necessary. If a request is unrelated, decline briefly and recommend Smart for general questions, Artist for visual creation, Planner for product or engineering plans, or Study for researched articles. For mixed requests, complete the Windows-related portion and redirect the rest. Never claim access or capabilities beyond the tools actually available.
 
+            Be conservative and preserve the user's system, data, and control. Start by providing a diagnosis, a plan, or a textual solution. Do not call tools that inspect, change, or automate the PC in response to an initial request for help unless the user explicitly asks you to investigate or execute. After presenting a proposed automated solution, wait for a later user message that clearly initiates it, such as "run it", "proceed", or an equivalent explicit instruction. A request for advice, a diagnosis, a plan, an explanation, or confirmation is not authorization to automate. Never treat the user's initial problem statement as permission to begin automation.
+
             For execute_command_shell, write_file, delete_file, and kill_process, accurately set risk_level to safe or risky. Never mark an operation safe merely to avoid approval. Destructive shell commands include deletion, overwrite, network resets, clearing logs, changing services, permissions, synchronization, installation, removal, or other persistent system changes. Writes to sensitive system or application files and terminating important processes are risky. For risky operations, give a concise approval_reason and destructive_effect.
 
             execute_command_shell_admin and delete_directory always need a specific approval_reason and destructive_effect. Directory deletion is permanent. Request screen_capture only when visual information is materially useful, state the purpose, and tell the user what area to select. Environment-variable values may contain credentials; do not repeat secrets in prose unless directly necessary.
@@ -522,6 +529,13 @@ namespace App.Pages
 
         private async Task UploadContextFileAsync(StorageFile file, string localPath, string displayName)
         {
+            var attachment = await UploadFileAsync(file, localPath, displayName);
+            Session.Attachments.Add(attachment);
+            DiscoverPathContext(string.Empty, [attachment]);
+        }
+
+        private async Task<ChatAttachment> UploadFileAsync(StorageFile file, string localPath, string displayName)
+        {
             StorageFile? convertedImage = null;
             StorageFile? metadataFile = null;
             var uploadPath = file.Path;
@@ -541,9 +555,7 @@ namespace App.Pages
                 }
 
                 var uploadedAttachment = await _client!.UploadFileAsync(uploadPath, CancellationToken.None);
-                var attachment = uploadedAttachment with { LocalPath = localPath, DisplayName = displayName };
-                Session.Attachments.Add(attachment);
-                DiscoverPathContext(string.Empty, [attachment]);
+                return uploadedAttachment with { LocalPath = localPath, DisplayName = displayName };
             }
             finally
             {
@@ -556,6 +568,10 @@ namespace App.Pages
             AllowedContextAttachmentExtensions.Contains(file.FileType, StringComparer.OrdinalIgnoreCase)
             || file.Name.Equals(".env", StringComparison.OrdinalIgnoreCase)
             || file.Name.StartsWith(".env.", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsMessageAttachmentFile(StorageFile file) =>
+            file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+            || file.FileType.Equals(".txt", StringComparison.OrdinalIgnoreCase);
 
         private static async Task<StorageFile> CreateFileMetadataAttachmentAsync(StorageFile source)
         {
@@ -668,9 +684,12 @@ namespace App.Pages
         }
 
         private async Task DeleteRemoteAttachmentsAsync(ChatSession session)
+            => await DeleteRemoteAttachmentsAsync(session.Attachments);
+
+        private async Task DeleteRemoteAttachmentsAsync(IEnumerable<ChatAttachment> attachments)
         {
             if (_client is null) return;
-            foreach (var attachment in session.Attachments.Where(item => !string.IsNullOrWhiteSpace(item.RemoteName))) try { await _client.DeleteFileAsync(attachment.RemoteName!, CancellationToken.None); } catch { }
+            foreach (var attachment in attachments.Where(item => !string.IsNullOrWhiteSpace(item.RemoteName))) try { await _client.DeleteFileAsync(attachment.RemoteName!, CancellationToken.None); } catch { }
         }
 
         private async void PersonalityBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -711,7 +730,7 @@ namespace App.Pages
                 EmptyTitle.Text = $"Ask {_personality}";
                 EmptyDescription.Text = _personality switch
                 {
-                    ChatPersonality.Technician => "Diagnose Windows, inspect files, or automate a PC support task.",
+                    ChatPersonality.Technician => "Get a diagnosis or plan first, then choose whether to run a PC support task.",
                     ChatPersonality.Secretary => "Write a reply, manage your schedule, review a public link, or work on a job application.",
                     _ => "Ask a question, or add reference material from Context."
                 };
@@ -1066,7 +1085,108 @@ namespace App.Pages
             await SendFromComposerAsync();
         }
         private void ComposerBox_TextChanged(object sender, TextChangedEventArgs e) => UpdateSendAvailability();
-        private void UpdateSendAvailability() => SendButton.IsEnabled = _operationCancellation is not null || (!_isBusy && !string.IsNullOrWhiteSpace(ComposerBox.Text));
+        private void UpdateSendAvailability() => SendButton.IsEnabled = _operationCancellation is not null || (!_isBusy && (!string.IsNullOrWhiteSpace(ComposerBox.Text) || _messageAttachments.Count > 0));
+        private async void ComposerBox_Paste(object sender, TextControlPasteEventArgs e)
+        {
+            if (_client is null || _isBusy || _operationCancellation is not null) return;
+            var content = Clipboard.GetContent();
+            var files = content.Contains(StandardDataFormats.StorageItems)
+                ? (await content.GetStorageItemsAsync()).OfType<StorageFile>().Where(IsMessageAttachmentFile).ToList()
+                : [];
+            if (files.Count > 0)
+            {
+                e.Handled = true;
+                await AddMessageAttachmentsAsync(files);
+                return;
+            }
+            if (!content.Contains(StandardDataFormats.Bitmap)) return;
+
+            e.Handled = true;
+            StorageFile? clipboardImage = null;
+            try
+            {
+                var bitmapReference = await content.GetBitmapAsync();
+                clipboardImage = await ApplicationData.Current.TemporaryFolder.CreateFileAsync($"{Guid.NewGuid():N}.png", CreationCollisionOption.FailIfExists);
+                using var input = await bitmapReference.OpenReadAsync();
+                using var output = await clipboardImage.OpenAsync(FileAccessMode.ReadWrite);
+                await RandomAccessStream.CopyAsync(input, output);
+                await output.FlushAsync();
+                await AddMessageAttachmentsAsync([clipboardImage], $"clipboard-{DateTime.Now:yyyyMMdd-HHmmss}.png");
+            }
+            catch (Exception exception) { AddMessage(new ChatMessage(ChatItemKind.Error, "Clipboard attachment error", exception.Message)); }
+            finally { if (clipboardImage is not null) await clipboardImage.DeleteAsync(StorageDeleteOption.PermanentDelete); }
+        }
+
+        private async Task AddMessageAttachmentsAsync(IEnumerable<StorageFile> files, string? clipboardImageName = null)
+        {
+            SetBusy(true, "Attaching clipboard item...");
+            try
+            {
+                foreach (var file in files)
+                    _messageAttachments.Add(await UploadFileAsync(file, file.Path, clipboardImageName ?? GetClipboardAttachmentDisplayName(file)));
+                RefreshMessageAttachments();
+            }
+            catch (Exception exception) { AddMessage(new ChatMessage(ChatItemKind.Error, "Clipboard attachment error", exception.Message)); }
+            finally { SetBusy(false); }
+        }
+
+        private void RefreshMessageAttachments()
+        {
+            MessageAttachmentHost.Items.Clear();
+            foreach (var attachment in _messageAttachments)
+            {
+                var isImage = attachment.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+                var removeButton = new Button
+                {
+                    Tag = attachment,
+                    Width = 24,
+                    Height = 24,
+                    Padding = new Thickness(0),
+                    Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                    BorderThickness = new Thickness(0),
+                    Content = new FontIcon { Glyph = "\uE711", FontSize = 9 }
+                };
+                removeButton.Click += RemoveMessageAttachmentButton_Click;
+                ToolTipService.SetToolTip(removeButton, $"Remove {attachment.DisplayName}");
+                var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
+                content.Children.Add(new Border
+                {
+                    Width = 28,
+                    Height = 28,
+                    CornerRadius = new CornerRadius(6),
+                    Background = (Brush)Application.Current.Resources[isImage ? "AccentFillColorSecondaryBrush" : "ControlFillColorTertiaryBrush"],
+                    Child = new FontIcon { Glyph = isImage ? "\uEB9F" : "\uE7C3", FontSize = 14, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+                });
+                content.Children.Add(removeButton);
+                var chip = new Border
+                {
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    Padding = new Thickness(4),
+                    CornerRadius = new CornerRadius(8),
+                    Background = (Brush)Application.Current.Resources["ControlFillColorSecondaryBrush"],
+                    BorderBrush = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"],
+                    BorderThickness = new Thickness(1),
+                    Child = content
+                };
+                ToolTipService.SetToolTip(chip, attachment.DisplayName);
+                MessageAttachmentHost.Items.Add(chip);
+            }
+            UpdateSendAvailability();
+        }
+
+        private static string GetClipboardAttachmentDisplayName(StorageFile file)
+        {
+            if (!Guid.TryParse(Path.GetFileNameWithoutExtension(file.Name), out _)) return file.Name;
+            return file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? "Pasted image" : "Pasted text file.txt";
+        }
+
+        private async void RemoveMessageAttachmentButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button { Tag: ChatAttachment attachment } || _isBusy) return;
+            _messageAttachments.Remove(attachment);
+            await DeleteRemoteAttachmentsAsync([attachment]);
+            RefreshMessageAttachments();
+        }
         private async void ComposerBox_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
         {
             if (e.Key != global::Windows.System.VirtualKey.Enter) return;

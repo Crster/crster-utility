@@ -101,12 +101,23 @@
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="14" Padding="5">
             <Grid ColumnSpacing="6">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <TextBox x:Name="ComposerBox" MinHeight="38" MaxHeight="144" Padding="10,7,6,7"
-                         AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto"
-                         FontSize="13" PlaceholderText="Message..."
-                         BorderThickness="0" Background="Transparent" PreviewKeyDown="ComposerBox_PreviewKeyDown"
-                         TextChanged="ComposerBox_TextChanged">
-                    <TextBox.Resources>
+                <StackPanel Spacing="4">
+                    <ScrollViewer Margin="8,4,8,0" HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Enabled"
+                                  VerticalScrollBarVisibility="Disabled" VerticalScrollMode="Disabled">
+                        <ItemsControl x:Name="MessageAttachmentHost">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="8"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+                    </ScrollViewer>
+                    <TextBox x:Name="ComposerBox" MinHeight="38" MaxHeight="144" Padding="10,7,6,7"
+                             AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             FontSize="13" PlaceholderText="Message..."
+                             BorderThickness="0" Background="Transparent" PreviewKeyDown="ComposerBox_PreviewKeyDown"
+                             Paste="ComposerBox_Paste" TextChanged="ComposerBox_TextChanged">
+                        <TextBox.Resources>
                         <SolidColorBrush x:Key="TextControlBackground" Color="Transparent"/>
                         <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent"/>
                         <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent"/>
@@ -119,8 +130,9 @@
                         <SolidColorBrush x:Key="FocusVisualSecondaryBrush" Color="Transparent"/>
                         <Thickness x:Key="TextControlBorderThemeThickness">0</Thickness>
                         <Thickness x:Key="TextControlBorderThemeThicknessFocused">0</Thickness>
-                    </TextBox.Resources>
-                </TextBox>
+                        </TextBox.Resources>
+                    </TextBox>
+                </StackPanel>
                 <TextBlock x:Name="StatusText" Visibility="Collapsed"/>
                 <Button x:Name="SendButton" Grid.Column="1" Width="34" Height="34" Padding="0"
                         CornerRadius="17" VerticalAlignment="Center" Style="{StaticResource AccentButtonStyle}"
