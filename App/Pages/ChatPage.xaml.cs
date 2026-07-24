@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
@@ -29,6 +30,7 @@ namespace App.Pages
         private static readonly Regex LocalPathPattern = new("(?<!\\w)(?:[A-Za-z]:\\\\[^\\r\\n\\\"'<>|*?]+|\\\\\\\\[^\\s\\\"'<>|*?]+)", RegexOptions.Compiled);
         private readonly SecureSettingsService _settingsService = new();
         private readonly ChatToolService _tools = new();
+        private readonly ChatLogService _chatLog = new();
         private readonly Dictionary<ChatPersonality, ChatSession> _sessions = Enum.GetValues<ChatPersonality>().ToDictionary(item => item, _ => new ChatSession());
         private AppSettings _settings = new();
         private GeminiClient? _client;
@@ -76,6 +78,12 @@ namespace App.Pages
             var prompt = ComposerBox.Text.Trim();
             if (prompt.Length == 0) return;
             var attachments = Session.Attachments.ToList();
+            await _chatLog.WriteAsync("send.started",
+                ("personality", _personality),
+                ("model", Model()),
+                ("promptLength", prompt.Length),
+                ("attachmentCount", attachments.Count),
+                ("historyStepCount", Session.History.Count));
             ComposerBox.Text = string.Empty;
             DiscoverPathContext(prompt, attachments);
             AddMessage(new ChatMessage(ChatItemKind.User, "You", prompt));
@@ -100,14 +108,36 @@ namespace App.Pages
                 for (var round = 0; round < MaximumToolRounds; round++)
                 {
                     var tools = GetTools();
+                    var requestTimer = Stopwatch.StartNew();
+                    await _chatLog.WriteAsync("request.started",
+                        ("personality", _personality),
+                        ("model", Model()),
+                        ("round", round + 1),
+                        ("inputStepCount", nextSteps.Count),
+                        ("historyStepCount", Session.History.Count),
+                        ("toolCount", tools?.Count ?? 0));
                     GeminiTurnResult result = _personality == ChatPersonality.Artist
                         ? await _client!.CreateArtistInteractionAsync(Session.History, nextSteps[0], EffectiveSystemInstruction(), ThinkingLevel(), _operationCancellation.Token)
                         : await _client!.CreateSimpleInteractionAsync(Model(), Session.History, nextSteps, EffectiveSystemInstruction(), tools, ThinkingLevel(), _operationCancellation.Token);
+                    requestTimer.Stop();
+                    await _chatLog.WriteAsync("request.completed",
+                        ("personality", _personality),
+                        ("model", Model()),
+                        ("round", round + 1),
+                        ("elapsedMs", requestTimer.ElapsedMilliseconds),
+                        ("responseStepCount", result.Steps.Count),
+                        ("textLength", result.Text.Length),
+                        ("functionCallCount", result.FunctionCalls.Count),
+                        ("sourceCount", result.Sources.Count),
+                        ("hasImage", result.Image is not null),
+                        ("interactionId", result.InteractionId));
                     foreach (var nextStep in nextSteps) Session.History.Add(CreateHistoryStep(nextStep));
                     foreach (var step in result.Steps) Session.History.Add(step);
                     if (!string.IsNullOrWhiteSpace(result.Text)) AddMessage(new ChatMessage(ChatItemKind.Assistant, _personality.ToString(), result.Text));
                     if (result.Image is not null) { Session.GeneratedImages.Add(result.Image); AddMessage(new ChatMessage(ChatItemKind.Assistant, "Artist", "", Image: result.Image)); }
                     if (result.Sources.Count > 0) AddMessage(new ChatMessage(ChatItemKind.Assistant, "Sources", string.Join("\n", result.Sources.DistinctBy(source => source.Uri).Select(source => $"- [{source.Title}]({source.Uri})"))));
+                    if (string.IsNullOrWhiteSpace(result.Text) && result.Image is null && result.FunctionCalls.Count == 0)
+                        throw new InvalidOperationException("Gemini completed the request without returning a response.");
                     if (_personality != ChatPersonality.Technician || result.FunctionCalls.Count == 0) return;
                     var responses = new List<JsonObject>();
                     foreach (var call in result.FunctionCalls)
@@ -126,9 +156,27 @@ namespace App.Pages
                 }
                 AddMessage(new ChatMessage(ChatItemKind.Error, "Tool limit reached", "Technician exceeded the maximum number of tool rounds."));
             }
-            catch (OperationCanceledException) { StatusText.Text = "Stopped"; }
-            catch (Exception exception) { AddMessage(new ChatMessage(ChatItemKind.Error, "Gemini error", exception.Message)); }
-            finally { _operationCancellation.Dispose(); _operationCancellation = null; SetBusy(false); }
+            catch (OperationCanceledException)
+            {
+                await _chatLog.WriteAsync("send.cancelled", ("personality", _personality), ("model", Model()));
+                StatusText.Text = "Stopped";
+            }
+            catch (Exception exception)
+            {
+                await _chatLog.WriteAsync("send.failed",
+                    ("personality", _personality),
+                    ("model", Model()),
+                    ("exceptionType", exception.GetType().Name),
+                    ("message", exception.Message));
+                AddMessage(new ChatMessage(ChatItemKind.Error, "Gemini error", exception.Message));
+            }
+            finally
+            {
+                _operationCancellation.Dispose();
+                _operationCancellation = null;
+                SetBusy(false);
+                await _chatLog.WriteAsync("send.finished", ("personality", _personality), ("model", Model()));
+            }
         }
 
         private static JsonObject CreateHistoryStep(JsonObject step)
@@ -395,11 +443,10 @@ namespace App.Pages
         {
             EmptyState.Visibility = Visibility.Collapsed; if (EmptyState.Parent is Panel parent) parent.Children.Remove(EmptyState);
             var body = new StackPanel { Spacing = message.Kind == ChatItemKind.Tool ? 4 : 7 };
-            body.Children.Add(new TextBlock
+            var title = new TextBlock
             {
                 Text = message.Kind == ChatItemKind.Tool ? $"Tool · {message.Title}" : message.Title,
                 FontSize = message.Kind == ChatItemKind.Tool ? 10 : 14,
-                FontFamily = message.Kind == ChatItemKind.Tool ? new FontFamily("Cascadia Mono") : null,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 Foreground = (Brush)Application.Current.Resources[message.Kind switch
                 {
@@ -407,7 +454,9 @@ namespace App.Pages
                     ChatItemKind.Tool => "TextFillColorSecondaryBrush",
                     _ => "TextFillColorPrimaryBrush"
                 }]
-            });
+            };
+            if (message.Kind == ChatItemKind.Tool) title.FontFamily = new FontFamily("Cascadia Mono");
+            body.Children.Add(title);
             if (message.AttachmentNames is not null) foreach (var name in message.AttachmentNames) body.Children.Add(new TextBlock { Text = $"📎 {name}", FontSize = 12, Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] });
             if (!string.IsNullOrWhiteSpace(message.Content))
                 body.Children.Add(message.Kind switch
@@ -434,7 +483,16 @@ namespace App.Pages
             };
             if (message.Kind == ChatItemKind.User) messageContainer.MaxWidth = 720;
             ConversationHost.Children.Add(messageContainer);
-            _ = DispatcherQueue.TryEnqueue(() => ConversationScroller.ChangeView(null, ConversationScroller.ScrollableHeight, null));
+            ScrollToLatestMessage();
+        }
+
+        private void ScrollToLatestMessage()
+        {
+            _ = DispatcherQueue.TryEnqueue(() =>
+            {
+                ConversationScroller.UpdateLayout();
+                ConversationScroller.ChangeView(null, ConversationScroller.ScrollableHeight, null, true);
+            });
         }
 
         private static FrameworkElement CreateToolResultView(string content)
@@ -735,6 +793,10 @@ namespace App.Pages
             }
             catch (Exception exception)
             {
+                await _chatLog.WriteAsync("send.handler_failed",
+                    ("personality", _personality),
+                    ("exceptionType", exception.GetType().Name),
+                    ("message", exception.Message));
                 try
                 {
                     AddMessage(new ChatMessage(ChatItemKind.Error, "Send error", exception.Message));
@@ -759,9 +821,12 @@ namespace App.Pages
         {
             _isBusy = busy;
             BusyRing.IsActive = busy;
-            SendActionIcon.Glyph = busy && _operationCancellation is not null ? "\uE71A" : "\uE724";
-            ToolTipService.SetToolTip(SendButton, busy && _operationCancellation is not null ? "Stop response" : "Send message");
-            SendButton.Background = (Brush)Application.Current.Resources[busy && _operationCancellation is not null ? "SystemFillColorCriticalBrush" : "AccentFillColorDefaultBrush"];
+            var canStop = busy && _operationCancellation is not null;
+            SendActionIcon.Glyph = canStop ? "\uEE95" : "\uE724";
+            if (canStop) SendActionIcon.Foreground = new SolidColorBrush(Microsoft.UI.Colors.White);
+            else SendActionIcon.ClearValue(IconElement.ForegroundProperty);
+            ToolTipService.SetToolTip(SendButton, canStop ? "Stop response" : "Send message");
+            SendButton.Background = (Brush)Application.Current.Resources[canStop ? "SystemFillColorCriticalBrush" : "AccentFillColorDefaultBrush"];
             AddContextFileButton.IsEnabled = !busy;
             PersonalityBox.IsEnabled = !busy;
             CompactButton.IsEnabled = !busy && Session.Messages.Count > 0;
