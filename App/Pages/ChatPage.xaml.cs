@@ -26,7 +26,7 @@ namespace App.Pages
 {
     public sealed partial class ChatPage : Page
     {
-        private const int MaximumToolRounds = 8;
+        private const int MaximumToolRounds = 15;
         private static readonly Regex LocalPathPattern = new("(?<!\\w)(?:[A-Za-z]:\\\\[^\\r\\n\\\"'<>|*?]+|\\\\\\\\[^\\s\\\"'<>|*?]+)", RegexOptions.Compiled);
         private readonly SecureSettingsService _settingsService = new();
         private readonly ChatToolService _tools = new();
