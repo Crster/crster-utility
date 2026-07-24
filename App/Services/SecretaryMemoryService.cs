@@ -121,6 +121,68 @@ namespace App.Services
             return Truncate(builder.ToString().Trim(), MaximumContextCharacters);
         }
 
+        public async Task<string> BuildPersonalInfoContextAsync(string topic, CancellationToken token)
+        {
+            await EnsureInitializedAsync(token);
+            float[]? embedding = null;
+            try { embedding = await _client.EmbedRetrievalQueryAsync(topic, token); }
+            catch when (!token.IsCancellationRequested) { }
+
+            List<SecretaryMemory> memories;
+            await _databaseGate.WaitAsync(token);
+            try
+            {
+                await using var connection = await OpenConnectionAsync(token);
+                memories = await ReadMemoriesAsync(connection, null, 500, token);
+            }
+            finally { _databaseGate.Release(); }
+
+            var relevant = memories
+                .Select(item => (Item: item, Score: Score(topic, embedding, $"{item.SubjectKey} {item.Content}", item.Embedding)))
+                .OrderByDescending(item => item.Score)
+                .ThenByDescending(item => item.Item.UpdatedUtc)
+                .Take(12)
+                .Select(item => $"- {item.Item.SubjectKey} (written {item.Item.UpdatedUtc:O}): {Truncate(item.Item.Content, 1_500)}");
+            return string.Join("\n", relevant);
+        }
+
+        public async Task<ToolResult> ListPersonalInfoAsync(string topic, CancellationToken token)
+        {
+            await EnsureInitializedAsync(token);
+            float[]? embedding = null;
+            try { embedding = await _client.EmbedRetrievalQueryAsync(topic, token); }
+            catch when (!token.IsCancellationRequested) { }
+
+            List<SecretaryMemory> memories;
+            await _databaseGate.WaitAsync(token);
+            try
+            {
+                await using var connection = await OpenConnectionAsync(token);
+                memories = await ReadMemoriesAsync(connection, null, 500, token);
+            }
+            finally { _databaseGate.Release(); }
+
+            var items = new JsonArray();
+            foreach (var match in memories
+                .Select(item => (Item: item, Score: Score(topic, embedding, $"{item.SubjectKey} {item.Content}", item.Embedding)))
+                .OrderByDescending(item => item.Score)
+                .ThenByDescending(item => item.Item.UpdatedUtc)
+                .Take(20))
+            {
+                items.Add(new JsonObject
+                {
+                    ["topic"] = match.Item.SubjectKey,
+                    ["knowledge"] = match.Item.Content,
+                    ["written_utc"] = match.Item.UpdatedUtc.ToString("O"),
+                    ["relevance"] = match.Score
+                });
+            }
+            return Result(true, "completed", $"Found {items.Count} personal information item(s).", new JsonObject { ["items"] = items });
+        }
+
+        public Task<ToolResult> WritePersonalInfoAsync(string topic, string newKnowledge, CancellationToken token) =>
+            RememberAsync("personal_info", topic, newKnowledge, 3, token);
+
         public async Task<long> SaveConversationTurnAsync(
             string sessionId,
             string userText,
@@ -202,6 +264,7 @@ namespace App.Services
             subjectKey = NormalizeKey(subjectKey, "memory");
             importance = Math.Clamp(importance, 1, 5);
             var id = Guid.NewGuid().ToString("N");
+            var writtenUtc = DateTimeOffset.UtcNow;
             await _databaseGate.WaitAsync(token);
             try
             {
@@ -220,7 +283,7 @@ namespace App.Services
                         embedding_status = 'pending';
                     SELECT id FROM memories WHERE category = $category AND subject_key = $subject;
                     """;
-                var now = DateTimeOffset.UtcNow.ToString("O");
+                var now = writtenUtc.ToString("O");
                 command.Parameters.AddWithValue("$id", id);
                 command.Parameters.AddWithValue("$category", category);
                 command.Parameters.AddWithValue("$subject", subjectKey);
@@ -237,6 +300,7 @@ namespace App.Services
                 ["memory_id"] = id,
                 ["category"] = category,
                 ["subject_key"] = subjectKey,
+                ["written_utc"] = writtenUtc.ToString("O"),
                 ["embedding_status"] = embedded ? "ready" : "pending"
             });
         }
@@ -548,9 +612,9 @@ namespace App.Services
                 command.CommandText =
                     """
                     SELECT content FROM memories
-                    WHERE category = 'location'
-                      AND subject_key IN ('default_weather_city', 'home_city', 'current_city')
-                    ORDER BY CASE subject_key WHEN 'default_weather_city' THEN 0 WHEN 'home_city' THEN 1 ELSE 2 END
+                    WHERE (category = 'location' AND subject_key IN ('default_weather_city', 'home_city', 'current_city'))
+                       OR (category = 'personal_info' AND subject_key IN ('weather_location', 'environment', 'home'))
+                    ORDER BY CASE subject_key WHEN 'default_weather_city' THEN 0 WHEN 'weather_location' THEN 1 WHEN 'home_city' THEN 2 ELSE 3 END
                     LIMIT 1;
                     """;
                 return Convert.ToString(await command.ExecuteScalarAsync(token), CultureInfo.InvariantCulture);
