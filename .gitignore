@@ -29,6 +29,8 @@ packages/
 [Dd]ebugPublic/
 [Rr]elease/
 [Rr]eleases/
+[Aa]pp[Pp]ackages/
+[Bb]undle[Aa]rtifacts/
 x64/
 x86/
 ARM/

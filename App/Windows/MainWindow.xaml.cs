@@ -41,7 +41,7 @@ namespace App.Windows
             SidebarNavigation.SelectionChanged += SidebarNavigation_SelectionChanged;
             SidebarNavigation.Loaded += (s, e) =>
             {
-                SidebarNavigation.SelectedItem = SnapshotsNavItem;
+                SidebarNavigation.SelectedItem = ChatNavItem;
             };
         }
 

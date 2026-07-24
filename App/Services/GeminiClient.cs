@@ -92,6 +92,22 @@ namespace App.Services
         public Task<float[]> EmbedRetrievalDocumentAsync(string title, string text, CancellationToken cancellationToken) =>
             EmbedAsync($"title: {(string.IsNullOrWhiteSpace(title) ? "none" : title.Trim())} | text: {text}", cancellationToken);
 
+        public Task<GeminiTurnResult> LoadSkillAsync(string topic, CancellationToken cancellationToken)
+        {
+            var request = CreateUserStep(
+                $"Research this technical topic for use in an implementation plan: {topic.Trim()}\n\n" +
+                "Find current guidance and the latest relevant documentation. Prefer official primary sources, identify versions or dates when they matter, and return concise implementation-relevant notes with source links.",
+                []);
+            return CreateSimpleInteractionAsync(
+                "gemini-2.5-flash",
+                [],
+                [request],
+                "You load accurate, current technical knowledge. Use web search, prioritize official documentation, distinguish verified facts from inference, and never invent APIs or citations.",
+                new JsonArray { new JsonObject { ["type"] = "google_search" }, new JsonObject { ["type"] = "url_context" } },
+                null,
+                cancellationToken);
+        }
+
         private async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken)
         {
             if (text.Length > 24_000) text = text[..24_000];

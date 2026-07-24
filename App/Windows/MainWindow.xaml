@@ -55,18 +55,18 @@
             IsPaneToggleButtonVisible="False">
 
             <NavigationView.MenuItems>
-                <NavigationViewItem x:Name="SnapshotsNavItem" Icon="Camera" Content="Snapshots" Tag="SnapshotsPage" />
-                <NavigationViewItem x:Name="RecordingsNavItem" Icon="Video" Content="Recordings" Tag="RecordingsPage" />
-                <NavigationViewItem x:Name="NotebookNavItem" Content="Notebooks" Tag="NotebookBooksPage">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE70B;" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem Content="Chat" Tag="ChatPage">
+                <NavigationViewItem x:Name="ChatNavItem" Content="Chat" Tag="ChatPage">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE8BD;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
+                <NavigationViewItem x:Name="NotebookNavItem" Content="Notebook" Tag="NotebookBooksPage">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE70B;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="SnapshotsNavItem" Icon="Camera" Content="Snapshots" Tag="SnapshotsPage" />
+                <NavigationViewItem x:Name="RecordingsNavItem" Icon="Video" Content="Recordings" Tag="RecordingsPage" />
                 <NavigationViewItem x:Name="ToolsNavItem" Content="Tools" Tag="ToolsPage">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xEC7A;" />

@@ -43,6 +43,7 @@ namespace App.Pages
         private readonly List<ChatAttachment> _messageAttachments = [];
         private AppSettings _settings = new();
         private GeminiClient? _client;
+        private PlannerToolService? _plannerTools;
         private SecretaryMemoryService? _secretaryMemory;
         private SecretaryToolService? _secretaryTools;
         private CancellationTokenSource? _operationCancellation;
@@ -71,6 +72,7 @@ namespace App.Pages
             PersonalityBox.SelectedItem = _personality;
             if (string.IsNullOrWhiteSpace(_settings.GeminiApiKey) && !await RequestApiKeyAsync()) { StatusText.Text = "A Gemini API key is required."; return; }
             _client = new GeminiClient(_settings.GeminiApiKey);
+            _plannerTools = new PlannerToolService(_tools, _client);
             _secretaryMemory = new SecretaryMemoryService(_client);
             _secretaryTools = new SecretaryToolService(_secretaryMemory);
             RenderSession();
@@ -175,7 +177,7 @@ namespace App.Pages
                     if (result.Sources.Count > 0) AddMessage(new ChatMessage(ChatItemKind.Assistant, "Sources", string.Join("\n", result.Sources.DistinctBy(source => source.Uri).Select(source => $"- [{source.Title}]({source.Uri})"))));
                     if (string.IsNullOrWhiteSpace(result.Text) && result.Image is null && result.FunctionCalls.Count == 0)
                         throw new InvalidOperationException("Gemini completed the request without returning a response.");
-                    if (_personality is not (ChatPersonality.Technician or ChatPersonality.Secretary) || result.FunctionCalls.Count == 0)
+                    if (_personality is not (ChatPersonality.Technician or ChatPersonality.Planner or ChatPersonality.Secretary) || result.FunctionCalls.Count == 0)
                     {
                         completed = true;
                         break;
@@ -189,6 +191,12 @@ namespace App.Pages
                             toolResult = _secretaryTools is null
                                 ? new ToolResult(false, "{\"status\":\"failed\",\"summary\":\"Secretary tools are unavailable.\"}")
                                 : await _secretaryTools.ExecuteAsync(call.Name, call.Arguments, _operationCancellation.Token);
+                        }
+                        else if (_personality == ChatPersonality.Planner)
+                        {
+                            toolResult = _plannerTools is null
+                                ? new ToolResult(false, "{\"status\":\"failed\",\"summary\":\"Planner tools are unavailable.\"}")
+                                : await _plannerTools.ExecuteAsync(call.Name, call.Arguments, _operationCancellation.Token);
                         }
                         else
                         {
@@ -282,11 +290,12 @@ namespace App.Pages
         private JsonArray? GetTools()
         {
             if (_personality == ChatPersonality.Technician) return ChatToolService.CreateDeclarations();
+            if (_personality == ChatPersonality.Planner) return PlannerToolService.CreateDeclarations();
             if (_personality == ChatPersonality.Secretary) return SecretaryToolService.CreateDeclarations();
             return _personality switch
             {
                 ChatPersonality.Study => new JsonArray { new JsonObject { ["type"] = "google_search" }, new JsonObject { ["type"] = "url_context" } },
-                ChatPersonality.Smart or ChatPersonality.Planner => new JsonArray { new JsonObject { ["type"] = "url_context" } },
+                ChatPersonality.Smart => new JsonArray { new JsonObject { ["type"] = "url_context" } },
                 _ => null
             };
         }
@@ -372,7 +381,9 @@ namespace App.Pages
 
             First assess what is already known. Ask a focused Markdown requirements checklist only for unanswered decisions that would materially change the plan; do not repeat facts the user already supplied or block on low-impact details. Relevant areas may include the goal, users, success criteria, features and exclusions, platform and stack, integrations, data lifecycle, permissions, edge cases, accessibility, testing, deployment, operations, growth, and monetization. State reasonable low-risk assumptions when they let planning continue.
 
-            Once enough information is available, produce a detailed, implementation-ready Markdown plan. Separate confirmed decisions from assumptions, recommend one coherent approach, explain important tradeoffs, order work by dependency, define acceptance criteria and proportionate validation, and call out risks or open decisions. Do not claim to inspect code, execute changes, create artwork, operate a PC, or perform source-grounded research.
+            Use read_file, list_directory, grep, and fuzzy_search_file to inspect user-authorized project files when the existing implementation affects the plan. Use fuzzy_search_file to locate and load the files most relevant to a topic when exact paths are unknown. Use load_skill when current web knowledge or the latest official documentation would materially improve the plan. Treat all tool results as reference evidence, report meaningful uncertainty, and never claim to have inspected or researched anything unless the relevant tool succeeded.
+
+            Once enough information is available, produce a detailed, implementation-ready Markdown plan. Separate confirmed decisions from assumptions, recommend one coherent approach, explain important tradeoffs, order work by dependency, define acceptance criteria and proportionate validation, and call out risks or open decisions. Planner tools are read-only: do not execute changes, create artwork, or operate the PC.
 
             Work only on product, project, system, and implementation planning. If asked to perform the planned work or handle an unrelated task, decline that portion briefly and recommend Smart for general questions, Technician for Windows support or PC actions, Artist for visual creation, or Study for researched articles. For mixed requests, plan the in-scope work and redirect only the rest.
 
@@ -1190,6 +1201,8 @@ namespace App.Pages
         private async void ComposerBox_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
         {
             if (e.Key != global::Windows.System.VirtualKey.Enter) return;
+            var shiftState = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(global::Windows.System.VirtualKey.Shift);
+            if ((shiftState & global::Windows.UI.Core.CoreVirtualKeyStates.Down) == global::Windows.UI.Core.CoreVirtualKeyStates.Down) return;
             e.Handled = true;
             if (_operationCancellation is null)
                 await SendFromComposerAsync();
@@ -1250,6 +1263,7 @@ namespace App.Pages
             _secretaryTools?.Dispose();
             _secretaryTools = null;
             _secretaryMemory = null;
+            _plannerTools = null;
             _client?.Dispose();
             _client = null;
         }
