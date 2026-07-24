@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using App.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using NAudio.CoreAudioApi;
+using Windows.Devices.Enumeration;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 
@@ -17,7 +17,10 @@ namespace App.Pages
         private bool _loading;
         private AppSettings _settings = null!;
 
-        private sealed record MicrophoneChoice(string Id, string Name);
+        private sealed record MicrophoneChoice(string Id, string Name)
+        {
+            public override string ToString() => Name;
+        }
         private sealed record ShortcutChoice(string Value, string Name);
         private static readonly IReadOnlyList<ShortcutChoice> SnapshotShortcuts =
         [
@@ -35,7 +38,7 @@ namespace App.Pages
             Loaded += SettingsPage_Loaded;
         }
 
-        private void SettingsPage_Loaded(object sender, RoutedEventArgs e)
+        private async void SettingsPage_Loaded(object sender, RoutedEventArgs e)
         {
             _loading = true;
             _settings = App.Settings.Current.Clone();
@@ -47,17 +50,24 @@ namespace App.Pages
             CursorToggle.IsOn = _settings.SnapshotCaptureMouseCursor;
             CaffeineShortcutBox.ItemsSource = CaffeineShortcuts;
             CaffeineShortcutBox.SelectedItem = FindShortcut(CaffeineShortcuts, _settings.CaffeineShortcut);
-            LoadMicrophones();
+            await LoadMicrophonesAsync();
             _loading = false;
         }
 
-        private void LoadMicrophones()
+        private async Task LoadMicrophonesAsync()
         {
-            var choices = new List<MicrophoneChoice> { new(string.Empty, "None") };
+            var choices = new List<MicrophoneChoice>
+            {
+                new(string.Empty, "None"),
+                new(ScreenRecorderService.DefaultMicrophoneDeviceId, "Default")
+            };
             try
             {
-                using var devices = new MMDeviceEnumerator();
-                choices.AddRange(devices.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active).Select(device => new MicrophoneChoice(device.ID, device.FriendlyName)));
+                var devices = await DeviceInformation.FindAllAsync(DeviceClass.AudioCapture);
+                choices.AddRange(devices
+                    .Where(device => device.IsEnabled)
+                    .OrderBy(device => device.Name, StringComparer.CurrentCultureIgnoreCase)
+                    .Select(device => new MicrophoneChoice(device.Id, device.Name)));
             }
             catch { StatusText.Text = "Microphones could not be enumerated."; }
             MicrophoneBox.ItemsSource = choices;

@@ -21,7 +21,10 @@ namespace App
             var isStartupActivation = AppInstance.GetCurrent().GetActivatedEventArgs()?.Kind == ExtendedActivationKind.StartupTask;
             Settings.Load();
             App.MainWindow = new Windows.MainWindow();
-            App.MainWindow.Activate();
+            if (isStartupActivation)
+                (App.MainWindow as Windows.MainWindow)?.HideToTray();
+            else
+                App.MainWindow.Activate();
 
             App.SystemTray = new NotifyIconService(App.MainWindow);
             App.SystemTray.TrayLeftClick += SystemTray_TrayLeftClick;
@@ -33,8 +36,6 @@ namespace App
             _keyboard.CaffeinePressed += (_, _) => (App.MainWindow as Windows.MainWindow)?.ToggleCaffeineFromHotkey();
             _keyboard.Start();
             Settings.Changed += (_, settings) => _keyboard.Configure(settings.SnapshotShortcut, settings.CaffeineShortcut);
-            if (isStartupActivation)
-                (App.MainWindow as Windows.MainWindow)?.HideToTray();
         }
 
         private void SystemTray_TrayLeftClick()

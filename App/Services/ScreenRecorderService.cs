@@ -26,6 +26,7 @@ namespace App.Services
 {
     public sealed class ScreenRecorderService : IDisposable
     {
+        internal const string DefaultMicrophoneDeviceId = "{default}";
         private const int MaxMicQueueDepth = 64;
         private const int TraceSampleModulo = 60;
 
@@ -601,7 +602,9 @@ namespace App.Services
             try
             {
                 using var enumerator = new MMDeviceEnumerator();
-                var microphone = enumerator.GetDevice(microphoneDeviceId);
+                var microphone = string.Equals(microphoneDeviceId, DefaultMicrophoneDeviceId, StringComparison.Ordinal)
+                    ? enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia)
+                    : enumerator.GetDevice(microphoneDeviceId);
                 _micCapture = new WasapiCapture(microphone);
                 _micWaveFormat = _micCapture.WaveFormat;
                 _micWriter = new WaveFileWriter(micPath, _micWaveFormat);
