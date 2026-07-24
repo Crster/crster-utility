@@ -100,6 +100,14 @@ namespace App.Services
             return await Task.Run(() => searchIndex.Search(terms, maximumResults, cancellationToken), cancellationToken);
         }
 
+        public async Task<NotebookEntry?> GetEntryAsync(int entryIndex, CancellationToken cancellationToken = default)
+        {
+            var entries = await LoadEntriesFromDiskAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+            var entry = entries.FirstOrDefault(item => item.Index == entryIndex);
+            return entry is null ? null : CloneEntry(entry);
+        }
+
         public async Task SaveAsync(IEnumerable<NotebookEntry> entries)
         {
             var orderedEntries = entries.OrderByDescending(entry => entry.Index).ToList();

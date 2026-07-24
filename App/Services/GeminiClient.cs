@@ -86,12 +86,19 @@ namespace App.Services
             using var response = await _httpClient.SendAsync(request, cancellationToken);
         }
 
-        public async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken)
+        public Task<float[]> EmbedRetrievalQueryAsync(string query, CancellationToken cancellationToken) =>
+            EmbedAsync($"task: search result | query: {query}", cancellationToken);
+
+        public Task<float[]> EmbedRetrievalDocumentAsync(string title, string text, CancellationToken cancellationToken) =>
+            EmbedAsync($"title: {(string.IsNullOrWhiteSpace(title) ? "none" : title.Trim())} | text: {text}", cancellationToken);
+
+        private async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken)
         {
+            if (text.Length > 24_000) text = text[..24_000];
             var body = new JsonObject
             {
-                ["model"] = "models/gemini-embedding-2",
-                ["content"] = new JsonObject { ["parts"] = new JsonArray { new JsonObject { ["text"] = text } } }
+                ["content"] = new JsonObject { ["parts"] = new JsonArray { new JsonObject { ["text"] = text } } },
+                ["output_dimensionality"] = 768
             };
             using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/models/gemini-embedding-2:embedContent");
             request.Content = JsonContent(body);

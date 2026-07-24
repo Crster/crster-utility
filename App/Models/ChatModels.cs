@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 namespace App.Models
 {
     internal enum ChatItemKind { User, Assistant, Tool, Error }
-    internal enum ChatPersonality { Smart, Technician, Artist, Planner, Study }
+    internal enum ChatPersonality { Smart, Technician, Artist, Planner, Study, Secretary }
 
     internal sealed class GeminiModel
     {
@@ -33,6 +33,7 @@ namespace App.Models
 
     internal sealed class ChatSession
     {
+        public string PersistentId { get; } = Guid.NewGuid().ToString("N");
         public List<JsonObject> History { get; } = [];
         public List<ChatMessage> Messages { get; } = [];
         public List<ChatAttachment> Attachments { get; } = [];
