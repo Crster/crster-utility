@@ -192,7 +192,7 @@ namespace App.Services
                 ["store"] = false,
                 ["input"] = input,
                 ["system_instruction"] = systemInstruction,
-                ["response_format"] = new JsonObject { ["type"] = "image", ["mime_type"] = "image/png" }
+                ["response_format"] = new JsonObject { ["type"] = "image", ["mime_type"] = "image/jpeg" }
             };
             if (!string.IsNullOrWhiteSpace(thinkingLevel))
                 body["generation_config"] = new JsonObject { ["thinking_level"] = thinkingLevel };
@@ -286,11 +286,16 @@ namespace App.Services
                 var type = step["type"]?.GetValue<string>();
                 if (type == "function_call") result.FunctionCalls.Add(new GeminiFunctionCall(step["id"]?.GetValue<string>() ?? throw new InvalidOperationException("A function call did not include an id."), step["name"]?.GetValue<string>() ?? string.Empty, step["arguments"] as JsonObject ?? new JsonObject()));
                 else if (type == "model_output")
-                    foreach (var content in step["content"]?.AsArray() ?? []) if (content?["type"]?.GetValue<string>() == "text") result.Text += content["text"]?.GetValue<string>();
+                    foreach (var content in step["content"]?.AsArray() ?? [])
+                    {
+                        var contentType = content?["type"]?.GetValue<string>();
+                        if (contentType == "text") result.Text += content?["text"]?.GetValue<string>();
+                        else if (contentType == "image" && content is JsonObject imageContent)
+                            result.Image = ParseGeneratedImage(imageContent);
+                    }
             }
-            var outputImage = root["output_image"]?.AsObject();
-            var data = outputImage?["data"]?.GetValue<string>();
-            if (!string.IsNullOrWhiteSpace(data)) result.Image = new GeneratedImage(Convert.FromBase64String(data), outputImage?["mime_type"]?.GetValue<string>() ?? "image/png");
+            if (result.Image is null && root["output_image"] is JsonObject outputImage)
+                result.Image = ParseGeneratedImage(outputImage);
             foreach (var item in root["grounding_metadata"]?["grounding_chunks"]?.AsArray() ?? [])
             {
                 var web = item?["web"]?.AsObject();
@@ -298,6 +303,16 @@ namespace App.Services
                 if (!string.IsNullOrWhiteSpace(uri)) result.Sources.Add(new GroundedSource(web?["title"]?.GetValue<string>() ?? uri, uri));
             }
             return result;
+        }
+
+        private static GeneratedImage? ParseGeneratedImage(JsonObject image)
+        {
+            var data = image["data"]?.GetValue<string>();
+            return string.IsNullOrWhiteSpace(data)
+                ? null
+                : new GeneratedImage(
+                    Convert.FromBase64String(data),
+                    image["mime_type"]?.GetValue<string>() ?? "image/jpeg");
         }
 
         private static async Task ThrowApiErrorAsync(HttpResponseMessage response, CancellationToken cancellationToken)
@@ -312,13 +327,28 @@ namespace App.Services
             catch (JsonException) { return $"Gemini request failed ({(int)response.StatusCode}): {content}"; }
         }
 
-        private static string GetMimeType(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+        private static string GetMimeType(string path)
         {
-            ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".gif" => "image/gif", ".webp" => "image/webp",
-            ".pdf" => "application/pdf", ".json" => "application/json", ".csv" => "text/csv", ".html" => "text/html",
-            ".md" => "text/markdown", ".txt" or ".cs" or ".xaml" or ".js" or ".ts" or ".py" => "text/plain",
-            _ => "application/octet-stream"
-        };
+            var fileName = Path.GetFileName(path);
+            if (fileName.Equals(".env", StringComparison.OrdinalIgnoreCase)
+                || fileName.StartsWith(".env.", StringComparison.OrdinalIgnoreCase))
+                return "text/plain";
+
+            return Path.GetExtension(path).ToLowerInvariant() switch
+            {
+                ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".gif" => "image/gif", ".webp" => "image/webp",
+                ".bmp" => "image/bmp", ".tif" or ".tiff" => "image/tiff",
+                ".mp3" => "audio/mpeg", ".mp4" => "video/mp4",
+                ".pdf" => "application/pdf", ".doc" => "application/msword",
+                ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                ".xls" => "application/vnd.ms-excel",
+                ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ".json" => "application/json", ".csv" => "text/csv", ".html" => "text/html",
+                ".md" => "text/markdown",
+                ".txt" or ".log" or ".ini" or ".conf" or ".env" or ".cs" or ".xaml" or ".js" or ".ts" or ".py" => "text/plain",
+                _ => "application/octet-stream"
+            };
+        }
 
         public void Dispose() => _httpClient.Dispose();
     }

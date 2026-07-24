@@ -17,6 +17,8 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.Pickers;
 using Windows.Storage.Streams;
@@ -27,6 +29,12 @@ namespace App.Pages
     public sealed partial class ChatPage : Page
     {
         private const int MaximumToolRounds = 15;
+        private static readonly string[] AllowedContextAttachmentExtensions =
+        [
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp",
+            ".mp3", ".mp4", ".txt", ".log", ".ini", ".json", ".conf", ".env", ".csv",
+            ".pdf", ".doc", ".docx", ".xls", ".xlsx"
+        ];
         private static readonly Regex LocalPathPattern = new("(?<!\\w)(?:[A-Za-z]:\\\\[^\\r\\n\\\"'<>|*?]+|\\\\\\\\[^\\s\\\"'<>|*?]+)", RegexOptions.Compiled);
         private readonly SecureSettingsService _settingsService = new();
         private readonly ChatToolService _tools = new();
@@ -317,27 +325,148 @@ namespace App.Pages
         private async void AddContextFileButton_Click(object sender, RoutedEventArgs e)
         {
             if (_client is null || App.MainWindow is null || _operationCancellation is not null) return;
-            var picker = new FileOpenPicker(); picker.FileTypeFilter.Add("*"); InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow));
+            var picker = new FileOpenPicker();
+            picker.FileTypeFilter.Add("*");
+            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow));
             var files = await picker.PickMultipleFilesAsync(); if (files.Count == 0) return;
             SetBusy(true, "Uploading files...");
             try
             {
                 foreach (var file in files)
-                {
-                    var attachment = await _client.UploadFileAsync(file.Path, CancellationToken.None);
-                    Session.Attachments.Add(attachment);
-                    DiscoverPathContext(string.Empty, [attachment]);
-                }
+                    await UploadContextFileAsync(file, file.Path, file.Name);
                 RefreshContext();
             }
             catch (Exception exception) { AddMessage(new ChatMessage(ChatItemKind.Error, "Upload error", exception.Message)); }
             finally { SetBusy(false); }
         }
 
+        private async void AddContextClipboardButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_client is null || _operationCancellation is not null) return;
+            var content = Clipboard.GetContent();
+            if (!content.Contains(StandardDataFormats.Bitmap))
+            {
+                AddMessage(new ChatMessage(ChatItemKind.Error, "Clipboard", "The clipboard does not contain an image."));
+                return;
+            }
+
+            StorageFile? clipboardImage = null;
+            SetBusy(true, "Uploading clipboard image...");
+            try
+            {
+                var bitmapReference = await content.GetBitmapAsync();
+                clipboardImage = await ApplicationData.Current.TemporaryFolder.CreateFileAsync(
+                    $"{Guid.NewGuid():N}.png",
+                    CreationCollisionOption.FailIfExists);
+                using (var input = await bitmapReference.OpenReadAsync())
+                using (var output = await clipboardImage.OpenAsync(FileAccessMode.ReadWrite))
+                {
+                    await RandomAccessStream.CopyAsync(input, output);
+                    await output.FlushAsync();
+                }
+
+                var displayName = $"clipboard-{DateTime.Now:yyyyMMdd-HHmmss}.jpg";
+                await UploadContextFileAsync(clipboardImage, string.Empty, displayName);
+                RefreshContext();
+            }
+            catch (Exception exception) { AddMessage(new ChatMessage(ChatItemKind.Error, "Clipboard upload error", exception.Message)); }
+            finally
+            {
+                if (clipboardImage is not null) await clipboardImage.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                SetBusy(false);
+            }
+        }
+
+        private async Task UploadContextFileAsync(StorageFile file, string localPath, string displayName)
+        {
+            StorageFile? convertedImage = null;
+            StorageFile? metadataFile = null;
+            var uploadPath = file.Path;
+            try
+            {
+                if (!IsDirectlyAttachableFile(file))
+                {
+                    metadataFile = await CreateFileMetadataAttachmentAsync(file);
+                    uploadPath = metadataFile.Path;
+                    displayName = $"{file.Name}.txt";
+                }
+                else if (file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                {
+                    convertedImage = await ConvertAttachmentImageToJpegAsync(file);
+                    uploadPath = convertedImage.Path;
+                    displayName = $"{Path.GetFileNameWithoutExtension(displayName)}.jpg";
+                }
+
+                var uploadedAttachment = await _client!.UploadFileAsync(uploadPath, CancellationToken.None);
+                var attachment = uploadedAttachment with { LocalPath = localPath, DisplayName = displayName };
+                Session.Attachments.Add(attachment);
+                DiscoverPathContext(string.Empty, [attachment]);
+            }
+            finally
+            {
+                if (convertedImage is not null) await convertedImage.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                if (metadataFile is not null) await metadataFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
+            }
+        }
+
+        private static bool IsDirectlyAttachableFile(StorageFile file) =>
+            AllowedContextAttachmentExtensions.Contains(file.FileType, StringComparer.OrdinalIgnoreCase)
+            || file.Name.Equals(".env", StringComparison.OrdinalIgnoreCase)
+            || file.Name.StartsWith(".env.", StringComparison.OrdinalIgnoreCase);
+
+        private static async Task<StorageFile> CreateFileMetadataAttachmentAsync(StorageFile source)
+        {
+            var metadataFile = await ApplicationData.Current.TemporaryFolder.CreateFileAsync(
+                $"{Guid.NewGuid():N}.txt",
+                CreationCollisionOption.FailIfExists);
+            try
+            {
+                var properties = await source.GetBasicPropertiesAsync();
+                var mimeType = string.IsNullOrWhiteSpace(source.ContentType) ? "application/octet-stream" : source.ContentType;
+                var metadata = $"Full path: {source.Path}\r\nSize: {properties.Size} bytes\r\nMIME type: {mimeType}";
+                await FileIO.WriteTextAsync(metadataFile, metadata);
+                return metadataFile;
+            }
+            catch
+            {
+                await metadataFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                throw;
+            }
+        }
+
+        private static async Task<StorageFile> ConvertAttachmentImageToJpegAsync(StorageFile source)
+        {
+            var output = await ApplicationData.Current.TemporaryFolder.CreateFileAsync(
+                $"{Guid.NewGuid():N}.jpg",
+                CreationCollisionOption.FailIfExists);
+            try
+            {
+                using var inputStream = await source.OpenAsync(FileAccessMode.Read);
+                var decoder = await BitmapDecoder.CreateAsync(inputStream);
+                using var bitmap = await decoder.GetSoftwareBitmapAsync(
+                    BitmapPixelFormat.Bgra8,
+                    BitmapAlphaMode.Ignore,
+                    new BitmapTransform(),
+                    ExifOrientationMode.RespectExifOrientation,
+                    ColorManagementMode.ColorManageToSRgb);
+                using var outputStream = await output.OpenAsync(FileAccessMode.ReadWrite);
+                var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.JpegEncoderId, outputStream);
+                encoder.SetSoftwareBitmap(bitmap);
+                await encoder.FlushAsync();
+                return output;
+            }
+            catch
+            {
+                await output.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                throw;
+            }
+        }
+
         private void DiscoverPathContext(string prompt, IEnumerable<ChatAttachment> attachments)
         {
             if (_personality != ChatPersonality.Technician) return;
-            var candidates = LocalPathPattern.Matches(prompt).Select(match => match.Value.Trim()).Concat(attachments.Select(item => item.LocalPath));
+            var candidates = LocalPathPattern.Matches(prompt).Select(match => match.Value.Trim())
+                .Concat(attachments.Select(item => item.LocalPath).Where(path => !string.IsNullOrWhiteSpace(path)));
             foreach (var candidate in candidates)
             {
                 try { var fullPath = Path.GetFullPath(candidate); if (!File.Exists(fullPath) && !Directory.Exists(fullPath)) continue; Session.PathContext = fullPath; Session.HasPathContext = true; _tools.DefaultPath = fullPath; StatusText.Text = $"Local tools enabled for {fullPath}"; return; } catch { }
@@ -673,7 +802,7 @@ namespace App.Pages
         private FrameworkElement CreateImagePanel(GeneratedImage generated)
         {
             var panel = new StackPanel { Spacing = 8 }; var image = new Image { MaxWidth = 720, MaxHeight = 540, Stretch = Stretch.Uniform }; _ = SetImageAsync(image, generated);
-            var save = new Button { Content = "Save As", HorizontalAlignment = HorizontalAlignment.Left }; save.Click += async (_, _) => await SaveImageAsync(generated); panel.Children.Add(image); panel.Children.Add(save); return panel;
+            var save = new Button { Content = "Download image", HorizontalAlignment = HorizontalAlignment.Left }; save.Click += async (_, _) => await SaveImageAsync(generated); panel.Children.Add(image); panel.Children.Add(save); return panel;
         }
 
         private static async Task SetImageAsync(Image image, GeneratedImage generated)
@@ -683,7 +812,13 @@ namespace App.Pages
 
         private async Task SaveImageAsync(GeneratedImage generated)
         {
-            if (App.MainWindow is null) return; var picker = new FileSavePicker { SuggestedFileName = "artist-image" }; picker.FileTypeChoices.Add("PNG image", [".png"]); InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow)); var file = await picker.PickSaveFileAsync(); if (file is not null) await FileIO.WriteBytesAsync(file, generated.Data);
+            if (App.MainWindow is null) return;
+            var isJpeg = generated.MimeType.Equals("image/jpeg", StringComparison.OrdinalIgnoreCase);
+            var picker = new FileSavePicker { SuggestedFileName = "artist-image" };
+            picker.FileTypeChoices.Add(isJpeg ? "JPEG image" : "PNG image", [isJpeg ? ".jpg" : ".png"]);
+            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow));
+            var file = await picker.PickSaveFileAsync();
+            if (file is not null) await FileIO.WriteBytesAsync(file, generated.Data);
         }
 
         private void RefreshContext()
@@ -702,6 +837,8 @@ namespace App.Pages
                     Width = 28,
                     Height = 28,
                     Padding = new Thickness(0),
+                    Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                    BorderThickness = new Thickness(0),
                     Content = new FontIcon { Glyph = "\uE711", FontSize = 10 },
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -714,10 +851,9 @@ namespace App.Pages
                 content.Children.Add(removeButton);
                 ContextAttachmentHost.Items.Add(new Border
                 {
-                    Margin = new Thickness(0, 0, 6, 4),
-                    Padding = new Thickness(8, 2, 2, 2),
-                    CornerRadius = new CornerRadius(8),
-                    Background = (Brush)Application.Current.Resources["ControlFillColorSecondaryBrush"],
+                    Margin = new Thickness(16, 0, 6, 4),
+                    Padding = new Thickness(0, 2, 2, 2),
+                    Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
                     Child = content
                 });
             }

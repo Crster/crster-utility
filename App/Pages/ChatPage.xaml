@@ -45,13 +45,22 @@
                     </Border>
                 </StackPanel>
                 <StackPanel Spacing="8">
-                    <Button x:Name="AddContextFileButton" Height="34" Padding="10,0" HorizontalAlignment="Left"
-                            Click="AddContextFileButton_Click" ToolTipService.ToolTip="Attach files or images as conversation context">
-                        <StackPanel Orientation="Horizontal" Spacing="7">
-                            <FontIcon Glyph="&#xE723;" FontSize="15"/>
-                            <TextBlock Text="Add file or image"/>
-                        </StackPanel>
-                    </Button>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="AddContextFileButton" Height="34" Padding="10,0"
+                                Click="AddContextFileButton_Click" ToolTipService.ToolTip="Attach supported files; other files are added as text metadata">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xE723;" FontSize="15"/>
+                                <TextBlock Text="Add file or image"/>
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="AddContextClipboardButton" Height="34" Padding="10,0"
+                                Click="AddContextClipboardButton_Click" ToolTipService.ToolTip="Attach an image from the clipboard">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xE77F;" FontSize="15"/>
+                                <TextBlock Text="From clipboard"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
                     <ItemsControl x:Name="ContextAttachmentHost" HorizontalAlignment="Stretch"/>
                 </StackPanel>
                 <StackPanel Spacing="6">
@@ -92,8 +101,9 @@
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="14" Padding="5">
             <Grid ColumnSpacing="6">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <TextBox x:Name="ComposerBox" MinHeight="38" MaxHeight="38" Padding="10,7,6,7"
-                         AcceptsReturn="False" TextWrapping="NoWrap" FontSize="13" PlaceholderText="Message..."
+                <TextBox x:Name="ComposerBox" MinHeight="38" MaxHeight="144" Padding="10,7,6,7"
+                         AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         FontSize="13" PlaceholderText="Message..."
                          BorderThickness="0" Background="Transparent" PreviewKeyDown="ComposerBox_PreviewKeyDown"
                          TextChanged="ComposerBox_TextChanged">
                     <TextBox.Resources>
