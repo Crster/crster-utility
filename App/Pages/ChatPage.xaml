@@ -5,129 +5,118 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-
-    <Grid Padding="24,20,24,24" RowSpacing="16">
+    <Grid Padding="16,20,16,24" RowSpacing="12">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-
-        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="14"
-                Padding="14,12">
+        <!-- Section: Chat controls -->
+        <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="14" Padding="14,12">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-
-                <StackPanel Orientation="Horizontal" Spacing="10"
-                            HorizontalAlignment="Left" VerticalAlignment="Center">
-                    <StackPanel Spacing="4">
-                        <StackPanel Orientation="Horizontal" Spacing="5">
-                            <FontIcon Glyph="&#xE950;" FontSize="11" />
-                            <TextBlock Text="Model" FontSize="11" FontWeight="SemiBold" />
-                        </StackPanel>
-                        <ComboBox x:Name="ModelBox" MinWidth="150" Height="36"
-                                  SelectionChanged="ModelBox_SelectionChanged" />
-                    </StackPanel>
-                    <StackPanel Spacing="4">
-                        <StackPanel Orientation="Horizontal" Spacing="5">
-                            <FontIcon Glyph="&#xE945;" FontSize="11" />
-                            <TextBlock Text="Thinking" FontSize="11" FontWeight="SemiBold" />
-                        </StackPanel>
-                        <ComboBox x:Name="ThinkingBox" Width="112" Height="36" SelectedIndex="1">
-                            <x:String>None</x:String><x:String>Smart</x:String><x:String>Plan</x:String>
-                        </ComboBox>
-                    </StackPanel>
-                </StackPanel>
-
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
-                            VerticalAlignment="Center">
-                    <Button x:Name="WorkspaceButton" Height="36" Padding="12,0" Margin="0,15,0,0"
-                            Click="WorkspaceButton_Click" ToolTipService.ToolTip="Select the folder that tools can access">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel Spacing="4"><TextBlock Text="Personality" FontSize="11" FontWeight="SemiBold"/><ComboBox x:Name="PersonalityBox" MinWidth="180" Height="36" SelectionChanged="PersonalityBox_SelectionChanged"/></StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,15,0,0">
+                    <Button x:Name="ContextButton" Height="36" Padding="11,0" Click="ContextButton_Click" ToolTipService.ToolTip="Show conversation context">
                         <StackPanel Orientation="Horizontal" Spacing="7">
-                            <FontIcon Glyph="&#xE8B7;" FontSize="14" />
-                            <TextBlock x:Name="WorkspaceText" Text="Choose workspace" MaxWidth="150" TextTrimming="CharacterEllipsis" />
+                            <FontIcon Glyph="&#xF133;" FontSize="14"/>
+                            <TextBlock Text="Context"/>
+                            <Border x:Name="ContextCountBadge" MinWidth="18" Height="18" Padding="5,0" CornerRadius="9" Background="{ThemeResource AccentFillColorSecondaryBrush}" Visibility="Collapsed">
+                                <TextBlock x:Name="ContextCountText" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
                         </StackPanel>
-                    </Button>
-                    <Button Width="36" Height="36" Padding="0" Margin="0,15,0,0" Click="ClearButton_Click"
-                            ToolTipService.ToolTip="Clear conversation">
-                        <FontIcon FontFamily="{StaticResource SymbolThemeFontFamily}" Glyph="&#xEA99;" FontSize="16" />
                     </Button>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <Grid Grid.Row="1">
-            <ScrollViewer x:Name="ConversationScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled">
-                <StackPanel x:Name="ConversationHost" MaxWidth="960" HorizontalAlignment="Center" Spacing="14" Padding="4,8,8,16">
+        <!-- Section: Conversation context -->
+        <Border x:Name="ContextPanel" Grid.Row="1" MaxWidth="1280" HorizontalAlignment="Stretch"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                CornerRadius="14" Padding="16" Visibility="Collapsed">
+            <StackPanel Spacing="14">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="System instruction" FontWeight="SemiBold"/>
+                    <Border Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="8" Padding="12,10">
+                        <TextBlock x:Name="SystemInstructionText" TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </Border>
+                </StackPanel>
+                <StackPanel Spacing="8">
+                    <Button x:Name="AddContextFileButton" Height="34" Padding="10,0" HorizontalAlignment="Left"
+                            Click="AddContextFileButton_Click" ToolTipService.ToolTip="Attach files or images as conversation context">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <FontIcon Glyph="&#xE723;" FontSize="15"/>
+                            <TextBlock Text="Add file or image"/>
+                        </StackPanel>
+                    </Button>
+                    <ItemsControl x:Name="ContextAttachmentHost" HorizontalAlignment="Stretch"/>
+                </StackPanel>
+                <StackPanel Spacing="6">
+                    <Grid>
+                        <TextBlock Text="Conversation context" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <Button x:Name="CompactButton" HorizontalAlignment="Right" Height="30" Padding="10,0"
+                                Click="CompactButton_Click" ToolTipService.ToolTip="Compact this conversation into context">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE90D;" FontSize="12"/>
+                                <TextBlock Text="Compact conversation" FontSize="12"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                    <TextBox x:Name="ContextTextBox" PlaceholderText="Add background, requirements, or reference text..."
+                             MinHeight="112" MaxHeight="220" AcceptsReturn="True" TextWrapping="Wrap"
+                             TextChanged="ContextTextBox_TextChanged"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Section: Conversation -->
+        <Grid Grid.Row="2">
+            <ScrollViewer x:Name="ConversationScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled"
+                          HorizontalContentAlignment="Stretch">
+                <StackPanel x:Name="ConversationHost" HorizontalAlignment="Stretch" Spacing="14" Padding="4,8,8,16">
                     <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10" Margin="0,76,0,0">
-                        <Border Width="64" Height="64" CornerRadius="20" Background="{ThemeResource AccentFillColorSecondaryBrush}">
-                            <FontIcon Glyph="&#xE8BD;" FontSize="26" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <TextBlock Text="How can I help?" FontSize="25" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,4,0,0" />
-                        <TextBlock Text="Ask a question, attach context, or automate work in your workspace."
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   TextWrapping="Wrap" TextAlignment="Center" MaxWidth="480" />
+                        <Border Width="64" Height="64" CornerRadius="20" Background="{ThemeResource AccentFillColorSecondaryBrush}"><FontIcon Glyph="&#xE8BD;" FontSize="26" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                        <TextBlock x:Name="EmptyTitle" Text="How can I help?" FontSize="25" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                        <TextBlock x:Name="EmptyDescription" Text="Ask a question, or add reference material from Context." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="500"/>
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>
-            <ProgressRing x:Name="BusyRing" IsActive="False" Width="28" Height="28" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,8" />
+            <ProgressRing x:Name="BusyRing" IsActive="False" Width="28" Height="28" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,8"/>
         </Grid>
 
-        <Border Grid.Row="2" MaxWidth="960" HorizontalAlignment="Stretch"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderThickness="0" CornerRadius="14">
-            <Grid RowSpacing="4">
-                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                <ItemsControl x:Name="AttachmentHost">
-                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><ItemsWrapGrid Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                </ItemsControl>
-                <TextBox x:Name="ComposerBox" Grid.Row="1" MinHeight="56" MaxHeight="220" Margin="5"
-                         Padding="14,10,14,6" AcceptsReturn="True" TextWrapping="Wrap"
-                         FontSize="14"
-                         PlaceholderText="Message Gemini..." BorderThickness="0" BorderBrush="Transparent"
-                         Background="Transparent" KeyDown="ComposerBox_KeyDown">
+        <!-- Section: Message composer -->
+        <Border Grid.Row="3" MaxWidth="1280" HorizontalAlignment="Stretch" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="14" Padding="5">
+            <Grid ColumnSpacing="6">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBox x:Name="ComposerBox" MinHeight="38" MaxHeight="38" Padding="10,7,6,7"
+                         AcceptsReturn="False" TextWrapping="NoWrap" FontSize="13" PlaceholderText="Message..."
+                         BorderThickness="0" Background="Transparent" PreviewKeyDown="ComposerBox_PreviewKeyDown"
+                         TextChanged="ComposerBox_TextChanged">
                     <TextBox.Resources>
-                        <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent" />
-                        <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent" />
-                        <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent" />
-                        <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent" />
-                        <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBackground" Color="Transparent"/>
+                        <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent"/>
+                        <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent"/>
+                        <SolidColorBrush x:Key="TextControlBackgroundDisabled" Color="Transparent"/>
+                        <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent"/>
+                        <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent"/>
+                        <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent"/>
+                        <SolidColorBrush x:Key="TextControlBorderBrushDisabled" Color="Transparent"/>
+                        <SolidColorBrush x:Key="FocusVisualPrimaryBrush" Color="Transparent"/>
+                        <SolidColorBrush x:Key="FocusVisualSecondaryBrush" Color="Transparent"/>
+                        <Thickness x:Key="TextControlBorderThemeThickness">0</Thickness>
+                        <Thickness x:Key="TextControlBorderThemeThicknessFocused">0</Thickness>
                     </TextBox.Resources>
                 </TextBox>
-                <Grid Grid.Row="2" Padding="10,0,10,10">
-                    <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                        <Button Height="34" Padding="10,0" Click="AttachButton_Click"
-                                ToolTipService.ToolTip="Attach images or files">
-                            <StackPanel Orientation="Horizontal" Spacing="7">
-                                <FontIcon Glyph="&#xE723;" FontSize="15" />
-                                <TextBlock Text="Attach" />
-                            </StackPanel>
-                        </Button>
-                        <TextBlock Text="Enter to send · Ctrl + Enter for new line" FontSize="11" VerticalAlignment="Center"
-                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                        <TextBlock x:Name="StatusText" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <Button x:Name="StopButton" Width="34" Height="34" Padding="0"
-                                Visibility="Collapsed" Click="StopButton_Click"
-                                ToolTipService.ToolTip="Stop response">
-                            <FontIcon Glyph="&#xE71A;" FontSize="13" />
-                        </Button>
-                        <Button x:Name="SendButton" Height="34" Padding="13,0"
-                                Style="{StaticResource AccentButtonStyle}" Click="SendButton_Click">
-                            <StackPanel Orientation="Horizontal" Spacing="7">
-                                <TextBlock Text="Send" />
-                                <FontIcon Glyph="&#xE724;" FontSize="13" />
-                            </StackPanel>
-                        </Button>
-                    </StackPanel>
-                </Grid>
+                <TextBlock x:Name="StatusText" Visibility="Collapsed"/>
+                <Button x:Name="SendButton" Grid.Column="1" Width="34" Height="34" Padding="0"
+                        CornerRadius="17" VerticalAlignment="Center" Style="{StaticResource AccentButtonStyle}"
+                        Click="SendButton_Click" ToolTipService.ToolTip="Send message">
+                    <FontIcon x:Name="SendActionIcon" Glyph="&#xE724;" FontSize="13"/>
+                </Button>
             </Grid>
         </Border>
     </Grid>

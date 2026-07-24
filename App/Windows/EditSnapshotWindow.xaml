@@ -11,6 +11,13 @@
     Title="Edit Snapshot">
 
     <Grid x:Name="RootGrid" IsTabStop="True" KeyDown="MyCanvas_KeyDown">
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="Escape" Invoked="CancelKeyboardAccelerator_Invoked"/>
+            <KeyboardAccelerator Key="C"
+                                 Modifiers="Control"
+                                 Invoked="CopyKeyboardAccelerator_Invoked"/>
+        </Grid.KeyboardAccelerators>
+
         <!-- CanvasControl as background -->
         <canvas:CanvasControl x:Name="MyCanvas"
                           ClearColor="Black"

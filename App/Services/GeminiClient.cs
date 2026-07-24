@@ -86,6 +86,20 @@ namespace App.Services
             using var response = await _httpClient.SendAsync(request, cancellationToken);
         }
 
+        public async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken)
+        {
+            var body = new JsonObject
+            {
+                ["model"] = "models/gemini-embedding-2",
+                ["content"] = new JsonObject { ["parts"] = new JsonArray { new JsonObject { ["text"] = text } } }
+            };
+            using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/models/gemini-embedding-2:embedContent");
+            request.Content = JsonContent(body);
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            var root = await ReadJsonAsync(response, cancellationToken);
+            return root["embedding"]?["values"]?.AsArray().Select(value => value?.GetValue<float>() ?? 0f).ToArray() ?? throw new InvalidOperationException("Gemini returned no embedding values.");
+        }
+
         public async Task<GeminiTurnResult> CreateInteractionAsync(
             string model,
             IReadOnlyList<JsonObject> history,
@@ -133,9 +147,75 @@ namespace App.Services
             return result;
         }
 
+        public async Task<GeminiTurnResult> CreateSimpleInteractionAsync(
+            string model,
+            IReadOnlyList<JsonObject> history,
+            IReadOnlyList<JsonObject> newSteps,
+            string systemInstruction,
+            JsonArray? tools,
+            string? thinkingLevel,
+            CancellationToken cancellationToken)
+        {
+            var input = new JsonArray();
+            foreach (var step in history) input.Add(step.DeepClone());
+            foreach (var step in newSteps) input.Add(step.DeepClone());
+            var body = new JsonObject
+            {
+                ["model"] = model,
+                ["store"] = false,
+                ["input"] = input,
+                ["system_instruction"] = systemInstruction
+            };
+            if (tools is not null && tools.Count > 0) body["tools"] = tools.DeepClone();
+            if (!string.IsNullOrWhiteSpace(thinkingLevel))
+                body["generation_config"] = new JsonObject { ["thinking_level"] = thinkingLevel };
+            using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/interactions");
+            request.Content = JsonContent(body);
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            var root = await ReadJsonAsync(response, cancellationToken);
+            return ParseInteraction(root);
+        }
+
+        public async Task<GeminiTurnResult> CreateArtistInteractionAsync(
+            IReadOnlyList<JsonObject> history,
+            JsonObject userStep,
+            string systemInstruction,
+            string? thinkingLevel,
+            CancellationToken cancellationToken)
+        {
+            var input = new JsonArray();
+            foreach (var step in history) input.Add(step.DeepClone());
+            input.Add(userStep.DeepClone());
+            var body = new JsonObject
+            {
+                ["model"] = "gemini-3.1-flash-image",
+                ["store"] = false,
+                ["input"] = input,
+                ["system_instruction"] = systemInstruction,
+                ["response_format"] = new JsonObject { ["type"] = "image", ["mime_type"] = "image/png" }
+            };
+            if (!string.IsNullOrWhiteSpace(thinkingLevel))
+                body["generation_config"] = new JsonObject { ["thinking_level"] = thinkingLevel };
+            using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/interactions");
+            request.Content = JsonContent(body);
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            var root = await ReadJsonAsync(response, cancellationToken);
+            return ParseInteraction(root);
+        }
+
         public static JsonObject CreateUserStep(string text, IEnumerable<ChatAttachment> attachments)
         {
             var content = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = text } };
+            foreach (var attachment in attachments.Where(item => !string.IsNullOrWhiteSpace(item.RemoteUri)))
+                content.Add(new JsonObject { ["type"] = GetContentType(attachment.MimeType), ["uri"] = attachment.RemoteUri, ["mime_type"] = attachment.MimeType });
+            return new JsonObject { ["type"] = "user_input", ["content"] = content };
+        }
+
+        public static JsonObject CreateArtistStep(string text, IEnumerable<ChatAttachment> attachments, IEnumerable<GeneratedImage> priorImages)
+        {
+            var content = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = text } };
+            foreach (var image in priorImages)
+                content.Add(new JsonObject { ["type"] = "image", ["data"] = Convert.ToBase64String(image.Data), ["mime_type"] = image.MimeType });
             foreach (var attachment in attachments.Where(item => !string.IsNullOrWhiteSpace(item.RemoteUri)))
                 content.Add(new JsonObject { ["type"] = GetContentType(attachment.MimeType), ["uri"] = attachment.RemoteUri, ["mime_type"] = attachment.MimeType });
             return new JsonObject { ["type"] = "user_input", ["content"] = content };
@@ -149,13 +229,36 @@ namespace App.Services
             _ => "document"
         };
 
-        public static JsonObject CreateFunctionResult(GeminiFunctionCall call, ToolResult result) => new()
+        public static JsonObject CreateFunctionResult(GeminiFunctionCall call, ToolResult result)
         {
-            ["type"] = "function_result",
-            ["name"] = call.Name,
-            ["call_id"] = call.Id,
-            ["result"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = result.Output } }
-        };
+            JsonNode content;
+            if (result.Image is null)
+            {
+                // Gemini 2.x treats a content-block array as a multimodal function response,
+                // even when that array contains only text. Use the standard text result shape.
+                content = JsonValue.Create(result.Output)!;
+            }
+            else
+            {
+                content = new JsonArray
+                {
+                    new JsonObject { ["type"] = "text", ["text"] = result.Output },
+                    new JsonObject
+                    {
+                        ["type"] = "image",
+                        ["data"] = Convert.ToBase64String(result.Image.Data),
+                        ["mime_type"] = result.Image.MimeType
+                    }
+                };
+            }
+            return new JsonObject
+            {
+                ["type"] = "function_result",
+                ["name"] = call.Name,
+                ["call_id"] = call.Id,
+                ["result"] = content
+            };
+        }
 
         private HttpRequestMessage CreateRequest(HttpMethod method, string uri)
         {
@@ -171,6 +274,30 @@ namespace App.Services
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode) throw new InvalidOperationException(ReadError(content, response));
             return JsonNode.Parse(content)?.AsObject() ?? new JsonObject();
+        }
+
+        private static GeminiTurnResult ParseInteraction(JsonObject root)
+        {
+            var result = new GeminiTurnResult { InteractionId = root["id"]?.GetValue<string>() };
+            foreach (var node in root["steps"]?.AsArray() ?? [])
+            {
+                if (node is not JsonObject step) continue;
+                result.Steps.Add((JsonObject)step.DeepClone());
+                var type = step["type"]?.GetValue<string>();
+                if (type == "function_call") result.FunctionCalls.Add(new GeminiFunctionCall(step["id"]?.GetValue<string>() ?? throw new InvalidOperationException("A function call did not include an id."), step["name"]?.GetValue<string>() ?? string.Empty, step["arguments"] as JsonObject ?? new JsonObject()));
+                else if (type == "model_output")
+                    foreach (var content in step["content"]?.AsArray() ?? []) if (content?["type"]?.GetValue<string>() == "text") result.Text += content["text"]?.GetValue<string>();
+            }
+            var outputImage = root["output_image"]?.AsObject();
+            var data = outputImage?["data"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(data)) result.Image = new GeneratedImage(Convert.FromBase64String(data), outputImage?["mime_type"]?.GetValue<string>() ?? "image/png");
+            foreach (var item in root["grounding_metadata"]?["grounding_chunks"]?.AsArray() ?? [])
+            {
+                var web = item?["web"]?.AsObject();
+                var uri = web?["uri"]?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(uri)) result.Sources.Add(new GroundedSource(web?["title"]?.GetValue<string>() ?? uri, uri));
+            }
+            return result;
         }
 
         private static async Task ThrowApiErrorAsync(HttpResponseMessage response, CancellationToken cancellationToken)

@@ -86,6 +86,7 @@ namespace App.Services
         public string RecordingMicrophoneDeviceId { get; set; } = string.Empty;
         public string CaffeineShortcut { get; set; } = "Ctrl+Shift+Alt+F12";
         public string LastGeminiModel { get; set; } = string.Empty;
+        public string LastChatPersonality { get; set; } = "Smart";
 
         public static AppSettings CreateDefault() => new()
         {
@@ -99,6 +100,7 @@ namespace App.Services
             settings.NotebookDataPath = Read("Notebook.DataPath", settings.NotebookDataPath);
             settings.GeminiApiKey = Read("Gemini.ApiKey", settings.GeminiApiKey);
             settings.LastGeminiModel = Read("Gemini.LastModel", settings.LastGeminiModel);
+            settings.LastChatPersonality = Read("Gemini.LastChatPersonality", settings.LastChatPersonality);
             settings.SnapshotShortcut = Read("Snapshot.Shortcut", settings.SnapshotShortcut);
             settings.SnapshotCaptureMouseCursor = ReadBool("Snapshot.CaptureMouseCursor", settings.SnapshotCaptureMouseCursor);
             settings.RecordingMicrophoneDeviceId = Read("Recording.MicrophoneDeviceId", settings.RecordingMicrophoneDeviceId);
@@ -115,7 +117,7 @@ namespace App.Services
         [
             "[General]", $"StartWithWindows={StartWithWindows}", "",
             "[Notebook]", $"DataPath={NotebookDataPath}", "",
-            "[Gemini]", $"ApiKey={GeminiApiKey}", $"LastModel={LastGeminiModel}", "",
+            "[Gemini]", $"ApiKey={GeminiApiKey}", $"LastModel={LastGeminiModel}", $"LastChatPersonality={LastChatPersonality}", "",
             "[Snapshot]", $"Shortcut={SnapshotShortcut}", $"CaptureMouseCursor={SnapshotCaptureMouseCursor}", "",
             "[Recording]", $"MicrophoneDeviceId={RecordingMicrophoneDeviceId}", "",
             "[Caffeine]", $"Shortcut={CaffeineShortcut}"

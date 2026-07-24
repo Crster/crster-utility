@@ -47,6 +47,7 @@ namespace App.Windows
         private Point? dragEnd;
         private readonly List<DrawnShape> shapes = new();
         private DateTime? lastClickTime;
+        private bool isCopying;
 
         // Text editing state
         private bool isTextEditing;
@@ -101,14 +102,19 @@ namespace App.Windows
                 selectionRect = NormalizeRect(dragStart.Value, dragEnd.Value);
             }
 
-            using (var fullRect = CanvasGeometry.CreateRectangle(sender, new Rect(0, 0, sender.ActualWidth, sender.ActualHeight)))
             if (selectionRect.HasValue)
             {
-                using (var selectionGeometry = CanvasGeometry.CreateRectangle(sender, selectionRect.Value))
-                using (var darkGeometry = fullRect.CombineWith(selectionGeometry, System.Numerics.Matrix3x2.Identity, CanvasGeometryCombine.Exclude))
-                {
-                    ds.FillGeometry(darkGeometry, Color.FromArgb(128, 0, 0, 0));
-                }
+                var selection = selectionRect.Value;
+                double left = Math.Clamp(selection.Left, 0, sender.ActualWidth);
+                double top = Math.Clamp(selection.Top, 0, sender.ActualHeight);
+                double right = Math.Clamp(selection.Right, left, sender.ActualWidth);
+                double bottom = Math.Clamp(selection.Bottom, top, sender.ActualHeight);
+                var tintColor = Color.FromArgb(160, 0, 0, 0);
+
+                ds.FillRectangle(new Rect(0, 0, sender.ActualWidth, top), tintColor);
+                ds.FillRectangle(new Rect(0, bottom, sender.ActualWidth, sender.ActualHeight - bottom), tintColor);
+                ds.FillRectangle(new Rect(0, top, left, bottom - top), tintColor);
+                ds.FillRectangle(new Rect(right, top, sender.ActualWidth - right, bottom - top), tintColor);
 
                 var style = new CanvasStrokeStyle
                 {
@@ -119,7 +125,7 @@ namespace App.Windows
             }
             else
             {
-                ds.FillGeometry(fullRect, Color.FromArgb(128, 0, 0, 0));
+                ds.FillRectangle(new Rect(0, 0, sender.ActualWidth, sender.ActualHeight), Color.FromArgb(160, 0, 0, 0));
             }
 
             foreach (var shape in shapes)
@@ -340,26 +346,33 @@ namespace App.Windows
             MyCanvas.Invalidate();
         }
 
-        private void MyCanvas_KeyDown(object sender, KeyRoutedEventArgs e)
+        private async void MyCanvas_KeyDown(object sender, KeyRoutedEventArgs e)
         {
-            if (!isTextEditing) return;
-
             var key = e.Key;
+
+            if (key == VirtualKey.Escape)
+            {
+                e.Handled = true;
+                Close();
+                return;
+            }
+
+            var controlState = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control);
+            bool isControlDown = (controlState & CoreVirtualKeyStates.Down) == CoreVirtualKeyStates.Down;
+            if (key == VirtualKey.C && isControlDown)
+            {
+                e.Handled = true;
+                await CopyAndCloseAsync();
+                return;
+            }
+
+            if (!isTextEditing) return;
 
             if (key == VirtualKey.Enter)
             {
                 currentText = currentText.Insert(cursorIndex, "\n");
                 cursorIndex++;
                 showCursor = true;
-                MyCanvas.Invalidate();
-                e.Handled = true;
-                return;
-            }
-
-            if (key == VirtualKey.Escape)
-            {
-                currentText = string.Empty;
-                cursorIndex = 0;
                 MyCanvas.Invalidate();
                 e.Handled = true;
                 return;
@@ -488,6 +501,18 @@ namespace App.Windows
             }
         }
 
+        private void CancelKeyboardAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+        {
+            args.Handled = true;
+            Close();
+        }
+
+        private async void CopyKeyboardAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+        {
+            args.Handled = true;
+            await CopyAndCloseAsync();
+        }
+
         private void CommitText()
         {
             if (isTextEditing)
@@ -550,26 +575,41 @@ namespace App.Windows
 
         private async void CopyButton_Click(object sender, RoutedEventArgs e)
         {
-            CommitText();
-            var image = await RenderFinalImageAsync();
-            if (image is null) return;
+            await CopyAndCloseAsync();
+        }
 
-            var stream = new InMemoryRandomAccessStream();
-            await image.SaveAsync(stream, CanvasBitmapFileFormat.Png);
-            stream.Seek(0);
+        private async Task CopyAndCloseAsync()
+        {
+            if (isCopying) return;
+            isCopying = true;
 
-            var dataPackage = new DataPackage();
-            dataPackage.SetBitmap(RandomAccessStreamReference.CreateFromStream(stream));
-            Clipboard.SetContent(dataPackage);
-
-            var result = await RenderSavedImageResultAsync();
-            if (result is not null)
+            try
             {
-                ImageSaved?.Invoke(this, result);
-            }
+                CommitText();
+                var image = await RenderFinalImageAsync();
+                if (image is null) return;
 
-            image.Dispose();
-            this.Close();
+                var stream = new InMemoryRandomAccessStream();
+                await image.SaveAsync(stream, CanvasBitmapFileFormat.Png);
+                stream.Seek(0);
+
+                var dataPackage = new DataPackage();
+                dataPackage.SetBitmap(RandomAccessStreamReference.CreateFromStream(stream));
+                Clipboard.SetContent(dataPackage);
+
+                var result = await RenderSavedImageResultAsync();
+                if (result is not null)
+                {
+                    ImageSaved?.Invoke(this, result);
+                }
+
+                image.Dispose();
+                Close();
+            }
+            finally
+            {
+                isCopying = false;
+            }
         }
 
         private async void SaveButton_Click(object sender, RoutedEventArgs e)
@@ -626,6 +666,13 @@ namespace App.Windows
 
             var image = new BitmapImage();
             await image.SetSourceAsync(stream);
+            stream.Seek(0);
+            var data = new byte[stream.Size];
+            using (var reader = new DataReader(stream.GetInputStreamAt(0)))
+            {
+                await reader.LoadAsync((uint)stream.Size);
+                reader.ReadBytes(data);
+            }
 
             var palette = ColorPaletteService.ExtractTopUniqueColors(bitmap);
 
@@ -633,6 +680,7 @@ namespace App.Windows
             return new SavedImageResult
             {
                 Image = image,
+                Data = data,
                 PaletteColors = palette
             };
         }
