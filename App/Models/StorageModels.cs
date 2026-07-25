@@ -50,9 +50,11 @@ namespace App.Models
         [BsonId] public string Id { get; set; } = Guid.NewGuid().ToString("D");
         [BsonField("value")] public string Value { get; set; } = string.Empty;
         [BsonField("category")] public string Category { get; set; } = string.Empty;
-        [BsonField("isDone")] public bool IsDone { get; set; }
+        [BsonField("is_done")] public bool IsDone { get; set; }
         [BsonField("created_by")] public string CreatedBy { get; set; } = "user";
         [BsonField("created_at")] public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        [BsonField("notify")] public string Notify { get; set; } = string.Empty;
+        [BsonField("notified_at")] public DateTime NotifiedAt { get; set; }
         [BsonField("done_at")] public DateTime? DoneAt { get; set; }
     }
 

@@ -45,6 +45,8 @@ namespace App.Pages
             StartupToggle.IsOn = _settings.StartWithWindows;
             NotebookPathBox.Text = _settings.DatabaseFolder;
             GeminiApiKeyBox.Password = _settings.GeminiApiKey;
+            CityBox.Text = _settings.City;
+            CountryBox.Text = _settings.Country;
             SnapshotShortcutBox.ItemsSource = SnapshotShortcuts;
             SnapshotShortcutBox.SelectedItem = FindShortcut(SnapshotShortcuts, _settings.SnapshotShortcut);
             CursorToggle.IsOn = _settings.SnapshotCaptureMouseCursor;
@@ -115,6 +117,15 @@ namespace App.Pages
         }
 
         private void GeminiApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e) { if (!_loading) Save(settings => settings.GeminiApiKey = GeminiApiKeyBox.Password.Trim()); }
+        private void LocationBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            Save(settings =>
+            {
+                settings.City = CityBox.Text.Trim();
+                settings.Country = CountryBox.Text.Trim();
+            });
+        }
         private void CursorToggle_Toggled(object sender, RoutedEventArgs e) { if (!_loading) Save(settings => settings.SnapshotCaptureMouseCursor = CursorToggle.IsOn); }
         private void MicrophoneBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && MicrophoneBox.SelectedItem is MicrophoneChoice choice) Save(settings => settings.RecordingMicrophoneDeviceId = choice.Id); }
         private void SnapshotShortcutBox_SelectionChanged(object sender, SelectionChangedEventArgs e)

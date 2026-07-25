@@ -28,6 +28,7 @@ namespace App.Services
 
         private void Configure()
         {
+            MigrateTodoIsDoneField();
             Notes.EnsureIndex(item => item.Timestamp);
             Attachments.EnsureIndex(item => item.Hash);
             Memos.EnsureIndex(item => item.Topic);
@@ -35,6 +36,18 @@ namespace App.Services
             Todos.EnsureIndex(item => item.Category);
             Todos.EnsureIndex(item => item.IsDone);
             Todos.EnsureIndex(item => item.CreatedAt);
+        }
+
+        private void MigrateTodoIsDoneField()
+        {
+            var todos = _database.GetCollection<BsonDocument>("Todos");
+            foreach (var todo in todos.FindAll())
+            {
+                if (!todo.ContainsKey("isDone")) continue;
+                if (!todo.ContainsKey("is_done")) todo["is_done"] = todo["isDone"];
+                todo.Remove("isDone");
+                todos.Update(todo);
+            }
         }
 
         public void Dispose() => _database.Dispose();

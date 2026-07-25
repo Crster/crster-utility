@@ -9,13 +9,23 @@ namespace App.Services
     {
         private LiteDatabaseService Database => App.Settings.Database;
 
-        public TodoDocument Create(string value, string category, string createdBy)
+        public TodoDocument Create(string value, string category, string createdBy, string notify = "")
         {
             value = Required(value, nameof(value));
             category = Required(category, nameof(category));
             createdBy = createdBy.Trim().ToLowerInvariant();
+            notify = notify.Trim();
             if (createdBy is not ("user" or "secretary")) throw new ArgumentOutOfRangeException(nameof(createdBy), "CreatedBy must be user or secretary.");
-            var todo = new TodoDocument { Value = value, Category = category, CreatedBy = createdBy, CreatedAt = DateTime.UtcNow };
+            var createdAt = DateTime.UtcNow;
+            var todo = new TodoDocument
+            {
+                Value = value,
+                Category = category,
+                CreatedBy = createdBy,
+                CreatedAt = createdAt,
+                Notify = notify,
+                NotifiedAt = createdAt
+            };
             Database.Database.BeginTrans();
             try
             {
@@ -35,6 +45,7 @@ namespace App.Services
         {
             todo.Value = Required(todo.Value, nameof(todo.Value));
             todo.Category = Required(todo.Category, nameof(todo.Category));
+            todo.Notify = todo.Notify.Trim();
             if (todo.CreatedBy is not ("user" or "secretary")) throw new ArgumentOutOfRangeException(nameof(todo.CreatedBy));
             return Database.Todos.Update(todo);
         }

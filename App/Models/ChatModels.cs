@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 namespace App.Models
 {
     internal enum ChatItemKind { User, Assistant, Thinking, Tool, Error }
-    internal enum ChatPersonality { Smart, Technician, Artist, Planner, Study, Secretary }
+    internal enum ChatPersonality { Secretary }
 
     internal sealed class GeminiModel
     {
@@ -37,13 +37,7 @@ namespace App.Models
         public string PersistentId { get; } = Guid.NewGuid().ToString("N");
         public List<JsonObject> History { get; } = [];
         public List<ChatMessage> Messages { get; } = [];
-        public List<ChatAttachment> Attachments { get; } = [];
-        public List<GeneratedImage> GeneratedImages { get; } = [];
         public string ContextText { get; set; } = string.Empty;
-        public string OriginalArtistPrompt { get; set; } = string.Empty;
-        public string ArtistEditSummary { get; set; } = string.Empty;
-        public bool HasPathContext { get; set; }
-        public string? PathContext { get; set; }
     }
 
     internal sealed record ChatMessage(
@@ -54,9 +48,6 @@ namespace App.Models
         GeneratedImage? Image = null,
         JsonObject? ToolArguments = null,
         bool? ToolSucceeded = null);
-
-    internal enum ToolRiskLevel { Safe, Risky }
-    internal enum ToolApprovalPolicy { None, AgentConditional, Always, AlwaysWithUac, ManualScreenSelection }
 
     internal sealed record ToolResult(
         bool Success,

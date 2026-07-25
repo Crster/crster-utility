@@ -120,9 +120,19 @@ namespace App.Services
 
         private static void SeedSettings(ILiteCollection<SettingDocument> collection)
         {
+            MigrateTextSetting(collection, "secretary.city", "general.city");
+            MigrateTextSetting(collection, "secretary.country", "general.country");
             foreach (var definition in AppSettings.Definitions)
                 if (collection.FindById(definition.Key) is null)
                     collection.Insert(new SettingDocument { Id = definition.Key, Name = definition.Name, Value = definition.Default, Default = definition.Default });
+        }
+
+        private static void MigrateTextSetting(ILiteCollection<SettingDocument> collection, string oldKey, string newKey)
+        {
+            if (collection.FindById(newKey) is not null) return;
+            var old = collection.FindById(oldKey);
+            if (old?.Value is not { IsString: true } value || string.IsNullOrWhiteSpace(value.AsString)) return;
+            collection.Insert(new SettingDocument { Id = newKey, Name = old.Name, Value = value.AsString, Default = old.Default });
         }
 
         private void WriteBootstrap(string databaseFolder, string apiKey)
@@ -163,8 +173,9 @@ namespace App.Services
             new("snapshot.captureMouseCursor", "Capture mouse cursor", true, value => value.SnapshotCaptureMouseCursor),
             new("recording.microphoneDeviceId", "Recording microphone", "", value => value.RecordingMicrophoneDeviceId),
             new("caffeine.shortcut", "Caffeine shortcut", "Ctrl+Shift+Alt+F12", value => value.CaffeineShortcut),
-            new("gemini.lastModel", "Last Gemini model", "", value => value.LastGeminiModel),
-            new("gemini.lastChatPersonality", "Last chat personality", "Smart", value => value.LastChatPersonality)
+            new("gemini.lastChatPersonality", "Last chat personality", "Secretary", value => value.LastChatPersonality),
+            new("general.city", "City", "Manila", value => value.City),
+            new("general.country", "Country", "Philippines", value => value.Country)
         ];
 
         public string DatabaseFolder { get; set; } = string.Empty;
@@ -175,8 +186,9 @@ namespace App.Services
         public bool SnapshotCaptureMouseCursor { get; set; } = true;
         public string RecordingMicrophoneDeviceId { get; set; } = string.Empty;
         public string CaffeineShortcut { get; set; } = "Ctrl+Shift+Alt+F12";
-        public string LastGeminiModel { get; set; } = string.Empty;
-        public string LastChatPersonality { get; set; } = "Smart";
+        public string LastChatPersonality { get; set; } = "Secretary";
+        public string City { get; set; } = "Manila";
+        public string Country { get; set; } = "Philippines";
 
         public static AppSettings CreateDefault() => new()
         {
@@ -193,8 +205,9 @@ namespace App.Services
             result.SnapshotCaptureMouseCursor = Bool("snapshot.captureMouseCursor", result.SnapshotCaptureMouseCursor);
             result.RecordingMicrophoneDeviceId = Text("recording.microphoneDeviceId", result.RecordingMicrophoneDeviceId);
             result.CaffeineShortcut = Text("caffeine.shortcut", result.CaffeineShortcut);
-            result.LastGeminiModel = Text("gemini.lastModel", result.LastGeminiModel);
             result.LastChatPersonality = Text("gemini.lastChatPersonality", result.LastChatPersonality);
+            result.City = Text("general.city", result.City);
+            result.Country = Text("general.country", result.Country);
             return result;
 
             string Text(string key, string fallback) => collection.FindById(key)?.Value is { IsString: true } value ? value.AsString : fallback;
