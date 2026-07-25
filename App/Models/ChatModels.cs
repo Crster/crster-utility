@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 
 namespace App.Models
 {
-    internal enum ChatItemKind { User, Assistant, Tool, Error }
+    internal enum ChatItemKind { User, Assistant, Thinking, Tool, Error }
     internal enum ChatPersonality { Smart, Technician, Artist, Planner, Study, Secretary }
 
     internal sealed class GeminiModel
@@ -27,6 +27,7 @@ namespace App.Models
         public List<GeminiFunctionCall> FunctionCalls { get; } = [];
         public List<GroundedSource> Sources { get; } = [];
         public string Text { get; set; } = string.Empty;
+        public string Thinking { get; set; } = string.Empty;
         public GeneratedImage? Image { get; set; }
         public string? InteractionId { get; set; }
     }

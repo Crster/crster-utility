@@ -170,6 +170,10 @@ namespace App.Pages
                         Session.History.Add(step);
                         currentTopicSteps.Add(step);
                     }
+                    if (!string.IsNullOrWhiteSpace(result.Thinking))
+                    {
+                        AddMessage(new ChatMessage(ChatItemKind.Thinking, "Thinking", result.Thinking));
+                    }
                     if (!string.IsNullOrWhiteSpace(result.Text))
                     {
                         AddMessage(new ChatMessage(ChatItemKind.Assistant, _personality.ToString(), result.Text));
@@ -685,7 +689,7 @@ namespace App.Pages
                 var transcript = string.Join(
                     "\n\n",
                     Session.Messages
-                        .Where(message => message.Kind != ChatItemKind.Error)
+                        .Where(message => message.Kind is not (ChatItemKind.Error or ChatItemKind.Thinking))
                         .Select(message => $"{message.Title}:\n{(string.IsNullOrWhiteSpace(message.Content) ? "[Generated image]" : message.Content)}"));
                 var request = GeminiClient.CreateUserStep(
                     $"{existingContext}\n\nConversation transcript:\n{transcript}\n\nCreate a concise, self-contained context summary of this conversation. Preserve the user's goals, requirements, decisions, constraints, important facts, unresolved questions, and any file details needed to continue. Do not mention that this is a summary and do not include conversational filler.",
@@ -787,9 +791,9 @@ namespace App.Pages
         private void RenderMessage(ChatMessage message)
         {
             EmptyState.Visibility = Visibility.Collapsed; if (EmptyState.Parent is Panel parent) parent.Children.Remove(EmptyState);
-            if (message.Kind == ChatItemKind.Tool)
+            if (message.Kind is ChatItemKind.Tool or ChatItemKind.Thinking)
             {
-                ConversationHost.Children.Add(CreateToolMessageView(message));
+                ConversationHost.Children.Add(CreateConsoleMessageView(message));
                 ScrollToLatestMessage();
                 return;
             }
@@ -834,7 +838,7 @@ namespace App.Pages
             ScrollToLatestMessage();
         }
 
-        private FrameworkElement CreateToolMessageView(ChatMessage message)
+        private FrameworkElement CreateConsoleMessageView(ChatMessage message)
         {
             var details = new StackPanel
             {
@@ -842,10 +846,26 @@ namespace App.Pages
                 Margin = new Thickness(10, 8, 10, 10),
                 HorizontalAlignment = HorizontalAlignment.Stretch
             };
-            details.Children.Add(CreateToolSectionHeader("Parameters:"));
-            details.Children.Add(CreateToolParameterLabels(message.ToolArguments));
-            details.Children.Add(CreateToolSectionHeader("Result:"));
-            details.Children.Add(CreateToolResultView(message.Content));
+            if (message.Kind == ChatItemKind.Thinking)
+            {
+                details.Children.Add(new ScrollViewer
+                {
+                    MaxHeight = 200,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    VerticalScrollMode = ScrollMode.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    HorizontalScrollMode = ScrollMode.Disabled,
+                    HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                    Content = CreateToolTextBlock(message.Content)
+                });
+            }
+            else
+            {
+                details.Children.Add(CreateToolSectionHeader("Parameters:"));
+                details.Children.Add(CreateToolParameterLabels(message.ToolArguments));
+                details.Children.Add(CreateToolSectionHeader("Result:"));
+                details.Children.Add(CreateToolResultView(message.Content));
+            }
 
             var consoleBody = new Border
             {
@@ -1015,7 +1035,9 @@ namespace App.Pages
             header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             header.Children.Add(new TextBlock
             {
-                Text = $"{HumanizeToolName(message.Title)} ({(status ? "Success" : "Failed")})",
+                Text = message.Kind == ChatItemKind.Thinking
+                    ? "Thinking"
+                    : $"{HumanizeToolName(message.Title)} ({(status ? "Success" : "Failed")})",
                 FontSize = 11,
                 FontFamily = new FontFamily("Cascadia Mono"),
                 Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],

@@ -142,7 +142,11 @@ namespace App.Services
                 ["input"] = input,
                 ["system_instruction"] = systemInstruction,
                 ["tools"] = tools.DeepClone(),
-                ["generation_config"] = new JsonObject { ["thinking_level"] = thinkingLevel }
+                ["generation_config"] = new JsonObject
+                {
+                    ["thinking_level"] = thinkingLevel,
+                    ["thinking_summaries"] = "auto"
+                }
             };
             using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/interactions");
             request.Content = JsonContent(body);
@@ -165,6 +169,10 @@ namespace App.Services
                 {
                     foreach (var content in step["content"]?.AsArray() ?? [])
                         if (content?["type"]?.GetValue<string>() == "text") result.Text += content["text"]?.GetValue<string>();
+                }
+                else if (type == "thought")
+                {
+                    AppendThoughtSummary(result, step);
                 }
             }
             return result;
@@ -191,7 +199,11 @@ namespace App.Services
             };
             if (tools is not null && tools.Count > 0) body["tools"] = tools.DeepClone();
             if (!string.IsNullOrWhiteSpace(thinkingLevel))
-                body["generation_config"] = new JsonObject { ["thinking_level"] = thinkingLevel };
+                body["generation_config"] = new JsonObject
+                {
+                    ["thinking_level"] = thinkingLevel,
+                    ["thinking_summaries"] = "auto"
+                };
             using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/interactions");
             request.Content = JsonContent(body);
             using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -218,7 +230,11 @@ namespace App.Services
                 ["response_format"] = new JsonObject { ["type"] = "image", ["mime_type"] = "image/jpeg" }
             };
             if (!string.IsNullOrWhiteSpace(thinkingLevel))
-                body["generation_config"] = new JsonObject { ["thinking_level"] = thinkingLevel };
+                body["generation_config"] = new JsonObject
+                {
+                    ["thinking_level"] = thinkingLevel,
+                    ["thinking_summaries"] = "auto"
+                };
             using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/interactions");
             request.Content = JsonContent(body);
             using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -308,6 +324,7 @@ namespace App.Services
                 result.Steps.Add((JsonObject)step.DeepClone());
                 var type = step["type"]?.GetValue<string>();
                 if (type == "function_call") result.FunctionCalls.Add(new GeminiFunctionCall(step["id"]?.GetValue<string>() ?? throw new InvalidOperationException("A function call did not include an id."), step["name"]?.GetValue<string>() ?? string.Empty, step["arguments"] as JsonObject ?? new JsonObject()));
+                else if (type == "thought") AppendThoughtSummary(result, step);
                 else if (type == "model_output")
                     foreach (var content in step["content"]?.AsArray() ?? [])
                     {
@@ -326,6 +343,18 @@ namespace App.Services
                 if (!string.IsNullOrWhiteSpace(uri)) result.Sources.Add(new GroundedSource(web?["title"]?.GetValue<string>() ?? uri, uri));
             }
             return result;
+        }
+
+        private static void AppendThoughtSummary(GeminiTurnResult result, JsonObject step)
+        {
+            foreach (var summary in step["summary"]?.AsArray() ?? [])
+            {
+                if (summary?["type"]?.GetValue<string>() != "text") continue;
+                var text = summary["text"]?.GetValue<string>();
+                if (string.IsNullOrWhiteSpace(text)) continue;
+                if (result.Thinking.Length > 0) result.Thinking += "\n\n";
+                result.Thinking += text.Trim();
+            }
         }
 
         private static GeneratedImage? ParseGeneratedImage(JsonObject image)
