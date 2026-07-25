@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using App.Controls;
@@ -17,7 +18,6 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.ApplicationModel.DataTransfer;
-using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.Pickers;
 using Windows.Storage.Streams;
@@ -28,12 +28,8 @@ namespace App.Pages
     public sealed partial class ChatPage : Page
     {
         private const int MaximumToolRounds = 15;
-        private static readonly string[] AllowedContextAttachmentExtensions =
-        [
-            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp",
-            ".mp3", ".mp4", ".txt", ".log", ".ini", ".json", ".conf", ".env", ".csv",
-            ".pdf", ".doc", ".docx", ".xls", ".xlsx"
-        ];
+        private static readonly Regex AttachmentTokenRegex = new(@"\[(?<icon>📎|🖼)\s(?<name>[a-z]+-[A-Z0-9]{4})\]", RegexOptions.Compiled);
+        private static readonly string[] AttachmentTokenWords = ["amber", "cedar", "coral", "dawn", "ember", "frost", "grove", "harbor", "indigo", "juniper", "meadow", "river"];
         private readonly SecureSettingsService _settingsService = App.Settings;
         private readonly ChatLogService _chatLog = new();
         private readonly Dictionary<ChatPersonality, ChatSession> _sessions = Enum.GetValues<ChatPersonality>().ToDictionary(item => item, _ => new ChatSession());
@@ -48,6 +44,7 @@ namespace App.Pages
         private bool _isBusy;
         private bool _renderingContext;
         private bool _changingPersonality;
+        private bool _suppressAttachmentCleanup;
 
         public ChatPage()
         {
@@ -85,28 +82,53 @@ namespace App.Pages
         {
             if (_operationCancellation is not null) return;
             if (_client is null) throw new InvalidOperationException("Chat is not connected. Add a Gemini API key and reopen the Chat page.");
-            var prompt = ComposerBox.Text.Trim();
-            var messageAttachments = _messageAttachments.ToList();
-            if (prompt.Length == 0 && messageAttachments.Count == 0) return;
-            var attachments = messageAttachments.ToList();
+            var prompt = GetComposerText().Trim();
+            var stagedAttachments = GetReferencedAttachments(prompt);
+            if (prompt.Length == 0 && stagedAttachments.Count == 0) return;
             await _chatLog.WriteAsync("send.started",
                 ("personality", _personality),
                 ("model", Model()),
                 ("promptLength", prompt.Length),
-                ("attachmentCount", attachments.Count),
+                ("attachmentCount", stagedAttachments.Count),
                 ("historyStepCount", Session.History.Count));
-            ComposerBox.Text = string.Empty;
+            _suppressAttachmentCleanup = true;
+            SetComposerText(string.Empty);
+            _suppressAttachmentCleanup = false;
             _messageAttachments.Clear();
-            RefreshMessageAttachments();
-            AddMessage(new ChatMessage(ChatItemKind.User, "You", prompt, attachments.Select(item => item.DisplayName).ToList()));
-            var userStep = GeminiClient.CreateUserStep(prompt, attachments);
-            try { await RunInteractionAsync(userStep, prompt); }
-            finally { await DeleteRemoteAttachmentsAsync(messageAttachments); }
+            AddMessage(new ChatMessage(
+                ChatItemKind.User,
+                "You",
+                prompt,
+                stagedAttachments));
+
+            _operationCancellation = new CancellationTokenSource();
+            SetBusy(true, "Uploading attachments...");
+            var uploadedAttachments = new List<ChatAttachment>();
+            try
+            {
+                var attachmentsToUpload = stagedAttachments.DistinctBy(attachment => attachment.AttachmentId).ToList();
+                uploadedAttachments = await UploadMessageAttachmentsAsync(attachmentsToUpload, _operationCancellation.Token);
+                var userStep = GeminiClient.CreateUserStep(CreateAttachmentPrompt(prompt, stagedAttachments), uploadedAttachments);
+                await RunInteractionAsync(userStep, prompt);
+            }
+            catch
+            {
+                _operationCancellation?.Dispose();
+                _operationCancellation = null;
+                SetBusy(false);
+                throw;
+            }
+            finally
+            {
+                await DeleteRemoteAttachmentsAsync(uploadedAttachments);
+                await DeleteTemporaryAttachmentFilesAsync(stagedAttachments);
+            }
         }
 
         private async Task RunInteractionAsync(JsonObject initialStep, string userPrompt)
         {
-            _operationCancellation = new CancellationTokenSource(); SetBusy(true, $"{_personality} is working...");
+            _operationCancellation ??= new CancellationTokenSource();
+            SetBusy(true, $"{_personality} is working...");
             try
             {
                 IReadOnlyList<JsonObject> nextSteps = [initialStep];
@@ -255,8 +277,9 @@ namespace App.Pages
             {
                 await ResetSessionAsync(_personality);
                 await DeleteRemoteAttachmentsAsync(_messageAttachments);
+                await DeleteTemporaryAttachmentFilesAsync(_messageAttachments);
                 _messageAttachments.Clear();
-                ComposerBox.Text = string.Empty;
+                SetComposerText(string.Empty);
                 ContextPanel.Visibility = Visibility.Collapsed;
                 ContextButton.IsChecked = false;
                 ToolTipService.SetToolTip(ContextButton, "Show conversation context");
@@ -266,91 +289,60 @@ namespace App.Pages
             finally { _changingPersonality = false; }
         }
 
-        private async Task<ChatAttachment> UploadFileAsync(StorageFile file, string localPath, string displayName)
+        private async Task<List<ChatAttachment>> UploadMessageAttachmentsAsync(
+            IEnumerable<ChatAttachment> stagedAttachments,
+            CancellationToken cancellationToken)
         {
-            StorageFile? convertedImage = null;
-            StorageFile? metadataFile = null;
-            var uploadPath = file.Path;
+            var uploadedAttachments = new List<ChatAttachment>();
             try
             {
-                if (!IsDirectlyAttachableFile(file))
+                foreach (var attachment in stagedAttachments)
                 {
-                    metadataFile = await CreateFileMetadataAttachmentAsync(file);
-                    uploadPath = metadataFile.Path;
-                    displayName = $"{file.Name}.txt";
+                    var uploadedAttachment = await _client!.UploadFileAsync(attachment.LocalPath, cancellationToken);
+                    uploadedAttachments.Add(uploadedAttachment with
+                    {
+                        DisplayName = attachment.DisplayName,
+                        IsTemporary = attachment.IsTemporary,
+                        AttachmentId = attachment.AttachmentId,
+                        FileExtension = attachment.FileExtension,
+                        TokenName = attachment.TokenName
+                    });
                 }
-                else if (file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-                {
-                    convertedImage = await ConvertAttachmentImageToJpegAsync(file);
-                    uploadPath = convertedImage.Path;
-                    displayName = $"{Path.GetFileNameWithoutExtension(displayName)}.jpg";
-                }
-
-                var uploadedAttachment = await _client!.UploadFileAsync(uploadPath, CancellationToken.None);
-                return uploadedAttachment with { LocalPath = localPath, DisplayName = displayName };
-            }
-            finally
-            {
-                if (convertedImage is not null) await convertedImage.DeleteAsync(StorageDeleteOption.PermanentDelete);
-                if (metadataFile is not null) await metadataFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
-            }
-        }
-
-        private static bool IsDirectlyAttachableFile(StorageFile file) =>
-            AllowedContextAttachmentExtensions.Contains(file.FileType, StringComparer.OrdinalIgnoreCase)
-            || file.Name.Equals(".env", StringComparison.OrdinalIgnoreCase)
-            || file.Name.StartsWith(".env.", StringComparison.OrdinalIgnoreCase);
-
-        private static bool IsMessageAttachmentFile(StorageFile file) =>
-            file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
-            || file.FileType.Equals(".txt", StringComparison.OrdinalIgnoreCase);
-
-        private static async Task<StorageFile> CreateFileMetadataAttachmentAsync(StorageFile source)
-        {
-            var metadataFile = await ApplicationData.Current.TemporaryFolder.CreateFileAsync(
-                $"{Guid.NewGuid():N}.txt",
-                CreationCollisionOption.FailIfExists);
-            try
-            {
-                var properties = await source.GetBasicPropertiesAsync();
-                var mimeType = string.IsNullOrWhiteSpace(source.ContentType) ? "application/octet-stream" : source.ContentType;
-                var metadata = $"Full path: {source.Path}\r\nSize: {properties.Size} bytes\r\nMIME type: {mimeType}";
-                await FileIO.WriteTextAsync(metadataFile, metadata);
-                return metadataFile;
+                return uploadedAttachments;
             }
             catch
             {
-                await metadataFile.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                await DeleteRemoteAttachmentsAsync(uploadedAttachments);
                 throw;
             }
         }
 
-        private static async Task<StorageFile> ConvertAttachmentImageToJpegAsync(StorageFile source)
+        private static bool IsMessageAttachmentFile(StorageFile file)
         {
-            var output = await ApplicationData.Current.TemporaryFolder.CreateFileAsync(
-                $"{Guid.NewGuid():N}.jpg",
-                CreationCollisionOption.FailIfExists);
-            try
+            if (file.FileType.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+                || file.FileType.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
+                || file.FileType.Equals(".png", StringComparison.OrdinalIgnoreCase)
+                || file.FileType.Equals(".bmp", StringComparison.OrdinalIgnoreCase)
+                || file.FileType.Equals(".md", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            var mimeType = file.ContentType;
+            return mimeType.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
+                || mimeType.Equals("application/json", StringComparison.OrdinalIgnoreCase)
+                || mimeType.EndsWith("+json", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string CreateAttachmentPrompt(string prompt, IEnumerable<ChatAttachment> attachments)
+        {
+            var attachmentsByToken = attachments
+                .GroupBy(attachment => attachment.TokenName, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            return AttachmentTokenRegex.Replace(prompt, match =>
             {
-                using var inputStream = await source.OpenAsync(FileAccessMode.Read);
-                var decoder = await BitmapDecoder.CreateAsync(inputStream);
-                using var bitmap = await decoder.GetSoftwareBitmapAsync(
-                    BitmapPixelFormat.Bgra8,
-                    BitmapAlphaMode.Ignore,
-                    new BitmapTransform(),
-                    ExifOrientationMode.RespectExifOrientation,
-                    ColorManagementMode.ColorManageToSRgb);
-                using var outputStream = await output.OpenAsync(FileAccessMode.ReadWrite);
-                var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.JpegEncoderId, outputStream);
-                encoder.SetSoftwareBitmap(bitmap);
-                await encoder.FlushAsync();
-                return output;
-            }
-            catch
-            {
-                await output.DeleteAsync(StorageDeleteOption.PermanentDelete);
-                throw;
-            }
+                var tokenName = match.Groups["name"].Value;
+                if (!attachmentsByToken.TryGetValue(tokenName, out var attachment)) return match.Value;
+                return $"[{attachment.MimeType}](attachment://{attachment.AttachmentId:D}{attachment.FileExtension})";
+            });
         }
 
         private async void CompactButton_Click(object sender, RoutedEventArgs e) => await CompactConversationAsync();
@@ -386,7 +378,7 @@ namespace App.Pages
 
                 var previousSession = Session;
                 _sessions[_personality] = new ChatSession { ContextText = result.Text.Trim() };
-                ComposerBox.Text = string.Empty;
+                SetComposerText(string.Empty);
                 RenderSession();
                 ContextPanel.Visibility = Visibility.Visible;
                 ContextButton.IsChecked = true;
@@ -409,6 +401,19 @@ namespace App.Pages
             foreach (var attachment in attachments.Where(item => !string.IsNullOrWhiteSpace(item.RemoteName))) try { await _client.DeleteFileAsync(attachment.RemoteName!, CancellationToken.None); } catch { }
         }
 
+        private static async Task DeleteTemporaryAttachmentFilesAsync(IEnumerable<ChatAttachment> attachments)
+        {
+            foreach (var attachment in attachments.Where(item => item.IsTemporary))
+            {
+                try
+                {
+                    var file = await StorageFile.GetFileFromPathAsync(attachment.LocalPath);
+                    await file.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                }
+                catch (FileNotFoundException) { }
+            }
+        }
+
         private async Task ResetSessionAsync(ChatPersonality personality)
         {
             await Task.CompletedTask;
@@ -428,9 +433,10 @@ namespace App.Pages
                     await ResetSessionAsync(previousPersonality);
                     await ResetSessionAsync(personality);
                     await DeleteRemoteAttachmentsAsync(_messageAttachments);
+                    await DeleteTemporaryAttachmentFilesAsync(_messageAttachments);
                     _messageAttachments.Clear();
                     _personality = personality;
-                    ComposerBox.Text = string.Empty;
+                    SetComposerText(string.Empty);
                     ContextPanel.Visibility = Visibility.Collapsed;
                     ContextButton.IsChecked = false;
                     ToolTipService.SetToolTip(ContextButton, "Show conversation context");
@@ -482,11 +488,11 @@ namespace App.Pages
                 }]
             };
             body.Children.Add(title);
-            if (message.AttachmentNames is not null) foreach (var name in message.AttachmentNames) body.Children.Add(new TextBlock { Text = $"📎 {name}", FontSize = 12, Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] });
             if (!string.IsNullOrWhiteSpace(message.Content))
                 body.Children.Add(message.Kind switch
                 {
-                    ChatItemKind.Assistant or ChatItemKind.User => new MarkdownView { Markdown = message.Content },
+                    ChatItemKind.User => CreateUserMessageContent(message),
+                    ChatItemKind.Assistant => new MarkdownView { Markdown = message.Content },
                     _ => CreateNormalizedTextBlock(message.Content)
                 });
             if (message.Image is not null) body.Children.Add(CreateImagePanel(message.Image));
@@ -507,6 +513,28 @@ namespace App.Pages
             if (message.Kind == ChatItemKind.User) messageContainer.MaxWidth = 720;
             ConversationHost.Children.Add(messageContainer);
             ScrollToLatestMessage();
+        }
+
+        private static TextBlock CreateUserMessageContent(ChatMessage message)
+        {
+            var content = new TextBlock { TextWrapping = TextWrapping.Wrap };
+            var attachmentsByToken = (message.Attachments ?? [])
+                .GroupBy(attachment => attachment.TokenName, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            var index = 0;
+            foreach (Match match in AttachmentTokenRegex.Matches(message.Content))
+            {
+                if (!attachmentsByToken.TryGetValue(match.Groups["name"].Value, out var attachment)) continue;
+                if (match.Index > index)
+                    content.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = message.Content[index..match.Index] });
+                var placeholder = new Microsoft.UI.Xaml.Documents.Run { Text = match.Value };
+                ToolTipService.SetToolTip(placeholder, $"{attachment.DisplayName} ({attachment.MimeType})");
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(placeholder, $"Attachment: {attachment.DisplayName}, {attachment.MimeType}");
+                content.Inlines.Add(placeholder);
+                index = match.Index + match.Length;
+            }
+            if (index < message.Content.Length) content.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = message.Content[index..] });
+            return content;
         }
 
         private FrameworkElement CreateConsoleMessageView(ChatMessage message)
@@ -881,24 +909,39 @@ namespace App.Pages
             }
             await SendFromComposerAsync();
         }
-        private void ComposerBox_TextChanged(object sender, TextChangedEventArgs e) => UpdateSendAvailability();
-        private void UpdateSendAvailability() => SendButton.IsEnabled = _operationCancellation is not null || (!_isBusy && (!string.IsNullOrWhiteSpace(ComposerBox.Text) || _messageAttachments.Count > 0));
+        private async void ComposerBox_TextChanged(object sender, RoutedEventArgs e)
+        {
+            var removedAttachments = _suppressAttachmentCleanup ? [] : RemoveUnreferencedAttachments(GetComposerText());
+            if (removedAttachments.Count > 0)
+                await DeleteTemporaryAttachmentFilesAsync(removedAttachments);
+            UpdateSendAvailability();
+        }
+        private void UpdateSendAvailability() => SendButton.IsEnabled = _operationCancellation is not null || (!_isBusy && (!string.IsNullOrWhiteSpace(GetComposerText()) || _messageAttachments.Count > 0));
+
+        private string GetComposerText()
+        {
+            ComposerBox.Document.GetText(Microsoft.UI.Text.TextGetOptions.None, out var text);
+            return text.EndsWith("\r", StringComparison.Ordinal) ? text[..^1] : text;
+        }
+
+        private void SetComposerText(string text) =>
+            ComposerBox.Document.SetText(Microsoft.UI.Text.TextSetOptions.None, text);
         private async void ComposerBox_Paste(object sender, TextControlPasteEventArgs e)
         {
             if (_client is null || _isBusy || _operationCancellation is not null) return;
             var content = Clipboard.GetContent();
+            var containsAttachmentContent = content.Contains(StandardDataFormats.StorageItems) || content.Contains(StandardDataFormats.Bitmap);
+            if (containsAttachmentContent) e.Handled = true;
             var files = content.Contains(StandardDataFormats.StorageItems)
                 ? (await content.GetStorageItemsAsync()).OfType<StorageFile>().Where(IsMessageAttachmentFile).ToList()
                 : [];
             if (files.Count > 0)
             {
-                e.Handled = true;
                 await AddMessageAttachmentsAsync(files);
                 return;
             }
             if (!content.Contains(StandardDataFormats.Bitmap)) return;
 
-            e.Handled = true;
             StorageFile? clipboardImage = null;
             try
             {
@@ -910,65 +953,50 @@ namespace App.Pages
                 await output.FlushAsync();
                 await AddMessageAttachmentsAsync([clipboardImage], $"clipboard-{DateTime.Now:yyyyMMdd-HHmmss}.png");
             }
-            catch (Exception exception) { AddMessage(new ChatMessage(ChatItemKind.Error, "Clipboard attachment error", exception.Message)); }
-            finally { if (clipboardImage is not null) await clipboardImage.DeleteAsync(StorageDeleteOption.PermanentDelete); }
+            catch (Exception exception)
+            {
+                AddMessage(new ChatMessage(ChatItemKind.Error, "Clipboard attachment error", exception.Message));
+                if (clipboardImage is not null) await clipboardImage.DeleteAsync(StorageDeleteOption.PermanentDelete);
+            }
         }
 
         private async Task AddMessageAttachmentsAsync(IEnumerable<StorageFile> files, string? clipboardImageName = null)
         {
-            SetBusy(true, "Attaching clipboard item...");
-            try
+            var attachments = new List<ChatAttachment>();
+            foreach (var file in files)
             {
-                foreach (var file in files)
-                    _messageAttachments.Add(await UploadFileAsync(file, file.Path, clipboardImageName ?? GetClipboardAttachmentDisplayName(file)));
-                RefreshMessageAttachments();
+                var tokenName = CreateAttachmentTokenName();
+                attachments.Add(new ChatAttachment(
+                    file.Path,
+                    clipboardImageName ?? GetClipboardAttachmentDisplayName(file),
+                    file.ContentType,
+                    null,
+                    null,
+                    file.Path.StartsWith(ApplicationData.Current.TemporaryFolder.Path, StringComparison.OrdinalIgnoreCase),
+                    Guid.NewGuid(),
+                    file.FileType,
+                    tokenName));
             }
-            catch (Exception exception) { AddMessage(new ChatMessage(ChatItemKind.Error, "Clipboard attachment error", exception.Message)); }
-            finally { SetBusy(false); }
+            await InsertAttachmentTokensIntoComposerAsync(attachments);
         }
 
-        private void RefreshMessageAttachments()
+        private Task InsertAttachmentTokensIntoComposerAsync(IReadOnlyList<ChatAttachment> attachments)
         {
-            MessageAttachmentHost.Items.Clear();
-            foreach (var attachment in _messageAttachments)
-            {
-                var isImage = attachment.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
-                var removeButton = new Button
-                {
-                    Tag = attachment,
-                    Width = 24,
-                    Height = 24,
-                    Padding = new Thickness(0),
-                    Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
-                    BorderThickness = new Thickness(0),
-                    Content = new FontIcon { Glyph = "\uE711", FontSize = 9 }
-                };
-                removeButton.Click += RemoveMessageAttachmentButton_Click;
-                ToolTipService.SetToolTip(removeButton, $"Remove {attachment.DisplayName}");
-                var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
-                content.Children.Add(new Border
-                {
-                    Width = 28,
-                    Height = 28,
-                    CornerRadius = new CornerRadius(6),
-                    Background = (Brush)Application.Current.Resources[isImage ? "AccentFillColorSecondaryBrush" : "ControlFillColorTertiaryBrush"],
-                    Child = new FontIcon { Glyph = isImage ? "\uEB9F" : "\uE7C3", FontSize = 14, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
-                });
-                content.Children.Add(removeButton);
-                var chip = new Border
-                {
-                    HorizontalAlignment = HorizontalAlignment.Left,
-                    Padding = new Thickness(4),
-                    CornerRadius = new CornerRadius(8),
-                    Background = (Brush)Application.Current.Resources["ControlFillColorSecondaryBrush"],
-                    BorderBrush = (Brush)Application.Current.Resources["ControlStrokeColorDefaultBrush"],
-                    BorderThickness = new Thickness(1),
-                    Child = content
-                };
-                ToolTipService.SetToolTip(chip, attachment.DisplayName);
-                MessageAttachmentHost.Items.Add(chip);
-            }
+            if (attachments.Count == 0) return Task.CompletedTask;
+            var tokens = string.Join(" ", attachments.Select(CreateAttachmentToken));
+            var selection = ComposerBox.Document.Selection;
+            var selectionStart = selection.StartPosition;
+            var text = GetComposerText();
+            var hasTextBefore = selectionStart > 0 && !char.IsWhiteSpace(text[selectionStart - 1]);
+            var hasTextAfter = selectionStart < text.Length && !char.IsWhiteSpace(text[selectionStart]);
+            var prefix = hasTextBefore ? " " : string.Empty;
+            var insertion = $"{prefix}{tokens}{(hasTextAfter ? " " : string.Empty)}";
+            selection.Text = insertion;
+            ComposerBox.Document.Selection.SetRange(selectionStart + insertion.Length, selectionStart + insertion.Length);
+            _messageAttachments.AddRange(attachments);
+            FormatAttachmentTokens(selectionStart + prefix.Length, attachments);
             UpdateSendAvailability();
+            return Task.CompletedTask;
         }
 
         private static string GetClipboardAttachmentDisplayName(StorageFile file)
@@ -977,13 +1005,59 @@ namespace App.Pages
             return file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? "Pasted image" : "Pasted text file.txt";
         }
 
-        private async void RemoveMessageAttachmentButton_Click(object sender, RoutedEventArgs e)
+        private List<ChatAttachment> RemoveUnreferencedAttachments(string text)
         {
-            if (sender is not Button { Tag: ChatAttachment attachment } || _isBusy) return;
-            _messageAttachments.Remove(attachment);
-            await DeleteRemoteAttachmentsAsync([attachment]);
-            RefreshMessageAttachments();
+            var referencedTokens = AttachmentTokenRegex.Matches(text)
+                .Select(match => match.Groups["name"].Value)
+                .ToHashSet(StringComparer.Ordinal);
+            var removed = _messageAttachments
+                .Where(attachment => !referencedTokens.Contains(attachment.TokenName))
+                .ToList();
+            foreach (var attachment in removed)
+                _messageAttachments.Remove(attachment);
+            return removed;
         }
+
+        private List<ChatAttachment> GetReferencedAttachments(string text)
+        {
+            var attachmentsByToken = _messageAttachments
+                .GroupBy(attachment => attachment.TokenName, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            var referenced = new List<ChatAttachment>();
+            foreach (Match match in AttachmentTokenRegex.Matches(text))
+                if (attachmentsByToken.TryGetValue(match.Groups["name"].Value, out var attachment)) referenced.Add(attachment);
+            return referenced;
+        }
+
+        private static string CreateAttachmentToken(ChatAttachment attachment) =>
+            $"[{(attachment.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? "🖼" : "📎")} {attachment.TokenName}]";
+
+        private string CreateAttachmentTokenName()
+        {
+            string tokenName;
+            do
+            {
+                tokenName = $"{AttachmentTokenWords[Random.Shared.Next(AttachmentTokenWords.Length)]}-{Guid.NewGuid().ToString("N")[..4].ToUpperInvariant()}";
+            }
+            while (_messageAttachments.Any(attachment => attachment.TokenName.Equals(tokenName, StringComparison.Ordinal)));
+            return tokenName;
+        }
+
+        private void FormatAttachmentTokens(int startPosition, IReadOnlyList<ChatAttachment> attachments)
+        {
+            var position = startPosition;
+            foreach (var attachment in attachments)
+            {
+                var token = CreateAttachmentToken(attachment);
+                var range = ComposerBox.Document.GetRange(position, position + token.Length);
+                range.CharacterFormat.Bold = Microsoft.UI.Text.FormatEffect.On;
+                range.CharacterFormat.BackgroundColor = attachment.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+                    ? Microsoft.UI.Colors.DarkSlateBlue
+                    : Microsoft.UI.Colors.DarkSlateGray;
+                position += token.Length + 1;
+            }
+        }
+
         private async void ComposerBox_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
         {
             if (e.Key != global::Windows.System.VirtualKey.Enter) return;

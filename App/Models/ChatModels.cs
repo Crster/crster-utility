@@ -16,7 +16,16 @@ namespace App.Models
         public bool SupportsThinking { get; init; }
     }
 
-    internal sealed record ChatAttachment(string LocalPath, string DisplayName, string MimeType, string? RemoteName, string? RemoteUri);
+    internal sealed record ChatAttachment(
+        string LocalPath,
+        string DisplayName,
+        string MimeType,
+        string? RemoteName,
+        string? RemoteUri,
+        bool IsTemporary = false,
+        Guid AttachmentId = default,
+        string FileExtension = "",
+        string TokenName = "");
     internal sealed record GeminiFunctionCall(string Id, string Name, JsonObject Arguments);
     internal sealed record GeneratedImage(byte[] Data, string MimeType);
     internal sealed record GroundedSource(string Title, string Uri);
@@ -44,7 +53,7 @@ namespace App.Models
         ChatItemKind Kind,
         string Title,
         string Content,
-        IReadOnlyList<string>? AttachmentNames = null,
+        IReadOnlyList<ChatAttachment>? Attachments = null,
         GeneratedImage? Image = null,
         JsonObject? ToolArguments = null,
         bool? ToolSucceeded = null);
