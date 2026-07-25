@@ -136,7 +136,7 @@ namespace App.Services
             string systemInstruction,
             JsonArray? tools,
             CancellationToken cancellationToken,
-            bool highThinkingEnabled = false)
+            GeminiThinkingLevel thinkingLevel = GeminiThinkingLevel.Default)
         {
             var input = new JsonArray();
             foreach (var step in history) input.Add(step.DeepClone());
@@ -148,8 +148,11 @@ namespace App.Services
                 ["input"] = input,
                 ["system_instruction"] = systemInstruction
             };
-            if (highThinkingEnabled)
-                body["generation_config"] = new JsonObject { ["thinking_level"] = "high" };
+            if (thinkingLevel != GeminiThinkingLevel.Default)
+                body["generation_config"] = new JsonObject
+                {
+                    ["thinking_level"] = thinkingLevel == GeminiThinkingLevel.High ? "high" : "low"
+                };
             if (tools is not null && tools.Count > 0) body["tools"] = tools.DeepClone();
             using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/interactions");
             request.Content = JsonContent(body);

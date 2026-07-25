@@ -6,6 +6,7 @@ namespace App.Models
 {
     internal enum ChatItemKind { User, Assistant, Thinking, Tool, Error }
     internal enum ChatPersonality { Secretary, Technician }
+    internal enum GeminiThinkingLevel { Default, Low, High }
 
     internal sealed class GeminiModel
     {

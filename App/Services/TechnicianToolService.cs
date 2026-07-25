@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -60,7 +61,7 @@ namespace App.Services
             Function("clean_up", "Clear Technician chat and Context-panel text while retaining Technician memory.", new JsonObject()),
             Function("research", "Research current official documentation with Google Search grounding and return source-linked context.", Props(("topic", String())), "topic"),
             Function("plan", "Create a comprehensive implementation plan without editing workspace files.", Props(("request", String())), "request"),
-            Function("get_data", "Get current device or configured data using the Secretary data tool.", Props(("kind", String())), "kind")
+            Function("get_data", "Get local date/time, configured location or weather, clipboard text, language, or battery percentage. Do not use for hardware statistics.", Props(("kind", SecretaryToolService.DataKindSchema())), "kind")
         ];
 
         public async Task<ToolResult> ExecuteAsync(string name, JsonObject arguments, CancellationToken token)
@@ -97,6 +98,10 @@ namespace App.Services
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or FormatException)
             {
                 return Error("operation_failed", exception.Message);
+            }
+            catch (Win32Exception exception)
+            {
+                return Error("command_unavailable", exception.Message);
             }
             catch (Exception)
             {
@@ -292,7 +297,7 @@ namespace App.Services
 
         private static bool RequiresWorkspace(string toolName) => toolName is
             "read_file" or "write_file" or "patch_file" or "delete_file" or "search_file" or "list_file_and_directory"
-            or "execute" or "execute_sudo" or "list_process" or "kill_process" or "get_data";
+            or "execute" or "execute_sudo" or "list_process" or "kill_process";
 
         private static void ValidateNoReparsePoints(string root, string path)
         {

@@ -31,7 +31,7 @@ namespace App.Services
             Function("get_todo_categories", "List all todo categories and their descriptions.", new JsonObject()),
             Function("get_todos", "Get unfinished unscheduled todos and scheduled todos due now or within 30 minutes.", new JsonObject()),
             Function("write_todo", "Save a todo. notify is optional standard five-field cron text interpreted in local time.", Props(("value", String()), ("category", String()), ("notify", String())), "value", "category"),
-            Function("get_data", "Get one current local data value.", Props(("kind", DataKind())), "kind")
+            Function("get_data", "Get one current local data value.", Props(("kind", DataKindSchema())), "kind")
         };
 
         public async Task<ToolResult> ExecuteAsync(string name, JsonObject arguments, CancellationToken token)
@@ -248,7 +248,7 @@ namespace App.Services
             ["type"] = "string",
             ["enum"] = new JsonArray("personal", "career", "knowledge", "opinion", "idea", "relationship", "guide", "milestone")
         };
-        private static JsonObject DataKind() => new()
+        internal static JsonObject DataKindSchema() => new()
         {
             ["type"] = "string",
             ["enum"] = new JsonArray("local_datetime", "weather", "location", "clipboard", "language", "battery_percentage")
@@ -293,6 +293,7 @@ namespace App.Services
             public uint BatteryLifeTime;
             public uint BatteryFullLifeTime;
         }
+
 
         public void Dispose() => _weather.Dispose();
     }
