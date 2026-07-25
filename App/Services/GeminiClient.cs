@@ -135,7 +135,8 @@ namespace App.Services
             IReadOnlyList<JsonObject> newSteps,
             string systemInstruction,
             JsonArray? tools,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool highThinkingEnabled = false)
         {
             var input = new JsonArray();
             foreach (var step in history) input.Add(step.DeepClone());
@@ -147,6 +148,8 @@ namespace App.Services
                 ["input"] = input,
                 ["system_instruction"] = systemInstruction
             };
+            if (highThinkingEnabled)
+                body["generation_config"] = new JsonObject { ["thinking_level"] = "high" };
             if (tools is not null && tools.Count > 0) body["tools"] = tools.DeepClone();
             using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/interactions");
             request.Content = JsonContent(body);
@@ -154,6 +157,15 @@ namespace App.Services
             var root = await ReadJsonAsync(response, cancellationToken);
             return ParseInteraction(root);
         }
+
+        public Task<GeminiTurnResult> CreateGroundedInteractionAsync(string model, string prompt, string systemInstruction, CancellationToken cancellationToken) =>
+            CreateSimpleInteractionAsync(
+                model,
+                [],
+                [CreateUserStep(prompt, [])],
+                systemInstruction,
+                new JsonArray { new JsonObject { ["google_search"] = new JsonObject() } },
+                cancellationToken);
 
         public static JsonObject CreateUserStep(string text, IEnumerable<ChatAttachment> attachments)
         {
