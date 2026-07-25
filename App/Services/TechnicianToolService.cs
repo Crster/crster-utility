@@ -61,7 +61,8 @@ namespace App.Services
             Function("clean_up", "Clear Technician chat and Context-panel text while retaining Technician memory.", new JsonObject()),
             Function("research", "Research current official documentation with Google Search grounding and return source-linked context.", Props(("topic", String())), "topic"),
             Function("plan", "Create a comprehensive implementation plan without editing workspace files.", Props(("request", String())), "request"),
-            Function("get_data", "Get local date/time, configured location or weather, clipboard text, language, or battery percentage. Do not use for hardware statistics.", Props(("kind", SecretaryToolService.DataKindSchema())), "kind")
+            Function("design", "Create a UI/UX design brief that preserves consistent product patterns and guides a beautiful, accessible interface without editing workspace files.", Props(("request", String())), "request"),
+            Function("get_data", "Return only one of these local data values: local date/time, configured location, weather, clipboard text, language, or battery percentage. It cannot obtain any other data.", Props(("kind", SecretaryToolService.DataKindSchema())), "kind")
         ];
 
         public async Task<ToolResult> ExecuteAsync(string name, JsonObject arguments, CancellationToken token)
@@ -91,6 +92,7 @@ namespace App.Services
                     "clean_up" => await CleanUpAsync(),
                     "research" => await ResearchAsync(Required(arguments, "topic"), token),
                     "plan" => await PlanAsync(Required(arguments, "request"), token),
+                    "design" => await DesignAsync(Required(arguments, "request"), token),
                     "get_data" => await _secretaryTools.ExecuteAsync("get_data", arguments, token),
                     _ => Error("unknown_tool", $"Technician cannot use the tool “{name}”.")
                 };
@@ -274,6 +276,13 @@ namespace App.Services
             var result = await _client.CreateSimpleInteractionAsync("gemini-3.6-flash", [], [GeminiClient.CreateUserStep(request, [])],
                 "Create a comprehensive, implementation-ready plan. Do not execute changes. State assumptions, risks, interfaces, and validation.", null, token);
             return string.IsNullOrWhiteSpace(result.Text) ? Error("plan_unavailable", "gemini-3.6-flash did not return a plan.") : Ok("Generated an implementation plan.", new JsonObject { ["plan"] = result.Text });
+        }
+
+        private async Task<ToolResult> DesignAsync(string request, CancellationToken token)
+        {
+            var result = await _client.CreateSimpleInteractionAsync("gemini-3.6-flash", [], [GeminiClient.CreateUserStep(request, [])],
+                "Act as a senior UI/UX designer. Create a concise, implementation-ready design brief without editing files. Prefer current UI/UX design trends and contemporary visual conventions, while preserving and extending existing product patterns when context is available. Specify the user goal, information hierarchy, layout and responsive behavior, component and interaction states, accessibility requirements, visual direction, and implementation considerations. Prefer practical, consistent decisions over generic design advice.", null, token);
+            return string.IsNullOrWhiteSpace(result.Text) ? Error("design_unavailable", "gemini-3.6-flash did not return a design brief.") : Ok("Generated a UI/UX design brief.", new JsonObject { ["design"] = result.Text });
         }
 
         private string ResolveWorkspacePath(string path)
