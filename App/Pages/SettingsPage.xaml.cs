@@ -43,7 +43,7 @@ namespace App.Pages
             _loading = true;
             _settings = App.Settings.Current.Clone();
             StartupToggle.IsOn = _settings.StartWithWindows;
-            NotebookPathBox.Text = _settings.NotebookDataPath;
+            NotebookPathBox.Text = _settings.DatabaseFolder;
             GeminiApiKeyBox.Password = _settings.GeminiApiKey;
             SnapshotShortcutBox.ItemsSource = SnapshotShortcuts;
             SnapshotShortcutBox.SelectedItem = FindShortcut(SnapshotShortcuts, _settings.SnapshotShortcut);
@@ -107,12 +107,11 @@ namespace App.Pages
             var path = folder.Path;
             try
             {
-                if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(_settings.NotebookDataPath), StringComparison.OrdinalIgnoreCase)) return;
-                await NotebookDatabaseService.MigrateAsync(_settings.NotebookDataPath, path);
-                Save(settings => settings.NotebookDataPath = path);
+                if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(_settings.DatabaseFolder), StringComparison.OrdinalIgnoreCase)) return;
+                Save(settings => settings.DatabaseFolder = path);
                 NotebookPathBox.Text = path;
             }
-            catch (Exception exception) { StatusText.Text = $"Notebook move failed: {exception.Message}"; }
+            catch (Exception exception) { StatusText.Text = $"Database move failed: {exception.Message}"; }
         }
 
         private void GeminiApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e) { if (!_loading) Save(settings => settings.GeminiApiKey = GeminiApiKeyBox.Password.Trim()); }

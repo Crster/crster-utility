@@ -92,6 +92,30 @@ namespace App.Services
         public Task<float[]> EmbedRetrievalDocumentAsync(string title, string text, CancellationToken cancellationToken) =>
             EmbedAsync($"title: {(string.IsNullOrWhiteSpace(title) ? "none" : title.Trim())} | text: {text}", cancellationToken);
 
+        public Task<float[]> EmbedNoteAsync(string text, IReadOnlyList<AttachmentDocument> attachments, CancellationToken cancellationToken)
+        {
+            var parts = new JsonArray { new JsonObject { ["text"] = text.Length > 24_000 ? text[..24_000] : text } };
+            foreach (var attachment in attachments)
+            {
+                if (IsMultimodalEmbeddingType(attachment.Mimetype))
+                {
+                    parts.Add(new JsonObject
+                    {
+                        ["inline_data"] = new JsonObject
+                        {
+                            ["mime_type"] = attachment.Mimetype,
+                            ["data"] = Convert.ToBase64String(attachment.Value)
+                        }
+                    });
+                }
+                else
+                {
+                    parts.Add(new JsonObject { ["text"] = $"Attachment: {attachment.Filename}; MIME: {attachment.Mimetype}; size: {attachment.Size} bytes" });
+                }
+            }
+            return EmbedPartsAsync(parts, cancellationToken);
+        }
+
         public Task<GeminiTurnResult> LoadSkillAsync(string topic, CancellationToken cancellationToken)
         {
             var request = CreateUserStep(
@@ -111,9 +135,14 @@ namespace App.Services
         private async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken)
         {
             if (text.Length > 24_000) text = text[..24_000];
+            return await EmbedPartsAsync(new JsonArray { new JsonObject { ["text"] = text } }, cancellationToken);
+        }
+
+        private async Task<float[]> EmbedPartsAsync(JsonArray parts, CancellationToken cancellationToken)
+        {
             var body = new JsonObject
             {
-                ["content"] = new JsonObject { ["parts"] = new JsonArray { new JsonObject { ["text"] = text } } },
+                ["content"] = new JsonObject { ["parts"] = parts },
                 ["output_dimensionality"] = 768
             };
             using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/models/gemini-embedding-2:embedContent");
@@ -122,6 +151,12 @@ namespace App.Services
             var root = await ReadJsonAsync(response, cancellationToken);
             return root["embedding"]?["values"]?.AsArray().Select(value => value?.GetValue<float>() ?? 0f).ToArray() ?? throw new InvalidOperationException("Gemini returned no embedding values.");
         }
+
+        private static bool IsMultimodalEmbeddingType(string mimeType) =>
+            mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ||
+            mimeType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase) ||
+            mimeType.StartsWith("video/", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mimeType, "application/pdf", StringComparison.OrdinalIgnoreCase);
 
         public async Task<GeminiTurnResult> CreateInteractionAsync(
             string model,

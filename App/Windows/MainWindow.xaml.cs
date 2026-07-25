@@ -18,7 +18,6 @@ namespace App.Windows
     {
         private readonly NotebookDatabaseService _notebookDatabase = new();
         private int _searchVersion;
-        private CancellationTokenSource? _searchCancellation;
         private bool _allowClose;
         internal bool IsHiddenToTray { get; private set; }
         private static readonly FeatureSearchResult[] FeatureSearchResults =
@@ -159,9 +158,6 @@ namespace App.Windows
 
             var query = sender.Text.Trim();
             var searchVersion = ++_searchVersion;
-            _searchCancellation?.Cancel();
-            _searchCancellation?.Dispose();
-            _searchCancellation = new CancellationTokenSource();
             if (query.Length < 2)
             {
                 sender.ItemsSource = null;
@@ -170,8 +166,9 @@ namespace App.Windows
 
             try
             {
-                await Task.Delay(250, _searchCancellation.Token);
-                var notebookResults = await _notebookDatabase.SearchAsync(query, cancellationToken: _searchCancellation.Token);
+                await Task.Delay(1000);
+                if (searchVersion != _searchVersion) return;
+                var notebookResults = _notebookDatabase.FuzzySearch(query);
                 var featureResults = FeatureSearchResults
                     .Where(result => MatchesSearch(result.SearchTerms, query))
                     .ToList();
@@ -181,25 +178,56 @@ namespace App.Windows
                 if (searchVersion == _searchVersion && string.Equals(sender.Text.Trim(), query, StringComparison.Ordinal))
                     sender.ItemsSource = results;
             }
-            catch (OperationCanceledException)
+            catch (Exception exception)
             {
-                // A newer keystroke has already started a more relevant search.
+                System.Diagnostics.Debug.WriteLine($"Global search failed: {exception.Message}");
+                if (searchVersion == _searchVersion) sender.ItemsSource = null;
             }
         }
 
-        private void GlobalSearchBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs args)
+        private async void GlobalSearchBox_QuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
         {
-            if (args.SelectedItem is NotebookSearchResult notebookResult)
+            if (args.ChosenSuggestion is not null)
+            {
+                NavigateToSearchResult(args.ChosenSuggestion);
+                sender.Text = string.Empty;
+                sender.ItemsSource = null;
+                return;
+            }
+
+            var query = args.QueryText.Trim();
+            var searchVersion = ++_searchVersion;
+            if (query.Length < 2)
+            {
+                sender.ItemsSource = null;
+                return;
+            }
+
+            try
+            {
+                var notebookResults = await _notebookDatabase.SearchAsync(query);
+                if (searchVersion != _searchVersion) return;
+                var featureResults = FeatureSearchResults.Where(result => MatchesSearch(result.SearchTerms, query));
+                sender.ItemsSource = featureResults.Cast<object>().Concat(notebookResults).ToList();
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine($"Semantic search failed: {exception.Message}");
+                if (searchVersion == _searchVersion) sender.ItemsSource = null;
+            }
+        }
+
+        private void NavigateToSearchResult(object result)
+        {
+            if (result is NotebookSearchResult notebookResult)
             {
                 SidebarNavigation.SelectedItem = NotebookNavItem;
-                NavigationPresenter.Navigate(typeof(Pages.NotebookPage), notebookResult.EntryIndex);
+                NavigationPresenter.Navigate(typeof(Pages.NotebookPage), notebookResult.EntryKey);
             }
-            else if (args.SelectedItem is FeatureSearchResult featureResult)
+            else if (result is FeatureSearchResult featureResult)
             {
                 NavigateToFeature(featureResult.Destination);
             }
-            sender.Text = string.Empty;
-            sender.ItemsSource = null;
         }
 
         private static bool MatchesSearch(string text, string query) =>

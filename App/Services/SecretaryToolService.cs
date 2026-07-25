@@ -20,7 +20,7 @@ namespace App.Services
         {
             Function("search_notebook", "Search all notebook entries related to a topic without changing the notebook.", Props(("topic", String())), "topic"),
             Function("list_personal_info", "Return stored personal knowledge relevant to a topic.", Props(("topic", String())), "topic"),
-            Function("write_personal_info", "Save or replace durable personal knowledge for a topic. Do not save secrets, credentials, transient details, or speculation.", Props(("topic", String()), ("newknowledge", String())), "topic", "newknowledge"),
+            Function("write_personal_info", "Save durable personal knowledge as a categorized memo. Do not save secrets, credentials, transient details, or speculation.", Props(("topic", MemoTopic()), ("newknowledge", String())), "topic", "newknowledge"),
             Function("list_environment", "Return local environment information relevant to a topic, including PC details, current date/time/timezone, and weather when requested.", Props(("topic", String())), "topic"),
             Function("new_session", "Permanently clear Secretary chat history and begin a virtual new topic session. Call only after saving durable facts from the outgoing topic.", new JsonObject())
         };
@@ -64,7 +64,7 @@ namespace App.Services
             var results = await _notebook.SearchAsync(topic, 25, token);
             var items = new JsonArray();
             foreach (var result in results)
-                items.Add(new JsonObject { ["entry_index"] = result.EntryIndex, ["title"] = result.Title, ["preview"] = result.Details });
+                items.Add(new JsonObject { ["entry_key"] = result.EntryKey, ["title"] = result.Title, ["preview"] = result.Details });
             return Ok($"Found {items.Count} notebook entr{(items.Count == 1 ? "y" : "ies")}.", new JsonObject { ["items"] = items });
         }
 
@@ -104,6 +104,12 @@ namespace App.Services
         }
 
         private static JsonObject String() => new() { ["type"] = "string" };
+
+        private static JsonObject MemoTopic() => new()
+        {
+            ["type"] = "string",
+            ["enum"] = new JsonArray("personal", "career", "knowledge", "opinion", "idea", "relationship", "guide", "milestone")
+        };
 
         private static string RequiredString(JsonObject arguments, string name)
         {

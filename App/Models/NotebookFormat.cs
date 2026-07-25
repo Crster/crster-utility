@@ -11,8 +11,7 @@ namespace App.Models
         Password,
         File,
         Image,
-        Table,
-        Todo
+        Table
     }
 
     internal sealed record NoteSection(NoteSectionKind Kind, string Content, int SourceStart, int SourceLength);
@@ -31,10 +30,9 @@ namespace App.Models
                 var line = normalized[offset..lineEnd];
                 var lineLength = line.Length + (offset + line.Length < normalized.Length ? 1 : 0);
                 var isTable = line.StartsWith("@table:", StringComparison.Ordinal) && line[7..].Trim() == "{";
-                var isTodo = line.StartsWith("@todo:", StringComparison.Ordinal) && line[6..].Trim() == "{";
-                if ((isTable || isTodo) && TryReadSection(normalized, offset, lineLength, out var body, out var totalLength))
+                if (isTable && TryReadSection(normalized, offset, lineLength, out var body, out var totalLength))
                 {
-                    sections.Add(new NoteSection(isTable ? NoteSectionKind.Table : NoteSectionKind.Todo, body, offset, totalLength));
+                    sections.Add(new NoteSection(NoteSectionKind.Table, body, offset, totalLength));
                     offset += totalLength;
                     continue;
                 }
@@ -73,11 +71,7 @@ namespace App.Models
             foreach (var section in Parse(content))
             {
                 if (section.Kind is NoteSectionKind.File or NoteSectionKind.Image or NoteSectionKind.Password) continue;
-                if (section.Kind == NoteSectionKind.Todo)
-                {
-                    foreach (var line in section.Content.Split('\n')) parts.Add(line.TrimStart(' ', '-', '+'));
-                }
-                else if (section.Kind == NoteSectionKind.Table)
+                if (section.Kind == NoteSectionKind.Table)
                 {
                     parts.Add(section.Content.Replace(',', ' '));
                 }

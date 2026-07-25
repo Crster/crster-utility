@@ -18,7 +18,6 @@ namespace App.Pages
     public sealed partial class NotebookPage : Page
     {
         private readonly NotebookDatabaseService _database = new();
-        private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(400) };
         private readonly ObservableCollection<NotebookEntry> _entries = [];
         private NotebookAttachmentStorageService? _attachmentStorage;
         private NotebookEntry? _entryToEdit;
@@ -27,20 +26,19 @@ namespace App.Pages
         private bool _isLoading;
         private bool _isSaving;
         private bool _saveQueued;
-        private int? _searchResultIndex;
+        private string? _searchResultKey;
 
         public NotebookPage()
         {
             InitializeComponent();
             Loaded += NotebookPage_Loaded;
-            _saveTimer.Tick += async (_, _) => { _saveTimer.Stop(); await SaveNotebookAsync(); };
         }
 
         private async void NotebookPage_Loaded(object sender, RoutedEventArgs e)
         {
             _isLoading = true;
             _attachmentStorage = new NotebookAttachmentStorageService(_database.RootPath);
-            foreach (var entry in (await _database.LoadAsync()).OrderByDescending(entry => entry.Index)) _entries.Add(entry);
+            foreach (var entry in (await _database.LoadAsync()).OrderByDescending(entry => entry.Timestamp)) _entries.Add(entry);
             _isLoading = false;
             BlocksHost.ItemsSource = _entries;
         }
@@ -48,7 +46,7 @@ namespace App.Pages
         protected override void OnNavigatedTo(NavigationEventArgs e)
         {
             base.OnNavigatedTo(e);
-            _searchResultIndex = e.Parameter as int?;
+            _searchResultKey = e.Parameter as string;
         }
 
         private async void ToolButton_Click(object sender, RoutedEventArgs e)
@@ -65,7 +63,6 @@ namespace App.Pages
                 "italic" => ("(", ")"),
                 "password" => ("@password: ", string.Empty),
                 "table" => ("@table: {\r\n\"Header 1\",\"Header 2\"\r\n\"Value 1\",\"Value 2\"\r\n}", string.Empty),
-                "todo" => ("@todo: {\r\n- New task\r\n}", string.Empty),
                 _ => (string.Empty, string.Empty)
             });
         }
@@ -87,11 +84,9 @@ namespace App.Pages
 
         private NotebookEntry AddEntry(string content, bool startEditing)
         {
-            var index = _entries.Count == 0 ? 1 : _entries.Max(entry => entry.Index) + 1;
-            var entry = new NotebookEntry { Type = "note", Content = content, Index = index };
+            var entry = new NotebookEntry { Type = "note", Content = content, Timestamp = DateTime.UtcNow };
             _entryToEdit = startEditing ? entry : null;
             _entries.Insert(0, entry);
-            ScheduleSave();
             return entry;
         }
 
@@ -108,16 +103,16 @@ namespace App.Pages
             var startInEditMode = ReferenceEquals(entry, _entryToEdit);
             if (startInEditMode) _entryToEdit = null;
             block.Configure(entry, _attachmentStorage, startInEditMode);
-            block.ContentChanged -= Block_ContentChanged;
             block.RemoveRequested -= Block_RemoveRequested;
             block.InteractionStateChanged -= Block_InteractionStateChanged;
-            block.ContentChanged += Block_ContentChanged;
+            block.CommitRequested -= Block_CommitRequested;
             block.RemoveRequested += Block_RemoveRequested;
             block.InteractionStateChanged += Block_InteractionStateChanged;
+            block.CommitRequested += Block_CommitRequested;
 
-            if (_searchResultIndex == entry.Index)
+            if (string.Equals(_searchResultKey, entry.Key, StringComparison.OrdinalIgnoreCase))
             {
-                _searchResultIndex = null;
+                _searchResultKey = null;
                 _ = DispatcherQueue.TryEnqueue(() => { BlocksHost.ScrollIntoView(entry, ScrollIntoViewAlignment.Leading); block.HighlightSearchResult(); });
             }
         }
@@ -131,7 +126,7 @@ namespace App.Pages
             else if (ReferenceEquals(block, _focusedBlock)) _focusedBlock = null;
         }
 
-        private void Block_ContentChanged(object? sender, EventArgs e) => ScheduleSave();
+        private Task<bool> Block_CommitRequested(Noteblock block) => SaveNotebookAsync();
 
         private void Block_RemoveRequested(object? sender, EventArgs e)
         {
@@ -139,7 +134,7 @@ namespace App.Pages
             if (ReferenceEquals(block, _hoveredBlock)) _hoveredBlock = null;
             if (ReferenceEquals(block, _focusedBlock)) _focusedBlock = null;
             _entries.Remove(block.Entry);
-            ScheduleSave();
+            _ = SaveNotebookAsync();
         }
 
         private Noteblock? EnsureEditableBlock()
@@ -161,27 +156,36 @@ namespace App.Pages
             return null;
         }
 
-        private void ScheduleSave()
+        private async Task<bool> SaveNotebookAsync()
         {
-            if (_isLoading) return;
-            _saveTimer.Stop();
-            _saveTimer.Start();
-        }
-
-        private async Task SaveNotebookAsync()
-        {
-            if (_isSaving) { _saveQueued = true; return; }
+            if (_isLoading) return true;
+            if (_isSaving) { _saveQueued = true; return true; }
             _isSaving = true;
+            var saved = true;
             try
             {
                 do
                 {
                     _saveQueued = false;
-                    var snapshot = _entries.Select(entry => new NotebookEntry { Type = "note", Content = entry.Content, Index = entry.Index }).ToList();
-                    await Task.Run(() => _database.SaveAsync(snapshot));
+                    var snapshot = _entries.Select(entry => new NotebookEntry
+                    {
+                        Key = entry.Key, Type = "note", Content = entry.Content, Attachments = [.. entry.Attachments],
+                        Embedding = entry.Embedding, Timestamp = entry.Timestamp
+                    }).ToList();
+                    try
+                    {
+                        await _database.SaveAsync(snapshot);
+                        SaveStatusText.Text = string.Empty;
+                    }
+                    catch (Exception exception)
+                    {
+                        SaveStatusText.Text = $"Not saved: {exception.Message}";
+                        saved = false;
+                    }
                 } while (_saveQueued);
             }
             finally { _isSaving = false; }
+            return saved;
         }
     }
 }

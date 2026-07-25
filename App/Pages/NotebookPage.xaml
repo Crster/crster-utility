@@ -10,6 +10,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="14" />
                 <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <Grid>
@@ -29,7 +30,6 @@
                         <Button Tag="file" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="File"><SymbolIcon Symbol="Attach" /></Button>
                         <Button Tag="image" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Image"><SymbolIcon Symbol="Pictures" /></Button>
                         <Button Tag="table" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Table"><FontIcon Glyph="&#xF232;" /></Button>
-                        <Button Tag="todo" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Todo"><SymbolIcon Symbol="Bullets" /></Button>
                     </StackPanel>
                 </Border>
                 <Button Grid.Column="1" Tag="new" Click="ToolButton_Click" Content="New note" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False">
@@ -88,6 +88,11 @@
                 </ItemsPanelTemplate>
             </ListView.ItemsPanel>
         </ListView>
+        <TextBlock x:Name="SaveStatusText"
+                   Grid.Row="3"
+                   Margin="10,8,10,0"
+                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                   TextWrapping="Wrap" />
         </Grid>
     </Grid>
 </Page>

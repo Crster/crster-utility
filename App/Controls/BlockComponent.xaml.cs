@@ -29,12 +29,13 @@ namespace App.Controls
         private bool _isPointerOver;
         private bool _isEditorFocused;
         private bool _isInitialEditorFocus;
+        private bool _isCommitting;
         private bool _isSearchHighlighted;
         private readonly DispatcherTimer _initialFocusTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
 
-        public event EventHandler? ContentChanged;
         public event EventHandler? RemoveRequested;
         public event EventHandler? InteractionStateChanged;
+        public event Func<Noteblock, Task<bool>>? CommitRequested;
 
         internal NotebookEntry Entry => _entry ?? throw new InvalidOperationException("The noteblock has not been configured.");
         internal bool IsBlockPointerOver => _isPointerOver;
@@ -147,13 +148,12 @@ namespace App.Controls
 
         private FrameworkElement CreateSection(NoteSection section) => section.Kind switch
         {
-            NoteSectionKind.Title => CreateRichText(section.Content, 28, Microsoft.UI.Text.FontWeights.SemiBold),
+            NoteSectionKind.Title => CreateRichText(section.Content, 16, Microsoft.UI.Text.FontWeights.SemiBold),
             NoteSectionKind.Description => CreateRichText(section.Content, 13, Microsoft.UI.Text.FontWeights.Normal, (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]),
             NoteSectionKind.Password => CreatePassword(section.Content),
             NoteSectionKind.File => CreateAttachment(section.Content, false),
             NoteSectionKind.Image => CreateAttachment(section.Content, true),
             NoteSectionKind.Table => CreateTable(section.Content),
-            NoteSectionKind.Todo => CreateTodo(section),
             _ => CreateRichText(section.Content, 14, Microsoft.UI.Text.FontWeights.Normal)
         };
 
@@ -256,45 +256,6 @@ namespace App.Controls
             catch { }
         }
 
-        private FrameworkElement CreateTodo(NoteSection section)
-        {
-            var panel = new StackPanel { Spacing = 2 };
-            var lines = section.Content.Split('\n');
-            for (var index = 0; index < lines.Length; index++)
-            {
-                var trimmed = lines[index].TrimStart();
-                if (!trimmed.StartsWith('-') && !trimmed.StartsWith('+'))
-                {
-                    panel.Children.Add(new TextBlock { Text = lines[index], TextWrapping = TextWrapping.Wrap });
-                    continue;
-                }
-                var lineIndex = index;
-                var checkBox = new CheckBox { Content = trimmed[1..].TrimStart(), IsChecked = trimmed[0] == '+', Tag = lineIndex };
-                checkBox.Click += (_, _) => UpdateTodo(section, lineIndex, checkBox.IsChecked == true);
-                panel.Children.Add(checkBox);
-            }
-            return panel;
-        }
-
-        private void UpdateTodo(NoteSection section, int lineIndex, bool done)
-        {
-            if (_entry is null) return;
-            var content = NotebookFormat.Normalize(_entry.Content);
-            var lines = section.Content.Split('\n');
-            var relative = 0;
-            for (var index = 0; index < lineIndex; index++) relative += lines[index].Length + 1;
-            var marker = relative;
-            while (marker < relative + lines[lineIndex].Length && char.IsWhiteSpace(lines[lineIndex][marker - relative])) marker++;
-            var openingLineEnd = content.IndexOf('\n', section.SourceStart);
-            if (openingLineEnd < 0) return;
-            var absolute = openingLineEnd + 1 + marker;
-            if (absolute >= content.Length) return;
-            content = content[..absolute] + (done ? '+' : '-') + content[(absolute + 1)..];
-            _entry.Content = content;
-            ShowPreview();
-            ContentChanged?.Invoke(this, EventArgs.Empty);
-        }
-
         private static FrameworkElement CreateTable(string content)
         {
             var rows = ParseCsvRows(content);
@@ -356,7 +317,6 @@ namespace App.Controls
             if (_entry is null || sender is not TextBox editor) return;
             _entry.Content = editor.Text;
             ResizeEditor(editor);
-            ContentChanged?.Invoke(this, EventArgs.Empty);
         }
 
         private async void Editor_Paste(object sender, TextControlPasteEventArgs e)
@@ -391,13 +351,23 @@ namespace App.Controls
             InteractionStateChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        private void Editor_LostFocus(object sender, RoutedEventArgs e)
+        private async void Editor_LostFocus(object sender, RoutedEventArgs e)
         {
-            if (!ReferenceEquals(sender, _editor)) return;
+            if (!ReferenceEquals(sender, _editor) || _isCommitting) return;
             _isEditorFocused = false;
             InteractionStateChanged?.Invoke(this, EventArgs.Empty);
             if (_isInitialEditorFocus) { _ = DispatcherQueue.TryEnqueue(() => _editor?.Focus(FocusState.Keyboard)); return; }
             if (RemoveIfEmpty()) return;
+            _isCommitting = true;
+            var committed = CommitRequested is null || await CommitRequested.Invoke(this);
+            _isCommitting = false;
+            if (!committed)
+            {
+                _isEditorFocused = true;
+                InteractionStateChanged?.Invoke(this, EventArgs.Empty);
+                _ = DispatcherQueue.TryEnqueue(() => _editor?.Focus(FocusState.Keyboard));
+                return;
+            }
             ShowPreview();
         }
 

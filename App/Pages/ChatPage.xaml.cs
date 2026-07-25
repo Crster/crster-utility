@@ -37,7 +37,7 @@ namespace App.Pages
             ".pdf", ".doc", ".docx", ".xls", ".xlsx"
         ];
         private static readonly Regex LocalPathPattern = new("(?<!\\w)(?:[A-Za-z]:\\\\[^\\r\\n\\\"'<>|*?]+|\\\\\\\\[^\\s\\\"'<>|*?]+)", RegexOptions.Compiled);
-        private readonly SecureSettingsService _settingsService = new();
+        private readonly SecureSettingsService _settingsService = App.Settings;
         private readonly ChatToolService _tools = new();
         private readonly ChatLogService _chatLog = new();
         private readonly Dictionary<ChatPersonality, ChatSession> _sessions = Enum.GetValues<ChatPersonality>().ToDictionary(item => item, _ => new ChatSession());

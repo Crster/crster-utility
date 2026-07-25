@@ -1,3 +1,5 @@
+using App.Models;
+using LiteDB;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -6,10 +8,11 @@ using System.Threading.Tasks;
 
 namespace App.Services
 {
-    internal sealed class SecureSettingsService
+    internal sealed class SecureSettingsService : IDisposable
     {
         private const string SettingsDirectoryName = "crster\\utility";
         private readonly string _path;
+        private LiteDatabaseService? _database;
 
         public SecureSettingsService()
         {
@@ -17,25 +20,27 @@ namespace App.Services
         }
 
         public string Path => _path;
+        public bool IsConfigured { get; private set; }
         public AppSettings Current { get; private set; } = AppSettings.CreateDefault();
+        public LiteDatabaseService Database => _database ?? throw new InvalidOperationException("Application storage has not been configured.");
         public event EventHandler<AppSettings>? Changed;
 
         public AppSettings Load()
         {
+            IsConfigured = false;
+            if (!File.Exists(_path)) return Current = AppSettings.CreateDefault();
             try
             {
-                if (!File.Exists(_path))
-                {
-                    Current = AppSettings.CreateDefault();
-                    Save(Current);
-                    return Current;
-                }
-
                 var values = Parse(File.ReadAllLines(_path));
-                Current = AppSettings.FromValues(values);
+                var folder = Read(values, "Storage.DatabaseFolder");
+                var apiKey = Read(values, "Gemini.ApiKey");
+                if (string.IsNullOrWhiteSpace(folder) || string.IsNullOrWhiteSpace(apiKey)) return Current = AppSettings.CreateDefault();
+                Initialize(folder, apiKey);
             }
             catch
             {
+                _database?.Dispose();
+                _database = null;
                 Current = AppSettings.CreateDefault();
             }
             return Current;
@@ -43,20 +48,89 @@ namespace App.Services
 
         public Task<AppSettings> LoadAsync() => Task.FromResult(Load());
 
+        public void Configure(string databaseFolder, string geminiApiKey)
+        {
+            databaseFolder = System.IO.Path.GetFullPath(databaseFolder.Trim());
+            geminiApiKey = geminiApiKey.Trim();
+            if (geminiApiKey.Length == 0) throw new InvalidOperationException("A Gemini API key is required.");
+            Directory.CreateDirectory(databaseFolder);
+            Initialize(databaseFolder, geminiApiKey);
+            WriteBootstrap(databaseFolder, geminiApiKey);
+        }
+
+        private void Initialize(string databaseFolder, string geminiApiKey)
+        {
+            _database?.Dispose();
+            _database = new LiteDatabaseService(System.IO.Path.Combine(databaseFolder, "CrsterUtility.db"));
+            SeedSettings(_database.Settings);
+            Current = AppSettings.FromDatabase(databaseFolder, geminiApiKey, _database.Settings);
+            IsConfigured = true;
+        }
+
         public void Save(AppSettings settings)
         {
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
-            var temp = $"{_path}.{Guid.NewGuid():N}.tmp";
-            File.WriteAllLines(temp, settings.ToIniLines());
-            File.Move(temp, _path, true);
+            if (!IsConfigured) throw new InvalidOperationException("Application storage has not been configured.");
+            if (!string.Equals(Current.DatabaseFolder, settings.DatabaseFolder, StringComparison.OrdinalIgnoreCase))
+                MoveDatabase(settings.DatabaseFolder);
+
+            var collection = Database.Settings;
+            foreach (var definition in AppSettings.Definitions)
+            {
+                var document = collection.FindById(definition.Key)!;
+                document.Value = definition.Read(settings);
+                collection.Update(document);
+            }
+            WriteBootstrap(settings.DatabaseFolder, settings.GeminiApiKey);
             Current = settings;
             Changed?.Invoke(this, settings);
         }
 
-        public Task SaveAsync(AppSettings settings)
+        public Task SaveAsync(AppSettings settings) { Save(settings); return Task.CompletedTask; }
+
+        public void Reset(string key)
         {
-            Save(settings);
-            return Task.CompletedTask;
+            var document = Database.Settings.FindById(key) ?? throw new KeyNotFoundException($"Unknown setting '{key}'.");
+            document.Value = document.Default;
+            Database.Settings.Update(document);
+            Current = AppSettings.FromDatabase(Current.DatabaseFolder, Current.GeminiApiKey, Database.Settings);
+            Changed?.Invoke(this, Current);
+        }
+
+        private void MoveDatabase(string destinationFolder)
+        {
+            destinationFolder = System.IO.Path.GetFullPath(destinationFolder);
+            Directory.CreateDirectory(destinationFolder);
+            var sourcePath = Database.Path;
+            var destinationPath = System.IO.Path.Combine(destinationFolder, "CrsterUtility.db");
+            if (string.Equals(sourcePath, destinationPath, StringComparison.OrdinalIgnoreCase)) return;
+            if (File.Exists(destinationPath)) throw new IOException("The selected folder already contains CrsterUtility.db.");
+            _database?.Dispose();
+            try
+            {
+                File.Copy(sourcePath, destinationPath, false);
+                using (var probe = new LiteDatabaseService(destinationPath)) _ = probe.Settings.Count();
+                _database = new LiteDatabaseService(destinationPath);
+            }
+            catch
+            {
+                _database = new LiteDatabaseService(sourcePath);
+                throw;
+            }
+        }
+
+        private static void SeedSettings(ILiteCollection<SettingDocument> collection)
+        {
+            foreach (var definition in AppSettings.Definitions)
+                if (collection.FindById(definition.Key) is null)
+                    collection.Insert(new SettingDocument { Key = definition.Key, Name = definition.Name, Value = definition.Default, Default = definition.Default });
+        }
+
+        private void WriteBootstrap(string databaseFolder, string apiKey)
+        {
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
+            var temporaryPath = $"{_path}.{Guid.NewGuid():N}.tmp";
+            File.WriteAllLines(temporaryPath, ["[Storage]", $"DatabaseFolder={databaseFolder}", "", "[Gemini]", $"ApiKey={apiKey}"]);
+            File.Move(temporaryPath, _path, true);
         }
 
         private static Dictionary<string, string> Parse(IEnumerable<string> lines)
@@ -69,18 +143,34 @@ namespace App.Services
                 if (line.Length == 0 || line.StartsWith(';') || line.StartsWith('#')) continue;
                 if (line.StartsWith('[') && line.EndsWith(']')) { section = line[1..^1]; continue; }
                 var separator = line.IndexOf('=');
-                if (separator <= 0) continue;
-                result[$"{section}.{line[..separator].Trim()}"] = line[(separator + 1)..].Trim();
+                if (separator > 0) result[$"{section}.{line[..separator].Trim()}"] = line[(separator + 1)..].Trim();
             }
             return result;
         }
+
+        private static string Read(IReadOnlyDictionary<string, string> values, string key) => values.TryGetValue(key, out var value) ? value : string.Empty;
+        public void Dispose() => _database?.Dispose();
     }
+
+    internal sealed record SettingDefinition(string Key, string Name, BsonValue Default, Func<AppSettings, BsonValue> Read);
 
     internal sealed class AppSettings
     {
-        public bool StartWithWindows { get; set; }
-        public string NotebookDataPath { get; set; } = string.Empty;
+        internal static readonly IReadOnlyList<SettingDefinition> Definitions =
+        [
+            new("general.startWithWindows", "Start with Windows", false, value => value.StartWithWindows),
+            new("snapshot.shortcut", "Snapshot shortcut", "PrintScreen", value => value.SnapshotShortcut),
+            new("snapshot.captureMouseCursor", "Capture mouse cursor", true, value => value.SnapshotCaptureMouseCursor),
+            new("recording.microphoneDeviceId", "Recording microphone", "", value => value.RecordingMicrophoneDeviceId),
+            new("caffeine.shortcut", "Caffeine shortcut", "Ctrl+Shift+Alt+F12", value => value.CaffeineShortcut),
+            new("gemini.lastModel", "Last Gemini model", "", value => value.LastGeminiModel),
+            new("gemini.lastChatPersonality", "Last chat personality", "Smart", value => value.LastChatPersonality)
+        ];
+
+        public string DatabaseFolder { get; set; } = string.Empty;
+        public string NotebookDataPath { get => DatabaseFolder; set => DatabaseFolder = value; }
         public string GeminiApiKey { get; set; } = string.Empty;
+        public bool StartWithWindows { get; set; }
         public string SnapshotShortcut { get; set; } = "PrintScreen";
         public bool SnapshotCaptureMouseCursor { get; set; } = true;
         public string RecordingMicrophoneDeviceId { get; set; } = string.Empty;
@@ -90,37 +180,27 @@ namespace App.Services
 
         public static AppSettings CreateDefault() => new()
         {
-            NotebookDataPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "crster", "utility", "notebook")
+            DatabaseFolder = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "crster", "utility")
         };
 
-        public static AppSettings FromValues(IReadOnlyDictionary<string, string> values)
+        internal static AppSettings FromDatabase(string folder, string apiKey, ILiteCollection<SettingDocument> collection)
         {
-            var settings = CreateDefault();
-            settings.StartWithWindows = ReadBool("General.StartWithWindows", settings.StartWithWindows);
-            settings.NotebookDataPath = Read("Notebook.DataPath", settings.NotebookDataPath);
-            settings.GeminiApiKey = Read("Gemini.ApiKey", settings.GeminiApiKey);
-            settings.LastGeminiModel = Read("Gemini.LastModel", settings.LastGeminiModel);
-            settings.LastChatPersonality = Read("Gemini.LastChatPersonality", settings.LastChatPersonality);
-            settings.SnapshotShortcut = Read("Snapshot.Shortcut", settings.SnapshotShortcut);
-            settings.SnapshotCaptureMouseCursor = ReadBool("Snapshot.CaptureMouseCursor", settings.SnapshotCaptureMouseCursor);
-            settings.RecordingMicrophoneDeviceId = Read("Recording.MicrophoneDeviceId", settings.RecordingMicrophoneDeviceId);
-            settings.CaffeineShortcut = Read("Caffeine.Shortcut", settings.CaffeineShortcut);
-            return settings;
+            var result = CreateDefault();
+            result.DatabaseFolder = folder;
+            result.GeminiApiKey = apiKey;
+            result.StartWithWindows = Bool("general.startWithWindows", result.StartWithWindows);
+            result.SnapshotShortcut = Text("snapshot.shortcut", result.SnapshotShortcut);
+            result.SnapshotCaptureMouseCursor = Bool("snapshot.captureMouseCursor", result.SnapshotCaptureMouseCursor);
+            result.RecordingMicrophoneDeviceId = Text("recording.microphoneDeviceId", result.RecordingMicrophoneDeviceId);
+            result.CaffeineShortcut = Text("caffeine.shortcut", result.CaffeineShortcut);
+            result.LastGeminiModel = Text("gemini.lastModel", result.LastGeminiModel);
+            result.LastChatPersonality = Text("gemini.lastChatPersonality", result.LastChatPersonality);
+            return result;
 
-            string Read(string key, string fallback) => values.TryGetValue(key, out var value) ? value : fallback;
-            bool ReadBool(string key, bool fallback) => values.TryGetValue(key, out var value) && bool.TryParse(value, out var parsed) ? parsed : fallback;
+            string Text(string key, string fallback) => collection.FindById(key)?.Value is { IsString: true } value ? value.AsString : fallback;
+            bool Bool(string key, bool fallback) => collection.FindById(key)?.Value is { IsBoolean: true } value ? value.AsBoolean : fallback;
         }
 
         public AppSettings Clone() => (AppSettings)MemberwiseClone();
-
-        public IEnumerable<string> ToIniLines() =>
-        [
-            "[General]", $"StartWithWindows={StartWithWindows}", "",
-            "[Notebook]", $"DataPath={NotebookDataPath}", "",
-            "[Gemini]", $"ApiKey={GeminiApiKey}", $"LastModel={LastGeminiModel}", $"LastChatPersonality={LastChatPersonality}", "",
-            "[Snapshot]", $"Shortcut={SnapshotShortcut}", $"CaptureMouseCursor={SnapshotCaptureMouseCursor}", "",
-            "[Recording]", $"MicrophoneDeviceId={RecordingMicrophoneDeviceId}", "",
-            "[Caffeine]", $"Shortcut={CaffeineShortcut}"
-        ];
     }
 }

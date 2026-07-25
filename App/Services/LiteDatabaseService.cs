@@ -1,0 +1,42 @@
+using App.Models;
+using LiteDB;
+using System;
+using System.IO;
+
+namespace App.Services
+{
+    internal sealed class LiteDatabaseService : IDisposable
+    {
+        private readonly LiteDatabase _database;
+
+        public LiteDatabaseService(string path)
+        {
+            Path = System.IO.Path.GetFullPath(path);
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+            _database = new LiteDatabase(new ConnectionString { Filename = Path, Connection = ConnectionType.Shared });
+            Configure();
+        }
+
+        public string Path { get; }
+        public ILiteDatabase Database => _database;
+        public ILiteCollection<SettingDocument> Settings => _database.GetCollection<SettingDocument>("Settings");
+        public ILiteCollection<NotebookEntry> Notes => _database.GetCollection<NotebookEntry>("Notes");
+        public ILiteCollection<AttachmentDocument> Attachments => _database.GetCollection<AttachmentDocument>("Attachments");
+        public ILiteCollection<MemoDocument> Memos => _database.GetCollection<MemoDocument>("Memos");
+        public ILiteCollection<TodoDocument> Todos => _database.GetCollection<TodoDocument>("Todos");
+        public ILiteCollection<TodoCategoryDocument> TodoCategories => _database.GetCollection<TodoCategoryDocument>("TodoCategories");
+
+        private void Configure()
+        {
+            Notes.EnsureIndex(item => item.Timestamp);
+            Attachments.EnsureIndex(item => item.Hash);
+            Memos.EnsureIndex(item => item.Topic);
+            Memos.EnsureIndex(item => item.Timestamp);
+            Todos.EnsureIndex(item => item.Category);
+            Todos.EnsureIndex(item => item.IsDone);
+            Todos.EnsureIndex(item => item.CreatedAt);
+        }
+
+        public void Dispose() => _database.Dispose();
+    }
+}

@@ -10,6 +10,7 @@ namespace App
         public static NotifyIconService? SystemTray { get; private set; }
         internal static SecureSettingsService Settings { get; } = new();
         private KeyboardService? _keyboard;
+        private Windows.FirstRunWindow? _firstRunWindow;
         private bool _redirectedLaunchPending;
 
         public App()
@@ -21,6 +22,22 @@ namespace App
         {
             var isStartupActivation = AppInstance.GetCurrent().GetActivatedEventArgs()?.Kind == ExtendedActivationKind.StartupTask;
             Settings.Load();
+            if (!Settings.IsConfigured)
+            {
+                _firstRunWindow = new Windows.FirstRunWindow();
+                _firstRunWindow.SetupCompleted += (_, _) =>
+                {
+                    _firstRunWindow = null;
+                    InitializeMainWindow(false);
+                };
+                _firstRunWindow.Activate();
+                return;
+            }
+            InitializeMainWindow(isStartupActivation);
+        }
+
+        private void InitializeMainWindow(bool isStartupActivation)
+        {
             App.MainWindow = new Windows.MainWindow();
             if (isStartupActivation)
                 (App.MainWindow as Windows.MainWindow)?.HideToTray();

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="App.Windows.FirstRunWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Set up Crster Utility">
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid Padding="32">
+        <Border MaxWidth="620" Padding="28" HorizontalAlignment="Center" VerticalAlignment="Center"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12">
+            <StackPanel Spacing="18">
+                <StackPanel Spacing="5">
+                    <TextBlock Text="Set up Crster Utility" Style="{StaticResource TitleTextBlockStyle}" />
+                    <TextBlock Text="Choose where to store the database and provide Gemini API key for smart functionality." TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Database folder" FontWeight="SemiBold" />
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <TextBox x:Name="DatabaseFolderBox" PlaceholderText="Folder for CrsterUtility.db" />
+                        <Button Grid.Column="1" Content="Browse" Click="BrowseButton_Click" />
+                    </Grid>
+                </StackPanel>
+                <PasswordBox x:Name="GeminiApiKeyBox" Header="Gemini API key" PlaceholderText="Paste your Gemini API key" />
+                <TextBlock x:Name="StatusText" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" />
+                <Button x:Name="ContinueButton" Content="Continue" HorizontalAlignment="Right" Click="ContinueButton_Click" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

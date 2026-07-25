@@ -1,299 +1,211 @@
+using App.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using App.Models;
-using Windows.Storage;
 
 namespace App.Services
 {
     internal sealed class NotebookDatabaseService
     {
-        private readonly string _documentPath;
-        private readonly string _indexPath;
-        private static readonly object SearchIndexLock = new();
-        private static readonly TimeSpan SearchIndexIdleTimeout = TimeSpan.FromMinutes(3);
-        private static NotebookSearchIndex? _searchIndex;
-        private static Task<NotebookSearchIndex>? _searchIndexTask;
-        private static Timer? _searchIndexEvictionTimer;
+        private const double MinimumSearchSimilarity = 0.45;
+        private const double MaximumSimilarityDropFromBest = 0.12;
 
-        public NotebookDatabaseService()
-        {
-            var configuredPath = App.Settings.Current.NotebookDataPath;
-            RootPath = GetUsableRootPath(configuredPath);
-            if (!string.Equals(configuredPath, RootPath, StringComparison.OrdinalIgnoreCase))
-            {
-                var fallbackSettings = App.Settings.Current.Clone();
-                fallbackSettings.NotebookDataPath = RootPath;
-                try { App.Settings.Save(fallbackSettings); } catch { }
-            }
-            _documentPath = Path.Combine(RootPath, "notebook.json");
-            _indexPath = Path.Combine(RootPath, "notebook-index.b59vdb");
-        }
+        public NotebookDatabaseService() { }
 
-        public string RootPath { get; }
+        private LiteDatabaseService Database => App.Settings.Database;
+        public string RootPath => System.IO.Path.Combine(System.IO.Path.GetTempPath(), "CrsterUtility", "Attachments");
 
-        private static string GetUsableRootPath(string configuredPath)
-        {
-            if (CanAccessDirectory(configuredPath)) return configuredPath;
-            var fallbackPath = Path.Combine(ApplicationData.Current.LocalFolder.Path, "Notebook");
-            if (!CanAccessDirectory(fallbackPath))
-                throw new IOException("The configured notebook folder is unavailable and the app-data fallback could not be accessed.");
-            return fallbackPath;
-        }
-
-        private static bool CanAccessDirectory(string path)
-        {
-            try
-            {
-                Directory.CreateDirectory(path);
-                var probePath = Path.Combine(path, $".crster-access-{Guid.NewGuid():N}.tmp");
-                using (File.Create(probePath)) { }
-                File.Delete(probePath);
-                if (File.Exists(Path.Combine(path, "notebook.json")))
-                    using (File.Open(Path.Combine(path, "notebook.json"), FileMode.Open, FileAccess.Read, FileShare.Read)) { }
-                return true;
-            }
-            catch { return false; }
-        }
-
-        public static async Task MigrateAsync(string sourcePath, string destinationPath)
-        {
-            sourcePath = Path.GetFullPath(sourcePath);
-            destinationPath = Path.GetFullPath(destinationPath);
-            if (string.Equals(sourcePath, destinationPath, StringComparison.OrdinalIgnoreCase)) return;
-            if (destinationPath.StartsWith(sourcePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("The new notebook folder cannot be inside the current notebook folder.");
-            if (!Directory.Exists(sourcePath)) { Directory.CreateDirectory(destinationPath); return; }
-
-            await Task.Run(() =>
-            {
-                Directory.CreateDirectory(destinationPath);
-                foreach (var directory in Directory.GetDirectories(sourcePath, "*", SearchOption.AllDirectories))
-                    Directory.CreateDirectory(Path.Combine(destinationPath, Path.GetRelativePath(sourcePath, directory)));
-                foreach (var file in Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories))
-                    File.Copy(file, Path.Combine(destinationPath, Path.GetRelativePath(sourcePath, file)), true);
-                Directory.Delete(sourcePath, true);
-            });
-            lock (SearchIndexLock)
-            {
-                _searchIndex = null;
-                _searchIndexTask = null;
-            }
-        }
-
-        public async Task<List<NotebookEntry>> LoadAsync()
-        {
-            return await LoadEntriesFromDiskAsync();
-        }
+        public Task<List<NotebookEntry>> LoadAsync() =>
+            Task.FromResult(Database.Notes.Query().OrderByDescending(item => item.Timestamp).ToList());
 
         public async Task<List<NotebookSearchResult>> SearchAsync(string query, int maximumResults = 10, CancellationToken cancellationToken = default)
         {
-            var terms = ExtractSearchTerms(query);
-            if (terms.Count == 0) return [];
+            if (string.IsNullOrWhiteSpace(query)) return [];
+            using var gemini = new GeminiClient(App.Settings.Current.GeminiApiKey);
+            var embedding = await gemini.EmbedRetrievalQueryAsync(query, cancellationToken);
+            var ranked = Database.Notes.FindAll()
+                .Where(item => item.Embedding.Length > 0)
+                .Select(item => (Item: item, Score: Cosine(embedding, BytesToFloats(item.Embedding))))
+                .Where(item => item.Score >= MinimumSearchSimilarity)
+                .OrderByDescending(item => item.Score)
+                .ThenByDescending(item => item.Item.Timestamp)
+                .ToList();
+            if (ranked.Count == 0) return [];
 
-            var searchIndex = await GetSearchIndexAsync();
-            TouchSearchIndex();
-            return await Task.Run(() => searchIndex.Search(terms, maximumResults, cancellationToken), cancellationToken);
+            var relativeCutoff = ranked[0].Score - MaximumSimilarityDropFromBest;
+            return ranked
+                .Where(item => item.Score >= relativeCutoff)
+                .Take(maximumResults)
+                .Select(item => new NotebookSearchResult
+                {
+                    EntryKey = item.Item.Key,
+                    Title = NotebookFormat.GetTitle(item.Item.Content) ?? "Note",
+                    Details = Preview(item.Item.Content)
+                }).ToList();
         }
 
-        public async Task<NotebookEntry?> GetEntryAsync(int entryIndex, CancellationToken cancellationToken = default)
+        public List<NotebookSearchResult> FuzzySearch(string query, int maximumResults = 10)
         {
-            var entries = await LoadEntriesFromDiskAsync();
+            var queryTerms = Terms(query);
+            if (queryTerms.Count == 0) return [];
+
+            return Database.Notes.FindAll()
+                .Select(item => (Item: item, Score: FuzzyScore(queryTerms, Terms(NotebookFormat.CreateSearchText(item.Content)))))
+                .Where(item => item.Score > 0)
+                .OrderByDescending(item => item.Score)
+                .ThenByDescending(item => item.Item.Timestamp)
+                .Take(maximumResults)
+                .Select(item => new NotebookSearchResult
+                {
+                    EntryKey = item.Item.Key,
+                    Title = NotebookFormat.GetTitle(item.Item.Content) ?? "Note",
+                    Details = Preview(item.Item.Content)
+                }).ToList();
+        }
+
+        public Task<NotebookEntry?> GetEntryAsync(string entryKey, CancellationToken cancellationToken = default)
+        {
             cancellationToken.ThrowIfCancellationRequested();
-            var entry = entries.FirstOrDefault(item => item.Index == entryIndex);
-            return entry is null ? null : CloneEntry(entry);
+            return Task.FromResult<NotebookEntry?>(Database.Notes.FindById(entryKey));
         }
 
         public async Task SaveAsync(IEnumerable<NotebookEntry> entries)
         {
-            var orderedEntries = entries.OrderByDescending(entry => entry.Index).ToList();
-            var temporaryPath = $"{_documentPath}.{Guid.NewGuid():N}.tmp";
-            await using (var stream = File.Create(temporaryPath))
-                await JsonSerializer.SerializeAsync(stream, new NotebookDocument { Entries = orderedEntries }, new JsonSerializerOptions { WriteIndented = true });
-            File.Move(temporaryPath, _documentPath, true);
-
-            bool shouldRefreshSearchIndex;
-            lock (SearchIndexLock) shouldRefreshSearchIndex = _searchIndex is not null;
-            if (shouldRefreshSearchIndex)
+            var incoming = entries.ToList();
+            var existing = Database.Notes.FindAll().ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
+            var prepared = new List<NotebookEntry>();
+            using var gemini = new GeminiClient(App.Settings.Current.GeminiApiKey);
+            try
             {
-                var searchIndex = await Task.Run(() => NotebookSearchIndex.Create(orderedEntries), CancellationToken.None);
-                SetSearchIndex(searchIndex);
-            }
-        }
-
-        private Task<NotebookSearchIndex> GetSearchIndexAsync()
-        {
-            lock (SearchIndexLock)
-            {
-                if (_searchIndex is not null) return Task.FromResult(_searchIndex);
-                return _searchIndexTask ??= CreateSearchIndexAsync();
-            }
-        }
-
-        private async Task<NotebookSearchIndex> CreateSearchIndexAsync()
-        {
-            var entries = await LoadEntriesFromDiskAsync();
-            var searchIndex = await Task.Run(() => NotebookSearchIndex.Create(entries));
-            SetSearchIndex(searchIndex);
-            return searchIndex;
-        }
-
-        private async Task<List<NotebookEntry>> LoadEntriesFromDiskAsync()
-        {
-            if (!File.Exists(_documentPath)) return [];
-
-            var entries = await Task.Run(async () =>
-            {
-                await using var stream = File.OpenRead(_documentPath);
-                return (await JsonSerializer.DeserializeAsync<NotebookDocument>(stream))?.Entries ?? [];
-            });
-            foreach (var entry in entries) entry.Type = "note";
-            return entries.OrderByDescending(entry => entry.Index).ToList();
-        }
-
-        private static void SetSearchIndex(NotebookSearchIndex searchIndex)
-        {
-            lock (SearchIndexLock)
-            {
-                _searchIndex = searchIndex;
-                _searchIndexTask = Task.FromResult(searchIndex);
-                _searchIndexEvictionTimer ??= new Timer(_ => ReleaseIdleSearchIndex());
-                _searchIndexEvictionTimer.Change(SearchIndexIdleTimeout, Timeout.InfiniteTimeSpan);
-            }
-        }
-
-        private static void TouchSearchIndex()
-        {
-            lock (SearchIndexLock)
-                _searchIndexEvictionTimer?.Change(SearchIndexIdleTimeout, Timeout.InfiniteTimeSpan);
-        }
-
-        private static void ReleaseIdleSearchIndex()
-        {
-            lock (SearchIndexLock)
-            {
-                _searchIndex = null;
-                _searchIndexTask = null;
-                _searchIndexEvictionTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-            }
-        }
-
-        private static string CreateSearchPreview(NotebookEntry entry)
-        {
-            var content = NotebookFormat.CreateSearchText(entry.Content);
-            if (string.IsNullOrWhiteSpace(content)) content = "Note";
-            return content.Length <= 120 ? content : $"{content[..117]}...";
-        }
-
-        private static NotebookEntry CloneEntry(NotebookEntry entry) => new()
-        {
-            Type = entry.Type,
-            Content = entry.Content,
-            Index = entry.Index
-        };
-
-        private static List<string> ExtractSearchTerms(string text)
-        {
-            var terms = new List<string>();
-            var token = new System.Text.StringBuilder();
-            foreach (var character in text)
-            {
-                if (char.IsLetterOrDigit(character)) token.Append(char.ToLowerInvariant(character));
-                else AddSearchTerm(token, terms);
-            }
-
-            AddSearchTerm(token, terms);
-            return terms;
-        }
-
-        private static void AddSearchTerm(System.Text.StringBuilder token, List<string> terms)
-        {
-            if (token.Length > 1 && token.ToString() is not "a" and not "an" and not "the" and not "of") terms.Add(token.ToString());
-            token.Clear();
-        }
-
-        private sealed class NotebookSearchIndex
-        {
-            private readonly Dictionary<string, List<NotebookEntry>> _entriesByTerm;
-
-            private NotebookSearchIndex(List<NotebookEntry> entries, Dictionary<string, List<NotebookEntry>> entriesByTerm)
-            {
-                Entries = entries;
-                _entriesByTerm = entriesByTerm;
-            }
-
-            public static NotebookSearchIndex Empty { get; } = new([], new(StringComparer.Ordinal));
-
-            public List<NotebookEntry> Entries { get; }
-
-            public static NotebookSearchIndex Create(IEnumerable<NotebookEntry> entries)
-            {
-                var orderedEntries = entries.OrderByDescending(entry => entry.Index).Select(CloneEntry).ToList();
-                var entriesByTerm = new Dictionary<string, List<NotebookEntry>>(StringComparer.Ordinal);
-                foreach (var entry in orderedEntries)
+                foreach (var entry in incoming)
                 {
-                    foreach (var term in ExtractSearchTerms(NotebookFormat.CreateSearchText(entry.Content)).Distinct(StringComparer.Ordinal))
+                    var attachmentIds = ExtractAttachmentIds(entry.Content);
+                    if (existing.TryGetValue(entry.Key, out var stored) &&
+                        string.Equals(stored.Content, entry.Content, StringComparison.Ordinal) &&
+                        stored.Attachments.SequenceEqual(attachmentIds))
                     {
-                        if (!entriesByTerm.TryGetValue(term, out var matchingEntries))
-                        {
-                            matchingEntries = [];
-                            entriesByTerm.Add(term, matchingEntries);
-                        }
-
-                        matchingEntries.Add(entry);
+                        prepared.Add(stored);
+                        continue;
                     }
-                }
 
-                return new NotebookSearchIndex(orderedEntries, entriesByTerm);
-            }
-
-            public List<NotebookSearchResult> Search(IReadOnlyList<string> terms, int maximumResults, CancellationToken cancellationToken)
-            {
-                var entryLists = new List<List<NotebookEntry>>(terms.Count);
-                foreach (var term in terms.Distinct(StringComparer.Ordinal))
-                {
-                    if (!_entriesByTerm.TryGetValue(term, out var matchingEntries)) return [];
-                    entryLists.Add(matchingEntries);
-                }
-
-                var candidates = entryLists.OrderBy(entries => entries.Count).First();
-                var results = new List<NotebookSearchResult>(Math.Min(maximumResults, candidates.Count));
-                foreach (var entry in candidates)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (entryLists.Any(entries => !ContainsEntryIndex(entries, entry.Index))) continue;
-
-                    results.Add(new NotebookSearchResult
+                    var attachments = attachmentIds.Select(id => Database.Attachments.FindById(id)).Where(item => item is not null).Cast<AttachmentDocument>().ToList();
+                    var embedding = await gemini.EmbedNoteAsync(entry.Content, attachments, CancellationToken.None);
+                    prepared.Add(new NotebookEntry
                     {
-                        EntryIndex = entry.Index,
-                        Title = NotebookFormat.GetTitle(entry.Content) ?? "Note",
-                        Details = CreateSearchPreview(entry)
+                        Key = entry.Key,
+                        Type = "note",
+                        Content = entry.Content,
+                        Attachments = attachmentIds,
+                        Embedding = FloatsToBytes(embedding),
+                        Timestamp = DateTime.UtcNow
                     });
-                    if (results.Count == maximumResults) break;
                 }
-
-                return results;
             }
+            catch { DeleteOrphanedAttachments(); throw; }
 
-            private static bool ContainsEntryIndex(List<NotebookEntry> entries, int index)
+            Database.Database.BeginTrans();
+            try
             {
-                var low = 0;
-                var high = entries.Count - 1;
-                while (low <= high)
-                {
-                    var middle = low + (high - low) / 2;
-                    var candidateIndex = entries[middle].Index;
-                    if (candidateIndex == index) return true;
-                    if (candidateIndex < index) high = middle - 1;
-                    else low = middle + 1;
-                }
-
-                return false;
+                var incomingKeys = prepared.Select(item => item.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var deleted in existing.Keys.Where(key => !incomingKeys.Contains(key))) Database.Notes.Delete(deleted);
+                foreach (var entry in prepared) Database.Notes.Upsert(entry);
+                DeleteOrphanedAttachments();
+                Database.Database.Commit();
+            }
+            catch
+            {
+                Database.Database.Rollback();
+                throw;
             }
         }
+
+        private void DeleteOrphanedAttachments()
+        {
+            var referenced = Database.Notes.FindAll().SelectMany(item => item.Attachments)
+                .Concat(Database.Memos.FindAll().SelectMany(item => item.Attachments))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var attachment in Database.Attachments.FindAll())
+                if (!referenced.Contains(attachment.Key)) Database.Attachments.Delete(attachment.Key);
+        }
+
+        private static List<string> ExtractAttachmentIds(string content) =>
+            NotebookFormat.Parse(content)
+                .Where(section => section.Kind is NoteSectionKind.File or NoteSectionKind.Image)
+                .Select(section => section.Content.Trim())
+                .Where(value => Guid.TryParse(value, out _))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        private static string Preview(string content)
+        {
+            var value = NotebookFormat.CreateSearchText(content);
+            if (string.IsNullOrWhiteSpace(value)) return "Note";
+            return value.Length <= 120 ? value : $"{value[..117]}...";
+        }
+
+        internal static byte[] FloatsToBytes(float[] values) => MemoryMarshal.AsBytes(values.AsSpan()).ToArray();
+        internal static float[] BytesToFloats(byte[] values) => MemoryMarshal.Cast<byte, float>(values.AsSpan()).ToArray();
+
+        internal static double Cosine(float[] left, float[] right)
+        {
+            if (left.Length == 0 || left.Length != right.Length) return 0;
+            double dot = 0, leftMagnitude = 0, rightMagnitude = 0;
+            for (var index = 0; index < left.Length; index++)
+            {
+                dot += left[index] * right[index];
+                leftMagnitude += left[index] * left[index];
+                rightMagnitude += right[index] * right[index];
+            }
+            return leftMagnitude == 0 || rightMagnitude == 0 ? 0 : dot / (Math.Sqrt(leftMagnitude) * Math.Sqrt(rightMagnitude));
+        }
+
+        private static double FuzzyScore(IReadOnlyList<string> queryTerms, IReadOnlyList<string> documentTerms)
+        {
+            if (documentTerms.Count == 0) return 0;
+            double total = 0;
+            foreach (var queryTerm in queryTerms)
+            {
+                var best = documentTerms.Max(documentTerm => TermSimilarity(queryTerm, documentTerm));
+                if (best < 0.7) return 0;
+                total += best;
+            }
+            return total / queryTerms.Count;
+        }
+
+        private static double TermSimilarity(string left, string right)
+        {
+            if (string.Equals(left, right, StringComparison.Ordinal)) return 1;
+            if (left.Length >= 3 && right.StartsWith(left, StringComparison.Ordinal) ||
+                right.Length >= 3 && left.StartsWith(right, StringComparison.Ordinal)) return 0.9;
+            var maximumLength = Math.Max(left.Length, right.Length);
+            return maximumLength == 0 ? 1 : 1d - (double)LevenshteinDistance(left, right) / maximumLength;
+        }
+
+        private static int LevenshteinDistance(string left, string right)
+        {
+            var previous = Enumerable.Range(0, right.Length + 1).ToArray();
+            var current = new int[right.Length + 1];
+            for (var leftIndex = 1; leftIndex <= left.Length; leftIndex++)
+            {
+                current[0] = leftIndex;
+                for (var rightIndex = 1; rightIndex <= right.Length; rightIndex++)
+                    current[rightIndex] = Math.Min(
+                        Math.Min(current[rightIndex - 1] + 1, previous[rightIndex] + 1),
+                        previous[rightIndex - 1] + (left[leftIndex - 1] == right[rightIndex - 1] ? 0 : 1));
+                (previous, current) = (current, previous);
+            }
+            return previous[right.Length];
+        }
+
+        private static List<string> Terms(string value) =>
+            value.ToLowerInvariant()
+                .Split([' ', '\r', '\n', '\t', ',', '.', ';', ':', '!', '?', '(', ')', '[', ']', '{', '}', '/', '\\', '-', '_'],
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(term => term.Length > 1)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
     }
 }
