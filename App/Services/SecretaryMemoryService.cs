@@ -34,7 +34,7 @@ namespace App.Services
             foreach (var item in matches)
                 items.Add(new JsonObject
                 {
-                    ["key"] = item.Key, ["topic"] = item.Topic, ["knowledge"] = item.Value,
+                    ["key"] = item.Id, ["topic"] = item.Topic, ["knowledge"] = item.Value,
                     ["written_utc"] = item.Timestamp.ToString("O")
                 });
             return Result(true, $"Found {items.Count} memo(s).", new JsonObject { ["items"] = items });
@@ -54,7 +54,7 @@ namespace App.Services
                 Timestamp = DateTime.UtcNow
             };
             App.Settings.Database.Memos.Insert(memo);
-            return Result(true, "Saved the memo.", new JsonObject { ["key"] = memo.Key, ["topic"] = memo.Topic });
+            return Result(true, "Saved the memo.", new JsonObject { ["key"] = memo.Id, ["topic"] = memo.Topic });
         }
 
         public Task<ToolResult> ClearHistoryAsync(CancellationToken token)

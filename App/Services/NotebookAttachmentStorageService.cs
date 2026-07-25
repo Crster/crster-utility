@@ -23,7 +23,7 @@ namespace App.Services
             var attachment = App.Settings.Database.Attachments.FindById(attachmentId);
             if (attachment is null) return string.Empty;
             var extension = Path.GetExtension(attachment.Filename);
-            var destination = Path.Combine(_cachePath, $"{attachment.Key}{extension}");
+            var destination = Path.Combine(_cachePath, $"{attachment.Id}{extension}");
             if (!File.Exists(destination)) File.WriteAllBytes(destination, attachment.Value);
             return destination;
         }
@@ -47,7 +47,7 @@ namespace App.Services
         {
             var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             var existing = App.Settings.Database.Attachments.FindOne(item => item.Hash == hash);
-            if (existing is not null) return existing.Key;
+            if (existing is not null) return existing.Id;
             var document = new AttachmentDocument
             {
                 Value = bytes,
@@ -58,7 +58,7 @@ namespace App.Services
                 CreatedAt = DateTime.UtcNow
             };
             App.Settings.Database.Attachments.Insert(document);
-            return document.Key;
+            return document.Id;
         }
 
         private static string MimeFromExtension(string path) => Path.GetExtension(path).ToLowerInvariant() switch

@@ -1,4 +1,3 @@
-using LiteDB;
 using System;
 using System.Collections.Generic;
 
@@ -6,7 +5,6 @@ namespace App.Models
 {
     internal sealed class NotebookEntry
     {
-        [BsonId]
         public string Key { get; set; } = Guid.NewGuid().ToString("D");
 
         public string Type { get; set; } = "note";

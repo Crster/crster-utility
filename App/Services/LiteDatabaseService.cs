@@ -20,7 +20,7 @@ namespace App.Services
         public string Path { get; }
         public ILiteDatabase Database => _database;
         public ILiteCollection<SettingDocument> Settings => _database.GetCollection<SettingDocument>("Settings");
-        public ILiteCollection<NotebookEntry> Notes => _database.GetCollection<NotebookEntry>("Notes");
+        public ILiteCollection<NoteDocument> Notes => _database.GetCollection<NoteDocument>("Notes");
         public ILiteCollection<AttachmentDocument> Attachments => _database.GetCollection<AttachmentDocument>("Attachments");
         public ILiteCollection<MemoDocument> Memos => _database.GetCollection<MemoDocument>("Memos");
         public ILiteCollection<TodoDocument> Todos => _database.GetCollection<TodoDocument>("Todos");

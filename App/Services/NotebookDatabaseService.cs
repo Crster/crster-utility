@@ -20,7 +20,7 @@ namespace App.Services
         public string RootPath => System.IO.Path.Combine(System.IO.Path.GetTempPath(), "CrsterUtility", "Attachments");
 
         public Task<List<NotebookEntry>> LoadAsync() =>
-            Task.FromResult(Database.Notes.Query().OrderByDescending(item => item.Timestamp).ToList());
+            Task.FromResult(Database.Notes.Query().OrderByDescending(item => item.Timestamp).ToList().Select(ToEntry).ToList());
 
         public async Task<List<NotebookSearchResult>> SearchAsync(string query, int maximumResults = 10, CancellationToken cancellationToken = default)
         {
@@ -42,9 +42,9 @@ namespace App.Services
                 .Take(maximumResults)
                 .Select(item => new NotebookSearchResult
                 {
-                    EntryKey = item.Item.Key,
-                    Title = NotebookFormat.GetTitle(item.Item.Content) ?? "Note",
-                    Details = Preview(item.Item.Content)
+                    EntryKey = item.Item.Id,
+                    Title = NotebookFormat.GetTitle(item.Item.Value) ?? "Note",
+                    Details = Preview(item.Item.Value)
                 }).ToList();
         }
 
@@ -54,30 +54,31 @@ namespace App.Services
             if (queryTerms.Count == 0) return [];
 
             return Database.Notes.FindAll()
-                .Select(item => (Item: item, Score: FuzzyScore(queryTerms, Terms(NotebookFormat.CreateSearchText(item.Content)))))
+                .Select(item => (Item: item, Score: FuzzyScore(queryTerms, Terms(NotebookFormat.CreateSearchText(item.Value)))))
                 .Where(item => item.Score > 0)
                 .OrderByDescending(item => item.Score)
                 .ThenByDescending(item => item.Item.Timestamp)
                 .Take(maximumResults)
                 .Select(item => new NotebookSearchResult
                 {
-                    EntryKey = item.Item.Key,
-                    Title = NotebookFormat.GetTitle(item.Item.Content) ?? "Note",
-                    Details = Preview(item.Item.Content)
+                    EntryKey = item.Item.Id,
+                    Title = NotebookFormat.GetTitle(item.Item.Value) ?? "Note",
+                    Details = Preview(item.Item.Value)
                 }).ToList();
         }
 
         public Task<NotebookEntry?> GetEntryAsync(string entryKey, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<NotebookEntry?>(Database.Notes.FindById(entryKey));
+            var document = Database.Notes.FindById(entryKey);
+            return Task.FromResult(document is null ? null : ToEntry(document));
         }
 
         public async Task SaveAsync(IEnumerable<NotebookEntry> entries)
         {
             var incoming = entries.ToList();
-            var existing = Database.Notes.FindAll().ToDictionary(item => item.Key, StringComparer.OrdinalIgnoreCase);
-            var prepared = new List<NotebookEntry>();
+            var existing = Database.Notes.FindAll().ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
+            var prepared = new List<NoteDocument>();
             using var gemini = new GeminiClient(App.Settings.Current.GeminiApiKey);
             try
             {
@@ -85,7 +86,7 @@ namespace App.Services
                 {
                     var attachmentIds = ExtractAttachmentIds(entry.Content);
                     if (existing.TryGetValue(entry.Key, out var stored) &&
-                        string.Equals(stored.Content, entry.Content, StringComparison.Ordinal) &&
+                        string.Equals(stored.Value, entry.Content, StringComparison.Ordinal) &&
                         stored.Attachments.SequenceEqual(attachmentIds))
                     {
                         prepared.Add(stored);
@@ -94,11 +95,10 @@ namespace App.Services
 
                     var attachments = attachmentIds.Select(id => Database.Attachments.FindById(id)).Where(item => item is not null).Cast<AttachmentDocument>().ToList();
                     var embedding = await gemini.EmbedNoteAsync(entry.Content, attachments, CancellationToken.None);
-                    prepared.Add(new NotebookEntry
+                    prepared.Add(new NoteDocument
                     {
-                        Key = entry.Key,
-                        Type = "note",
-                        Content = entry.Content,
+                        Id = entry.Key,
+                        Value = entry.Content,
                         Attachments = attachmentIds,
                         Embedding = FloatsToBytes(embedding),
                         Timestamp = DateTime.UtcNow
@@ -110,7 +110,7 @@ namespace App.Services
             Database.Database.BeginTrans();
             try
             {
-                var incomingKeys = prepared.Select(item => item.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var incomingKeys = prepared.Select(item => item.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 foreach (var deleted in existing.Keys.Where(key => !incomingKeys.Contains(key))) Database.Notes.Delete(deleted);
                 foreach (var entry in prepared) Database.Notes.Upsert(entry);
                 DeleteOrphanedAttachments();
@@ -129,7 +129,7 @@ namespace App.Services
                 .Concat(Database.Memos.FindAll().SelectMany(item => item.Attachments))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var attachment in Database.Attachments.FindAll())
-                if (!referenced.Contains(attachment.Key)) Database.Attachments.Delete(attachment.Key);
+                if (!referenced.Contains(attachment.Id)) Database.Attachments.Delete(attachment.Id);
         }
 
         private static List<string> ExtractAttachmentIds(string content) =>
@@ -145,6 +145,16 @@ namespace App.Services
             if (string.IsNullOrWhiteSpace(value)) return "Note";
             return value.Length <= 120 ? value : $"{value[..117]}...";
         }
+
+        private static NotebookEntry ToEntry(NoteDocument document) => new()
+        {
+            Key = document.Id,
+            Type = "note",
+            Content = document.Value,
+            Embedding = document.Embedding,
+            Attachments = [.. document.Attachments],
+            Timestamp = document.Timestamp
+        };
 
         internal static byte[] FloatsToBytes(float[] values) => MemoryMarshal.AsBytes(values.AsSpan()).ToArray();
         internal static float[] BytesToFloats(byte[] values) => MemoryMarshal.Cast<byte, float>(values.AsSpan()).ToArray();

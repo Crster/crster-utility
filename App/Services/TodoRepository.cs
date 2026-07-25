@@ -21,7 +21,7 @@ namespace App.Services
             {
                 Database.Todos.Insert(todo);
                 if (Database.TodoCategories.FindById(category) is null)
-                    Database.TodoCategories.Insert(new TodoCategoryDocument { Key = category });
+                    Database.TodoCategories.Insert(new TodoCategoryDocument { Id = category });
                 Database.Database.Commit();
                 return todo;
             }
@@ -49,10 +49,10 @@ namespace App.Services
         }
 
         public bool Delete(string key) => Database.Todos.Delete(key);
-        public IReadOnlyList<TodoCategoryDocument> ListCategories() => Database.TodoCategories.FindAll().OrderBy(item => item.Key).ToList();
+        public IReadOnlyList<TodoCategoryDocument> ListCategories() => Database.TodoCategories.FindAll().OrderBy(item => item.Id).ToList();
 
         public void SetCategoryDescription(string category, string description) =>
-            Database.TodoCategories.Upsert(new TodoCategoryDocument { Key = Required(category, nameof(category)), Description = description.Trim() });
+            Database.TodoCategories.Upsert(new TodoCategoryDocument { Id = Required(category, nameof(category)), Description = description.Trim() });
 
         private static string Required(string value, string name) =>
             string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("A value is required.", name) : value.Trim();

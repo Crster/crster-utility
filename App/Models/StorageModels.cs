@@ -6,47 +6,59 @@ namespace App.Models
 {
     internal sealed class SettingDocument
     {
-        [BsonId] public string Key { get; set; } = string.Empty;
+        [BsonId] public string Id { get; set; } = string.Empty;
+        [BsonField("value")]
         public BsonValue Value { get; set; } = BsonValue.Null;
+        [BsonField("name")]
         public string Name { get; set; } = string.Empty;
+        [BsonField("default")]
         public BsonValue Default { get; set; } = BsonValue.Null;
+    }
+
+    internal sealed class NoteDocument
+    {
+        [BsonId] public string Id { get; set; } = Guid.NewGuid().ToString("D");
+        [BsonField("embedding")] public byte[] Embedding { get; set; } = [];
+        [BsonField("value")] public string Value { get; set; } = string.Empty;
+        [BsonField("attachments")] public List<string> Attachments { get; set; } = [];
+        [BsonField("timestamp")] public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     }
 
     internal sealed class AttachmentDocument
     {
-        [BsonId] public string Key { get; set; } = Guid.NewGuid().ToString("D");
-        public byte[] Value { get; set; } = [];
-        public string Filename { get; set; } = string.Empty;
-        public string Mimetype { get; set; } = "application/octet-stream";
-        public string Hash { get; set; } = string.Empty;
-        public long Size { get; set; }
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        [BsonId] public string Id { get; set; } = Guid.NewGuid().ToString("D");
+        [BsonField("value")] public byte[] Value { get; set; } = [];
+        [BsonField("filename")] public string Filename { get; set; } = string.Empty;
+        [BsonField("mimetype")] public string Mimetype { get; set; } = "application/octet-stream";
+        [BsonField("hash")] public string Hash { get; set; } = string.Empty;
+        [BsonField("size")] public long Size { get; set; }
+        [BsonField("created_at")] public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
 
     internal sealed class MemoDocument
     {
-        [BsonId] public string Key { get; set; } = Guid.NewGuid().ToString("D");
-        public byte[] Embedding { get; set; } = [];
-        public string Topic { get; set; } = "knowledge";
-        public string Value { get; set; } = string.Empty;
-        public List<string> Attachments { get; set; } = [];
-        public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+        [BsonId] public string Id { get; set; } = Guid.NewGuid().ToString("D");
+        [BsonField("embedding")] public byte[] Embedding { get; set; } = [];
+        [BsonField("topic")] public string Topic { get; set; } = "knowledge";
+        [BsonField("value")] public string Value { get; set; } = string.Empty;
+        [BsonField("attachments")] public List<string> Attachments { get; set; } = [];
+        [BsonField("timestamp")] public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     }
 
     internal sealed class TodoDocument
     {
-        [BsonId] public string Key { get; set; } = Guid.NewGuid().ToString("D");
-        public string Value { get; set; } = string.Empty;
-        public string Category { get; set; } = string.Empty;
-        public bool IsDone { get; set; }
-        public string CreatedBy { get; set; } = "user";
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-        public DateTime? DoneAt { get; set; }
+        [BsonId] public string Id { get; set; } = Guid.NewGuid().ToString("D");
+        [BsonField("value")] public string Value { get; set; } = string.Empty;
+        [BsonField("category")] public string Category { get; set; } = string.Empty;
+        [BsonField("isDone")] public bool IsDone { get; set; }
+        [BsonField("created_by")] public string CreatedBy { get; set; } = "user";
+        [BsonField("created_at")] public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        [BsonField("done_at")] public DateTime? DoneAt { get; set; }
     }
 
     internal sealed class TodoCategoryDocument
     {
-        [BsonId] public string Key { get; set; } = string.Empty;
-        public string Description { get; set; } = string.Empty;
+        [BsonId] public string Id { get; set; } = string.Empty;
+        [BsonField("description")] public string Description { get; set; } = string.Empty;
     }
 }

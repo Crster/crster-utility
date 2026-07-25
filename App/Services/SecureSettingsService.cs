@@ -122,7 +122,7 @@ namespace App.Services
         {
             foreach (var definition in AppSettings.Definitions)
                 if (collection.FindById(definition.Key) is null)
-                    collection.Insert(new SettingDocument { Key = definition.Key, Name = definition.Name, Value = definition.Default, Default = definition.Default });
+                    collection.Insert(new SettingDocument { Id = definition.Key, Name = definition.Name, Value = definition.Default, Default = definition.Default });
         }
 
         private void WriteBootstrap(string databaseFolder, string apiKey)
