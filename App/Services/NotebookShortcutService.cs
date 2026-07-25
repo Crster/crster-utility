@@ -10,18 +10,20 @@ namespace App.Services
         private const string UppercaseCharacters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
         private const string LowercaseCharacters = "abcdefghijkmnopqrstuvwxyz";
         private const string DigitCharacters = "23456789";
-        private const string PasswordCharacters = UppercaseCharacters + LowercaseCharacters + DigitCharacters;
+        private const string SymbolCharacters = "!@#$%&*?";
+        private const string PasswordCharacters = UppercaseCharacters + LowercaseCharacters + DigitCharacters + SymbolCharacters;
 
         internal static string CreateSecretKey() =>
             Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
         internal static string CreateReadablePassword()
         {
-            var characters = new char[16];
+            var characters = new char[8];
             characters[0] = RandomCharacter(UppercaseCharacters);
             characters[1] = RandomCharacter(LowercaseCharacters);
             characters[2] = RandomCharacter(DigitCharacters);
-            for (var index = 3; index < characters.Length; index++)
+            characters[3] = RandomCharacter(SymbolCharacters);
+            for (var index = 4; index < characters.Length; index++)
                 characters[index] = RandomCharacter(PasswordCharacters);
 
             for (var index = characters.Length - 1; index > 0; index--)
@@ -30,15 +32,7 @@ namespace App.Services
                 (characters[index], characters[target]) = (characters[target], characters[index]);
             }
 
-            return string.Create(19, characters, static (result, source) =>
-            {
-                var target = 0;
-                for (var index = 0; index < source.Length; index++)
-                {
-                    if (index > 0 && index % 4 == 0) result[target++] = '-';
-                    result[target++] = source[index];
-                }
-            });
+            return new string(characters);
         }
 
         internal static async Task<string> GetSystemUsageTextAsync()

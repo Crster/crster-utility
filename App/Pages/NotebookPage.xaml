@@ -20,16 +20,21 @@
                 </Grid.ColumnDefinitions>
                 <Border Padding="6" HorizontalAlignment="Left" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
                     <StackPanel Orientation="Horizontal" Spacing="2">
-                        <Button Tag="title" Click="ToolButton_Click" Width="34" Height="32" Padding="3" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Title"><TextBlock Text="#" FontSize="18" FontWeight="SemiBold" /></Button>
-                        <Button Tag="description" Click="ToolButton_Click" Width="34" Height="32" Padding="3" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Description"><TextBlock Text="##" FontSize="13" /></Button>
-                        <Button Tag="important" Click="ToolButton_Click" Width="34" Height="32" Padding="3" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Important"><TextBlock Text="&quot;A&quot;" FontWeight="Bold" /></Button>
-                        <Button Tag="mono" Click="ToolButton_Click" Width="34" Height="32" Padding="3" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Monospace"><TextBlock Text="'A'" FontFamily="Cascadia Mono" FontSize="12" /></Button>
-                        <Button Tag="italic" Click="ToolButton_Click" Width="34" Height="32" Padding="3" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Italic"><TextBlock Text="(A)" FontStyle="Italic" /></Button>
+                        <Button Tag="heading" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Heading"><FontIcon Glyph="&#xE8D2;" /></Button>
+                        <Button Tag="bold" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Bold"><FontIcon Glyph="&#xE8DD;" /></Button>
+                        <Button Tag="italic" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Italic"><FontIcon Glyph="&#xE8DB;" /></Button>
+                        <Button Tag="code" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Code"><FontIcon Glyph="&#xF683;" /></Button>
+                        <Button Tag="code_block" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Code block"><FontIcon Glyph="&#xE943;" /></Button>
                         <Border Width="1" Height="20" Margin="5,0" Background="{ThemeResource CardStrokeColorDefaultBrush}" />
-                        <Button Tag="password" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Password"><FontIcon Glyph="&#xE72E;" /></Button>
-                        <Button Tag="file" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="File"><SymbolIcon Symbol="Attach" /></Button>
-                        <Button Tag="image" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Image"><SymbolIcon Symbol="Pictures" /></Button>
-                        <Button Tag="table" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Table"><FontIcon Glyph="&#xF232;" /></Button>
+                        <Button Tag="file" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Attach"><FontIcon Glyph="&#xE723;" /></Button>
+                        <Button Tag="image" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Image"><FontIcon Glyph="&#xE91B;" /></Button>
+                        <Button Tag="secret" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Secret"><FontIcon Glyph="&#xED1A;" /></Button>
+                        <Button Tag="table" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Table"><FontIcon Glyph="&#xE80A;" /></Button>
+                        <Border Width="1" Height="20" Margin="5,0" Background="{ThemeResource CardStrokeColorDefaultBrush}" />
+                        <Button Tag="date" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Date"><FontIcon Glyph="&#xE787;" /></Button>
+                        <Button Tag="generated_password" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Password"><FontIcon Glyph="&#xE8D7;" /></Button>
+                        <Button Tag="random" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Random"><FontIcon Glyph="&#xE8B1;" /></Button>
+                        <Button Tag="improve" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Improve"><FontIcon Glyph="&#xF4A5;" /></Button>
                     </StackPanel>
                 </Border>
                 <Button Grid.Column="1" Tag="new" Click="ToolButton_Click" Content="New note" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False">
@@ -84,7 +89,7 @@
             </ListView.ItemContainerStyle>
             <ListView.ItemsPanel>
                 <ItemsPanelTemplate>
-                    <StackPanel />
+                    <ItemsStackPanel />
                 </ItemsPanelTemplate>
             </ListView.ItemsPanel>
         </ListView>

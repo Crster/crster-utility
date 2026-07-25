@@ -26,6 +26,7 @@ namespace App.Controls
         private NotebookEntry? _entry;
         private NotebookAttachmentStorageService? _attachmentStorage;
         private TextBox? _editor;
+        private string? _editorOriginalContent;
         private bool _isPointerOver;
         private bool _isEditorFocused;
         private bool _isInitialEditorFocus;
@@ -84,6 +85,32 @@ namespace App.Controls
             _editor.Focus(FocusState.Keyboard);
         }
 
+        internal void InsertValue(string text)
+        {
+            ShowEditor();
+            if (_editor is null) return;
+            InsertShortcutText(_editor, text);
+        }
+
+        internal bool TryCaptureSelection(out int start, out string selectedText)
+        {
+            start = 0;
+            selectedText = string.Empty;
+            if (_editor is null || string.IsNullOrWhiteSpace(_editor.SelectedText)) return false;
+            start = _editor.SelectionStart;
+            selectedText = _editor.SelectedText;
+            return true;
+        }
+
+        internal bool TryReplaceSelection(int start, string originalText, string replacement)
+        {
+            if (_editor is null || _editor.SelectionStart != start ||
+                !string.Equals(_editor.SelectedText, originalText, StringComparison.Ordinal))
+                return false;
+            InsertShortcutText(_editor, replacement);
+            return true;
+        }
+
         internal void HighlightSearchResult()
         {
             _isSearchHighlighted = true;
@@ -118,6 +145,28 @@ namespace App.Controls
             InteractionStateChanged?.Invoke(this, EventArgs.Empty);
         }
 
+        private void Root_GotFocus(object sender, RoutedEventArgs e) =>
+            BlockScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+
+        private void Root_LostFocus(object sender, RoutedEventArgs e)
+        {
+            _ = DispatcherQueue.TryEnqueue(() =>
+            {
+                if (XamlRoot is null || IsDescendantOf(FocusManager.GetFocusedElement(XamlRoot) as DependencyObject, Root)) return;
+                BlockScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Hidden;
+            });
+        }
+
+        private static bool IsDescendantOf(DependencyObject? element, DependencyObject ancestor)
+        {
+            while (element is not null)
+            {
+                if (ReferenceEquals(element, ancestor)) return true;
+                element = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(element);
+            }
+            return false;
+        }
+
         private void SetHoverBackground()
         {
             if (_isSearchHighlighted)
@@ -136,166 +185,21 @@ namespace App.Controls
             _initialFocusTimer.Stop();
             _isInitialEditorFocus = false;
             _editor = null;
+            _editorOriginalContent = null;
             Root.Padding = new Thickness(10);
             SetHoverBackground();
             ContentHost.Children.Clear();
             if (_entry is null) return;
 
-            var panel = new StackPanel { Spacing = 8 };
-            foreach (var section in NotebookFormat.Parse(_entry.Content)) panel.Children.Add(CreateSection(section));
-            ContentHost.Children.Add(panel);
-        }
-
-        private FrameworkElement CreateSection(NoteSection section) => section.Kind switch
-        {
-            NoteSectionKind.Title => CreateRichText(section.Content, 16, Microsoft.UI.Text.FontWeights.SemiBold),
-            NoteSectionKind.Description => CreateRichText(section.Content, 13, Microsoft.UI.Text.FontWeights.Normal, (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]),
-            NoteSectionKind.Password => CreatePassword(section.Content),
-            NoteSectionKind.File => CreateAttachment(section.Content, false),
-            NoteSectionKind.Image => CreateAttachment(section.Content, true),
-            NoteSectionKind.Table => CreateTable(section.Content),
-            _ => CreateRichText(section.Content, 14, Microsoft.UI.Text.FontWeights.Normal)
-        };
-
-        private static RichTextBlock CreateRichText(string text, double size, global::Windows.UI.Text.FontWeight weight, Brush? foreground = null)
-        {
-            var block = new RichTextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = false };
-            var paragraph = new Paragraph { FontSize = size, FontWeight = weight };
-            if (foreground is not null) paragraph.Foreground = foreground;
-            AddCustomInlines(paragraph, text);
-            block.Blocks.Add(paragraph);
-            return block;
-        }
-
-        private static void AddCustomInlines(Paragraph paragraph, string text)
-        {
-            var position = 0;
-            while (position < text.Length)
-            {
-                var markerIndex = FindNextMarker(text, position, out var marker, out var closing);
-                if (markerIndex < 0) { paragraph.Inlines.Add(new Run { Text = text[position..] }); break; }
-                if (markerIndex > position) paragraph.Inlines.Add(new Run { Text = text[position..markerIndex] });
-                var closeIndex = text.IndexOf(closing, markerIndex + 1);
-                if (closeIndex < 0) { paragraph.Inlines.Add(new Run { Text = text[markerIndex..] }); break; }
-                var value = text[(markerIndex + 1)..closeIndex];
-                if (marker == '"') paragraph.Inlines.Add(new Bold { Inlines = { new Run { Text = value } } });
-                else if (marker == '\'') paragraph.Inlines.Add(new Run { Text = value, FontFamily = new FontFamily("Cascadia Mono") });
-                else paragraph.Inlines.Add(new Italic { Inlines = { new Run { Text = value } } });
-                position = closeIndex + 1;
-            }
-            if (text.Length == 0) paragraph.Inlines.Add(new Run { Text = string.Empty });
-        }
-
-        private static int FindNextMarker(string text, int start, out char marker, out char closing)
-        {
-            var candidates = new[] { ('"', '"'), ('\'', '\''), ('(', ')') };
-            var best = -1;
-            marker = closing = '\0';
-            foreach (var candidate in candidates)
-            {
-                var index = text.IndexOf(candidate.Item1, start);
-                if (index >= 0 && (best < 0 || index < best)) { best = index; marker = candidate.Item1; closing = candidate.Item2; }
-            }
-            return best;
-        }
-
-        private static FrameworkElement CreatePassword(string value)
-        {
-            var password = new PasswordBox { Password = value, PasswordRevealMode = PasswordRevealMode.Hidden, MinWidth = 220, IsTabStop = false, IsHitTestVisible = false };
-            var toggle = new Button { Content = new SymbolIcon(Symbol.View), Width = 36, Height = 32, Padding = new Thickness(6) };
-            toggle.Click += (_, _) => password.PasswordRevealMode = password.PasswordRevealMode == PasswordRevealMode.Hidden ? PasswordRevealMode.Visible : PasswordRevealMode.Hidden;
-            var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-            panel.Children.Add(password); panel.Children.Add(toggle);
-            return panel;
-        }
-
-        private FrameworkElement CreateAttachment(string storedPath, bool isImage)
-        {
-            var fullPath = ResolvePath(storedPath);
-            FrameworkElement visual;
-            if (isImage)
-            {
-                var image = new Image { Stretch = Stretch.Uniform, MaxWidth = 220, MaxHeight = 180 };
-                if (fullPath is not null && File.Exists(fullPath)) image.Source = new BitmapImage(new Uri(fullPath));
-                visual = image;
-            }
-            else
-            {
-                var grid = new Grid { Width = 72, Height = 72 };
-                grid.Children.Add(new Border { CornerRadius = new CornerRadius(8), Background = (Brush)Application.Current.Resources["SubtleFillColorSecondaryBrush"] });
-                grid.Children.Add(new SymbolIcon { Symbol = Symbol.Document, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
-                if (fullPath is not null && File.Exists(fullPath)) _ = LoadFileThumbnailAsync(fullPath, grid);
-                visual = grid;
-            }
-
-            var layout = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
-            layout.Children.Add(visual);
-            layout.Children.Add(new TextBlock { Text = Path.GetFileName(storedPath), VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
-            layout.PointerPressed += async (_, e) =>
-            {
-                if (!e.KeyModifiers.HasFlag(VirtualKeyModifiers.Control) || fullPath is null || !File.Exists(fullPath)) return;
-                e.Handled = true;
-                try { await Launcher.LaunchFileAsync(await StorageFile.GetFileFromPathAsync(fullPath)); } catch { }
-            };
-            return layout;
-        }
-
-        private string? ResolvePath(string path) => string.IsNullOrWhiteSpace(path) ? null : Path.IsPathFullyQualified(path) ? path : _attachmentStorage?.GetFullPath(path);
-
-        private static async Task LoadFileThumbnailAsync(string path, Grid host)
-        {
-            try
-            {
-                var file = await StorageFile.GetFileFromPathAsync(path);
-                using var thumbnail = await file.GetThumbnailAsync(ThumbnailMode.SingleItem, 200);
-                if (thumbnail is null) return;
-                var bitmap = new BitmapImage();
-                await bitmap.SetSourceAsync(thumbnail);
-                host.Children.Add(new Image { Source = bitmap, Stretch = Stretch.Uniform });
-            }
-            catch { }
-        }
-
-        private static FrameworkElement CreateTable(string content)
-        {
-            var rows = ParseCsvRows(content);
-            if (rows.Count == 0) return new TextBlock { Text = content, TextWrapping = TextWrapping.Wrap };
-            var grid = new Grid();
-            for (var column = 0; column < rows.Max(row => row.Length); column++) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            for (var row = 0; row < rows.Count; row++)
-            {
-                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                for (var column = 0; column < rows[row].Length; column++)
-                {
-                    var cell = new Border { Padding = new Thickness(8, 5, 8, 5), BorderThickness = new Thickness(0, 0, 1, 1), BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"], Child = new TextBlock { Text = rows[row][column], FontWeight = row == 0 ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal } };
-                    Grid.SetRow(cell, row); Grid.SetColumn(cell, column); grid.Children.Add(cell);
-                }
-            }
-            return grid;
-        }
-
-        private static List<string[]> ParseCsvRows(string content)
-        {
-            var rows = new List<string[]>(); var row = new List<string>(); var field = new StringBuilder(); var quoted = false;
-            for (var index = 0; index < content.Length; index++)
-            {
-                var character = content[index];
-                if (character == '"')
-                {
-                    if (quoted && index + 1 < content.Length && content[index + 1] == '"') { field.Append('"'); index++; }
-                    else quoted = !quoted;
-                }
-                else if (character == ',' && !quoted) { row.Add(field.ToString()); field.Clear(); }
-                else if (character == '\n' && !quoted) { row.Add(field.ToString()); rows.Add([.. row]); row.Clear(); field.Clear(); }
-                else field.Append(character);
-            }
-            if (field.Length > 0 || row.Count > 0) { row.Add(field.ToString()); rows.Add([.. row]); }
-            return rows;
+            var preview = new MarkdownView { Markdown = _entry.Content };
+            preview.ConfigureNotebook(id => _attachmentStorage?.GetFullPath(id));
+            ContentHost.Children.Add(preview);
         }
 
         private void ShowEditorContent()
         {
             if (_entry is null) return;
+            _editorOriginalContent = _entry.Content;
             _isInitialEditorFocus = true;
             ContentHost.Children.Clear();
             Root.Padding = new Thickness(0);
@@ -329,7 +233,7 @@ namespace App.Controls
                 {
                     e.Handled = true;
                     var bitmapPath = await _attachmentStorage.CopyBitmapAsync(await package.GetBitmapAsync());
-                    InsertText($"@image: {bitmapPath}");
+                    InsertText($"![image](local://{bitmapPath}.png)");
                     return;
                 }
                 if (!package.Contains(StandardDataFormats.Text)) return;
@@ -337,7 +241,11 @@ namespace App.Controls
                 if (text.Contains('\r') || text.Contains('\n') || !File.Exists(text)) return;
                 e.Handled = true;
                 var attachmentPath = await _attachmentStorage.CopyFromPathAsync(text);
-                InsertText($"@{(NotebookAttachmentStorageService.IsImagePath(text) ? "image" : "file")}: {attachmentPath}");
+                var extension = Path.GetExtension(text);
+                var target = $"local://{attachmentPath}{extension}";
+                InsertText(NotebookAttachmentStorageService.IsImagePath(text)
+                    ? $"![{Path.GetFileNameWithoutExtension(text)}]({target})"
+                    : $"[{Path.GetFileName(text)}]({target})");
             }
             catch { }
         }
@@ -358,6 +266,11 @@ namespace App.Controls
             InteractionStateChanged?.Invoke(this, EventArgs.Empty);
             if (_isInitialEditorFocus) { _ = DispatcherQueue.TryEnqueue(() => _editor?.Focus(FocusState.Keyboard)); return; }
             if (RemoveIfEmpty()) return;
+            if (string.Equals(_entry?.Content, _editorOriginalContent, StringComparison.Ordinal))
+            {
+                ShowPreview();
+                return;
+            }
             _isCommitting = true;
             var committed = CommitRequested is null || await CommitRequested.Invoke(this);
             _isCommitting = false;
@@ -400,7 +313,7 @@ namespace App.Controls
             if (e.Key == VirtualKey.F6)
             {
                 e.Handled = true;
-                InsertShortcutText(editor, NotebookShortcutService.CreateReadablePassword());
+                InsertShortcutText(editor, $"@password{{{NotebookShortcutService.CreateReadablePassword()}}}");
                 return;
             }
 

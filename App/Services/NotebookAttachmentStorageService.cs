@@ -63,10 +63,17 @@ namespace App.Services
 
         private static string MimeFromExtension(string path) => Path.GetExtension(path).ToLowerInvariant() switch
         {
-            ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".gif" => "image/gif",
-            ".webp" => "image/webp", ".bmp" => "image/bmp", ".pdf" => "application/pdf",
-            ".mp3" => "audio/mpeg", ".wav" => "audio/wav", ".mp4" => "video/mp4",
-            ".txt" => "text/plain", _ => "application/octet-stream"
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".bmp" => "image/bmp",
+            ".pdf" => "application/pdf",
+            ".mp3" => "audio/mpeg",
+            ".wav" => "audio/wav",
+            ".mp4" => "video/mp4",
+            ".txt" => "text/plain",
+            _ => "application/octet-stream"
         };
 
         public static bool IsImagePath(string path) =>

@@ -84,7 +84,7 @@ namespace App.Services
             {
                 foreach (var entry in incoming)
                 {
-                    var attachmentIds = ExtractAttachmentIds(entry.Content);
+                    var attachmentIds = NotebookFormat.ExtractAttachmentIds(entry.Content);
                     if (existing.TryGetValue(entry.Key, out var stored) &&
                         string.Equals(stored.Value, entry.Content, StringComparison.Ordinal) &&
                         stored.Attachments.SequenceEqual(attachmentIds))
@@ -93,8 +93,7 @@ namespace App.Services
                         continue;
                     }
 
-                    var attachments = attachmentIds.Select(id => Database.Attachments.FindById(id)).Where(item => item is not null).Cast<AttachmentDocument>().ToList();
-                    var embedding = await gemini.EmbedNoteAsync(entry.Content, attachments, CancellationToken.None);
+                    var embedding = await gemini.EmbedNoteAsync(entry.Content, CancellationToken.None);
                     prepared.Add(new NoteDocument
                     {
                         Id = entry.Key,
@@ -131,13 +130,6 @@ namespace App.Services
             foreach (var attachment in Database.Attachments.FindAll())
                 if (!referenced.Contains(attachment.Id)) Database.Attachments.Delete(attachment.Id);
         }
-
-        private static List<string> ExtractAttachmentIds(string content) =>
-            NotebookFormat.Parse(content)
-                .Where(section => section.Kind is NoteSectionKind.File or NoteSectionKind.Image)
-                .Select(section => section.Content.Trim())
-                .Where(value => Guid.TryParse(value, out _))
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
         private static string Preview(string content)
         {

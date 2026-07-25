@@ -8,8 +8,17 @@
             HorizontalAlignment="Stretch"
             Background="Transparent"
             CornerRadius="6"
+            GotFocus="Root_GotFocus"
+            LostFocus="Root_LostFocus"
             PointerEntered="Root_PointerEntered"
             PointerExited="Root_PointerExited">
-        <Grid x:Name="ContentHost" />
+        <ScrollViewer x:Name="BlockScrollViewer"
+                      MaxHeight="300"
+                      HorizontalScrollMode="Disabled"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollMode="Enabled"
+                      VerticalScrollBarVisibility="Hidden">
+            <Grid x:Name="ContentHost" />
+        </ScrollViewer>
     </Border>
 </UserControl>
