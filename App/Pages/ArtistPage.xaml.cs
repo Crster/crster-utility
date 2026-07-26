@@ -352,7 +352,7 @@ namespace App.Pages
         private static async Task<byte[]> ConvertToJpegAsync(IRandomAccessStream source)
         {
             var decoder = await BitmapDecoder.CreateAsync(source);
-            const uint maximumDimension = 780;
+            const uint maximumDimension = 720;
             var scale = Math.Min(
                 1d,
                 maximumDimension / (double)Math.Max(decoder.OrientedPixelWidth, decoder.OrientedPixelHeight));

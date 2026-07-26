@@ -133,6 +133,19 @@ namespace App.Services
 
             var body = new JsonObject
             {
+                ["system_instruction"] = new JsonObject
+                {
+                    ["parts"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["text"] =
+                                "Generate a clear, sharp image with a maximum output dimension of 720 pixels on its longest edge. " +
+                                "When multiple reference images are provided, blend them into one coherent image with natural relative scale, " +
+                                "accurate proportions, consistent perspective and lighting, and seamless boundaries."
+                        }
+                    }
+                },
                 ["contents"] = new JsonArray
                 {
                     new JsonObject { ["role"] = "user", ["parts"] = parts }
