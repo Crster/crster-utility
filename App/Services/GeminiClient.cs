@@ -76,7 +76,7 @@ namespace App.Services
             upload.Content.Headers.ContentLength = fileInfo.Length;
             using var uploadResponse = await _httpClient.SendAsync(upload, cancellationToken);
             var root = await ReadJsonAsync(uploadResponse, cancellationToken);
-            var file = root["file"]?.AsObject() ?? throw new InvalidOperationException("Gemini returned an invalid file upload response.");
+            var file = root["file"] as JsonObject ?? throw new InvalidOperationException("Gemini returned an invalid file upload response.");
             return new ChatAttachment(path, fileInfo.Name, file["mimeType"]?.GetValue<string>() ?? mimeType,
                 file["name"]?.GetValue<string>(), file["uri"]?.GetValue<string>());
         }
@@ -192,7 +192,7 @@ namespace App.Services
                 [],
                 [CreateUserStep(prompt, [])],
                 systemInstruction,
-                new JsonArray { new JsonObject { ["google_search"] = new JsonObject() } },
+                new JsonArray { new JsonObject { ["type"] = "google_search" } },
                 cancellationToken);
 
         public static JsonObject CreateUserStep(string text, IEnumerable<ChatAttachment> attachments)
@@ -270,7 +270,13 @@ namespace App.Services
         {
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode) throw new InvalidOperationException(ReadError(content, response));
-            return JsonNode.Parse(content)?.AsObject() ?? new JsonObject();
+            var parsed = JsonNode.Parse(content);
+            return parsed switch
+            {
+                null => new JsonObject(),
+                JsonObject root => root,
+                _ => throw new InvalidOperationException($"Gemini returned an unexpected JSON root of type {parsed.GetType().Name}.")
+            };
         }
 
         private static GeminiTurnResult ParseInteraction(JsonObject root)
@@ -290,7 +296,11 @@ namespace App.Services
                     foreach (var content in step["content"]?.AsArray() ?? [])
                     {
                         var contentType = content?["type"]?.GetValue<string>();
-                        if (contentType == "text") result.Text += content?["text"]?.GetValue<string>();
+                        if (contentType == "text")
+                        {
+                            result.Text += content?["text"]?.GetValue<string>();
+                            AppendUrlCitations(result, content?["annotations"]?.AsArray());
+                        }
                         else if (contentType == "image" && content is JsonObject imageContent)
                             result.Image = ParseGeneratedImage(imageContent);
                     }
@@ -299,11 +309,24 @@ namespace App.Services
                 result.Image = ParseGeneratedImage(outputImage);
             foreach (var item in root["grounding_metadata"]?["grounding_chunks"]?.AsArray() ?? [])
             {
-                var web = item?["web"]?.AsObject();
+                var web = item?["web"] as JsonObject;
                 var uri = web?["uri"]?.GetValue<string>();
                 if (!string.IsNullOrWhiteSpace(uri)) result.Sources.Add(new GroundedSource(web?["title"]?.GetValue<string>() ?? uri, uri));
             }
             return result;
+        }
+
+        private static void AppendUrlCitations(GeminiTurnResult result, JsonArray? annotations)
+        {
+            foreach (var annotation in annotations ?? [])
+            {
+                if (annotation?["type"]?.GetValue<string>() != "url_citation") continue;
+                var uri = annotation["url"]?.GetValue<string>();
+                if (string.IsNullOrWhiteSpace(uri)) continue;
+                var title = annotation["title"]?.GetValue<string>() ?? uri;
+                if (!result.Sources.Any(source => source.Uri.Equals(uri, StringComparison.OrdinalIgnoreCase)))
+                    result.Sources.Add(new GroundedSource(title, uri));
+            }
         }
 
         private static void AppendThoughtSummary(GeminiTurnResult result, JsonObject step)
@@ -336,8 +359,64 @@ namespace App.Services
 
         private static string ReadError(string content, HttpResponseMessage response)
         {
-            try { return JsonNode.Parse(content)?["error"]?["message"]?.GetValue<string>() ?? $"Gemini request failed ({(int)response.StatusCode})."; }
-            catch (JsonException) { return $"Gemini request failed ({(int)response.StatusCode}): {content}"; }
+            var fallback = $"Gemini request failed ({(int)response.StatusCode}).";
+            try
+            {
+                var root = JsonNode.Parse(content);
+                var message = FindErrorMessage(root);
+                return string.IsNullOrWhiteSpace(message)
+                    ? AppendSafeResponseDetail(fallback, content)
+                    : message;
+            }
+            catch (JsonException)
+            {
+                return AppendSafeResponseDetail(fallback, content);
+            }
+        }
+
+        private static string? FindErrorMessage(JsonNode? node)
+        {
+            if (node is JsonObject root)
+            {
+                if (TryReadString(root["message"], out var directMessage)) return directMessage;
+                if (root["error"] is JsonObject error && TryReadString(error["message"], out var nestedMessage)) return nestedMessage;
+                if (TryReadString(root["error"], out var stringError)) return stringError;
+                foreach (var value in root.Select(property => property.Value))
+                {
+                    var childMessage = FindErrorMessage(value);
+                    if (!string.IsNullOrWhiteSpace(childMessage)) return childMessage;
+                }
+            }
+            else if (node is JsonArray array)
+            {
+                foreach (var item in array)
+                {
+                    var childMessage = FindErrorMessage(item);
+                    if (!string.IsNullOrWhiteSpace(childMessage)) return childMessage;
+                }
+            }
+            return null;
+        }
+
+        private static bool TryReadString(JsonNode? node, out string value)
+        {
+            if (node is JsonValue jsonValue
+                && jsonValue.TryGetValue<string>(out var text)
+                && !string.IsNullOrWhiteSpace(text))
+            {
+                value = text.Trim();
+                return true;
+            }
+            value = string.Empty;
+            return false;
+        }
+
+        private static string AppendSafeResponseDetail(string fallback, string content)
+        {
+            var normalized = string.Join(" ", content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            if (normalized.Length == 0) return fallback;
+            if (normalized.Length > 1_000) normalized = $"{normalized[..1_000]}…";
+            return $"{fallback} Response: {normalized}";
         }
 
         private static string GetMimeType(string path)

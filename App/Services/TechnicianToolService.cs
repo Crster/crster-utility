@@ -59,6 +59,16 @@ namespace App.Services
             Function("get_data", "Return only one of these local data values: local date/time, configured location, weather, clipboard text, language, or battery percentage. It cannot obtain any other data.", Props(("kind", SecretaryToolService.DataKindSchema())), "kind")
         ];
 
+        public static JsonArray CreateExecutionDeclarations()
+        {
+            var declarations = CreateDeclarations();
+            return new JsonArray(declarations
+                .OfType<JsonObject>()
+                .Where(declaration => declaration["name"]?.GetValue<string>() is not ("plan" or "design" or "research"))
+                .Select(declaration => (JsonNode)declaration.DeepClone())
+                .ToArray());
+        }
+
         public async Task<ToolResult> ExecuteAsync(string name, JsonObject arguments, CancellationToken token)
         {
             try
@@ -536,10 +546,16 @@ namespace App.Services
                 if (string.IsNullOrWhiteSpace(result.Text)) return Error("research_unavailable", "gemini-3.5-flash-lite did not return research context.");
                 return Ok("Generated grounded research context.", new JsonObject { ["context"] = result.Text, ["sources"] = new JsonArray(result.Sources.Select(source => (JsonNode)new JsonObject { ["title"] = source.Title, ["uri"] = source.Uri }).ToArray()) });
             }
-            catch (Exception)
+            catch (Exception exception)
             {
-                return Error("research_unavailable", "gemini-3.5-flash-lite with Google Search grounding is unavailable for this API key.");
+                return Error("research_unavailable", $"Google Search grounding request failed: {SanitizeExternalError(exception.Message)}");
             }
+        }
+
+        private static string SanitizeExternalError(string message)
+        {
+            var normalized = Regex.Replace(message, @"\s+", " ").Trim();
+            return normalized.Length <= 500 ? normalized : $"{normalized[..500]}…";
         }
 
         private async Task<ToolResult> PlanAsync(string request, CancellationToken token)

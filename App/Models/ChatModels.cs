@@ -51,6 +51,7 @@ namespace App.Models
         public List<ChatMessage> Messages { get; } = [];
         public string ContextText { get; set; } = string.Empty;
         public bool ProjectDocumentationScanned { get; set; }
+        public string ProjectDocumentationFingerprint { get; set; } = string.Empty;
     }
 
     internal sealed record ChatMessage(
@@ -60,7 +61,8 @@ namespace App.Models
         IReadOnlyList<ChatAttachment>? Attachments = null,
         GeneratedImage? Image = null,
         JsonObject? ToolArguments = null,
-        bool? ToolSucceeded = null);
+        bool? ToolSucceeded = null,
+        bool IncludeInContext = true);
 
     internal sealed record ToolResult(
         bool Success,
