@@ -58,14 +58,14 @@ namespace App
             if (_redirectedLaunchPending)
             {
                 _redirectedLaunchPending = false;
-                (App.MainWindow as Windows.MainWindow)?.ShowChatFromActivation();
+                (App.MainWindow as Windows.MainWindow)?.ShowFromActivation();
             }
         }
 
         internal void ActivateFromRedirectedLaunch()
         {
             if (App.MainWindow is Windows.MainWindow mainWindow)
-                mainWindow.ShowChatFromActivation();
+                mainWindow.ShowFromActivation();
             else
                 _redirectedLaunchPending = true;
         }

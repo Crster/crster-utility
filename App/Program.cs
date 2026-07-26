@@ -23,10 +23,27 @@ namespace App
             var mainInstance = AppInstance.FindOrRegisterForKey(MainInstanceKey);
             if (!mainInstance.IsCurrent)
             {
-                mainInstance.RedirectActivationToAsync(currentInstance.GetActivatedEventArgs())
-                    .AsTask()
-                    .GetAwaiter()
-                    .GetResult();
+                var activationArguments = currentInstance.GetActivatedEventArgs();
+                var redirectThread = new Thread(() =>
+                {
+                    try
+                    {
+                        mainInstance.RedirectActivationToAsync(activationArguments)
+                            .AsTask()
+                            .GetAwaiter()
+                            .GetResult();
+                    }
+                    catch (Exception exception)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Activation redirection failed: {exception}");
+                    }
+                })
+                {
+                    IsBackground = false,
+                    Name = "ActivationRedirect"
+                };
+                redirectThread.SetApartmentState(ApartmentState.MTA);
+                redirectThread.Start();
                 return;
             }
 
@@ -48,7 +65,7 @@ namespace App
                 }
 
                 if (activationPending)
-                    _ = dispatcherQueue.TryEnqueue(application.ActivateFromRedirectedLaunch);
+                    EnqueueActivation(dispatcherQueue, application);
             });
         }
 
@@ -67,7 +84,13 @@ namespace App
                 }
             }
 
-            _ = dispatcherQueue.TryEnqueue(application.ActivateFromRedirectedLaunch);
+            EnqueueActivation(dispatcherQueue, application);
+        }
+
+        private static void EnqueueActivation(DispatcherQueue dispatcherQueue, App application)
+        {
+            if (!dispatcherQueue.TryEnqueue(application.ActivateFromRedirectedLaunch))
+                System.Diagnostics.Debug.WriteLine("Activation could not be queued on the UI thread.");
         }
     }
 }

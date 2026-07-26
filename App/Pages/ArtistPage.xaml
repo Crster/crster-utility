@@ -57,7 +57,7 @@
 
                 <!-- Section: Artist composer -->
                 <StackPanel VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
-                            MaxWidth="680" Margin="16,16,16,0">
+                            MaxWidth="680" Margin="16,16,16,10">
                     <Border x:Name="ComposerBorder"
                             Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"

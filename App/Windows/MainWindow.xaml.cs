@@ -69,14 +69,10 @@ namespace App.Windows
             Activate();
         }
 
-        internal void ShowChatFromActivation()
+        internal void ShowFromActivation()
         {
             IsHiddenToTray = false;
             AppWindow.Show();
-            SidebarNavigation.SelectedItem = ChatNavItem;
-            if (NavigationPresenter.CurrentSourcePageType != typeof(Pages.ChatPage))
-                NavigationPresenter.Navigate(typeof(Pages.ChatPage));
-
             NativeInputService.ActivateWindow(WindowNative.GetWindowHandle(this));
         }
 
