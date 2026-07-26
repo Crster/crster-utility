@@ -1,4 +1,5 @@
 using Microsoft.Graphics.Canvas;
+using Microsoft.Graphics.Canvas.Effects;
 using Microsoft.Graphics.Canvas.Geometry;
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.Graphics.Canvas.UI.Xaml;
@@ -29,6 +30,7 @@ namespace App.Windows
             Arrow,
             Box,
             Text,
+            Blur,
         }
 
         private class DrawnShape
@@ -42,6 +44,7 @@ namespace App.Windows
         private readonly CanvasBitmap Snapshot;
         private ActiveActions action = ActiveActions.Crop;
         private Rect? cropSelection;
+        private readonly List<Rect> blurRegions = new();
         private bool isDragging;
         private Point? dragStart;
         private Point? dragEnd;
@@ -63,6 +66,8 @@ namespace App.Windows
             FontFamily = "Segoe UI",
             WordWrapping = CanvasWordWrapping.NoWrap
         };
+
+        private const float BlurAmount = 3f;
 
         public event EventHandler<SavedImageResult>? ImageSaved;
 
@@ -95,16 +100,23 @@ namespace App.Windows
 
             ds.DrawImage(this.Snapshot);
 
-            // Determine the active selection rectangle (confirmed or dragging)
-            Rect? selectionRect = cropSelection;
-            if (isDragging && action == ActiveActions.Crop && dragStart.HasValue && dragEnd.HasValue)
+            Rect? cropRect = cropSelection;
+            Rect? blurPreview = null;
+            if (isDragging && dragStart.HasValue && dragEnd.HasValue)
             {
-                selectionRect = NormalizeRect(dragStart.Value, dragEnd.Value);
+                if (action == ActiveActions.Crop)
+                {
+                    cropRect = NormalizeRect(dragStart.Value, dragEnd.Value);
+                }
+                else if (action == ActiveActions.Blur)
+                {
+                    blurPreview = NormalizeRect(dragStart.Value, dragEnd.Value);
+                }
             }
 
-            if (selectionRect.HasValue)
+            if (cropRect.HasValue)
             {
-                var selection = selectionRect.Value;
+                var selection = cropRect.Value;
                 double left = Math.Clamp(selection.Left, 0, sender.ActualWidth);
                 double top = Math.Clamp(selection.Top, 0, sender.ActualHeight);
                 double right = Math.Clamp(selection.Right, left, sender.ActualWidth);
@@ -121,11 +133,18 @@ namespace App.Windows
                     DashStyle = CanvasDashStyle.Dash,
                     CustomDashStyle = new float[] { 4, 4 }
                 };
-                ds.DrawRectangle(selectionRect.Value, Colors.White, 2, style);
+                ds.DrawRectangle(cropRect.Value, Colors.White, 2, style);
             }
-            else
+            else if (action == ActiveActions.Crop)
             {
                 ds.FillRectangle(new Rect(0, 0, sender.ActualWidth, sender.ActualHeight), Color.FromArgb(160, 0, 0, 0));
+            }
+
+            DrawBlurRegions(ds, blurRegions, 0, 0);
+
+            if (blurPreview.HasValue)
+            {
+                ds.DrawRectangle(blurPreview.Value, Colors.White, 2);
             }
 
             foreach (var shape in shapes)
@@ -247,6 +266,28 @@ namespace App.Windows
             ds.DrawRectangle(rect, Colors.Red, 3);
         }
 
+        private void DrawBlurRegions(CanvasDrawingSession ds, IEnumerable<Rect> regions, double offsetX, double offsetY)
+        {
+            if (regions is ICollection<Rect> collection && collection.Count == 0) return;
+
+            var blurEffect = new GaussianBlurEffect
+            {
+                Source = Snapshot,
+                BlurAmount = BlurAmount
+            };
+
+            foreach (var region in regions)
+            {
+                var clippedRegion = new Rect(region.X - offsetX, region.Y - offsetY, region.Width, region.Height);
+                if (clippedRegion.Width <= 0 || clippedRegion.Height <= 0) continue;
+
+                using (ds.CreateLayer(1, clippedRegion))
+                {
+                    ds.DrawImage(blurEffect, (float)-offsetX, (float)-offsetY);
+                }
+            }
+        }
+
         private void MyCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
         {
             if (isDragging) return;
@@ -274,7 +315,7 @@ namespace App.Windows
                 cropSelection = null;
                 MyCanvas.Invalidate();
             }
-            else if (action == ActiveActions.Arrow || action == ActiveActions.Box)
+            else if (action == ActiveActions.Arrow || action == ActiveActions.Box || action == ActiveActions.Blur)
             {
                 isDragging = true;
                 dragStart = point;
@@ -318,6 +359,14 @@ namespace App.Windows
             if (action == ActiveActions.Crop)
             {
                 cropSelection = NormalizeRect(dragStart!.Value, point);
+            }
+            else if (action == ActiveActions.Blur)
+            {
+                var region = NormalizeRect(dragStart!.Value, point);
+                if (region.Width > 0 && region.Height > 0)
+                {
+                    blurRegions.Add(region);
+                }
             }
             else if (action == ActiveActions.Arrow || action == ActiveActions.Box)
             {
@@ -540,6 +589,7 @@ namespace App.Windows
             ArrowButton.IsChecked = action == ActiveActions.Arrow;
             BoxButton.IsChecked = action == ActiveActions.Box;
             TextButton.IsChecked = action == ActiveActions.Text;
+            BlurButton.IsChecked = action == ActiveActions.Blur;
         }
 
         private void CropButton_Click(object sender, RoutedEventArgs e)
@@ -569,6 +619,14 @@ namespace App.Windows
         private void TextButton_Click(object sender, RoutedEventArgs e)
         {
             action = ActiveActions.Text;
+            UpdateActiveButton();
+            MyCanvas.Invalidate();
+        }
+
+        private void BlurButton_Click(object sender, RoutedEventArgs e)
+        {
+            action = ActiveActions.Blur;
+            CommitText();
             UpdateActiveButton();
             MyCanvas.Invalidate();
         }
@@ -709,6 +767,8 @@ namespace App.Windows
             using (var ds = renderTarget.CreateDrawingSession())
             {
                 ds.DrawImage(Snapshot, new Rect(0, 0, cropWidth, cropHeight), cropRect);
+
+                DrawBlurRegions(ds, blurRegions, cropRect.X, cropRect.Y);
 
                 foreach (var shape in shapes)
                 {

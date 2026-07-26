@@ -53,6 +53,11 @@
                         <FontIcon Glyph="&#xEF60;"/>
                     </AppBarToggleButton.Icon>
                 </AppBarToggleButton>
+                <AppBarToggleButton x:Name="BlurButton" Label="Blur" Click="BlurButton_Click">
+                    <AppBarToggleButton.Icon>
+                        <FontIcon Glyph="&#xED61;"/>
+                    </AppBarToggleButton.Icon>
+                </AppBarToggleButton>
                 <AppBarSeparator />
                 <AppBarButton x:Name="CopyButton" Icon="Copy" Label="Copy" Click="CopyButton_Click"/>
                 <AppBarButton x:Name="SaveButton" Icon="Save" Label="Save" Click="SaveButton_Click"/>
