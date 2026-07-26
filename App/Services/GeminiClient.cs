@@ -151,7 +151,8 @@ namespace App.Services
             if (thinkingLevel != GeminiThinkingLevel.Default)
                 body["generation_config"] = new JsonObject
                 {
-                    ["thinking_level"] = thinkingLevel == GeminiThinkingLevel.High ? "high" : "low"
+                    ["thinking_level"] = thinkingLevel == GeminiThinkingLevel.High ? "high" : "low",
+                    ["thinking_summaries"] = "auto"
                 };
             if (tools is not null && tools.Count > 0) body["tools"] = tools.DeepClone();
             using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/interactions");

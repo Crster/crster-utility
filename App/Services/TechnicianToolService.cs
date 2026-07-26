@@ -10,6 +10,8 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using App.Models;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace App.Services
 {
@@ -47,7 +49,7 @@ namespace App.Services
         [
             Function("read_file", "Read a text file inside the selected workspace. Optionally provide zero-based, end-exclusive start and end offsets to read a character range.", Props(("path", String()), ("start", Integer()), ("end", Integer())), "path"),
             Function("write_file", "Write text to a file inside the selected workspace. Creates parent folders when needed. Optionally provide zero-based, end-exclusive start and end offsets to replace a character range in an existing file; provide neither offset to replace the whole file.", Props(("path", String()), ("content", String()), ("start", Integer()), ("end", Integer())), "path", "content"),
-            Function("patch_file", "Replace one exact text block in a workspace file. Read the file first and use its exact old_text.", Props(("path", String()), ("old_text", String()), ("new_text", String())), "path", "old_text", "new_text"),
+            Function("patch_file", "Atomically apply one or more text patches. Use old_text/new_text for one edit, or edits: [{ old_text, new_text, replace_all }]. Matching falls back from exact text to safe whitespace-aware matching; failures include the closest candidate. syntax_check is reserved for an optional C# syntax gate when Roslyn is available.", Props(("path", String()), ("old_text", String()), ("new_text", String()), ("replace_all", Boolean()), ("edits", new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "object", ["properties"] = Props(("old_text", String()), ("new_text", String()), ("replace_all", Boolean())), ["required"] = new JsonArray("old_text", "new_text") } }), ("syntax_check", Boolean())), "path"),
             Function("delete_file", "Delete a file or empty directory inside the workspace after user confirmation.", Props(("path", String())), "path"),
             Function("search_file", "Recursively search workspace files in a directory by regular expression, like grep. Returns matching file paths and contextual line snippets up to 125 characters; start and end are zero-based, end-exclusive offsets of the match in each snippet.", Props(("directory", String()), ("regex_pattern", String())), "directory", "regex_pattern"),
             Function("list_file_and_directory", "List workspace files and directories. Optionally filter by regex and depth.", Props(("path", String()), ("depth", Integer()), ("regex", String())), "path"),
@@ -78,7 +80,7 @@ namespace App.Services
                 {
                     "read_file" => ReadFile(Required(arguments, "path"), OptionalRange(arguments)),
                     "write_file" => WriteFile(Required(arguments, "path"), RequiredContent(arguments, "content"), OptionalRange(arguments)),
-                    "patch_file" => PatchFile(Required(arguments, "path"), Required(arguments, "old_text"), Required(arguments, "new_text")),
+                    "patch_file" => PatchFile(Required(arguments, "path"), arguments),
                     "delete_file" => await DeleteFileAsync(Required(arguments, "path")),
                     "search_file" => SearchFiles(Required(arguments, "directory"), Required(arguments, "regex_pattern")),
                     "list_file_and_directory" => ListFiles(Optional(arguments, "path"), OptionalInt(arguments, "depth", 3), Optional(arguments, "regex")),
@@ -147,16 +149,246 @@ namespace App.Services
             return Ok("Wrote the file.", new JsonObject { ["path"] = fullPath, ["bytes"] = new FileInfo(fullPath).Length });
         }
 
-        private ToolResult PatchFile(string path, string oldText, string newText)
+        private ToolResult PatchFile(string path, JsonObject arguments)
         {
             var fullPath = ResolveWorkspacePath(path);
+            if (!File.Exists(fullPath)) return Error("file_not_found", "The file does not exist.");
             var content = File.ReadAllText(fullPath);
-            var position = content.IndexOf(oldText, StringComparison.Ordinal);
-            if (position < 0) return Error("patch_not_found", "old_text was not found exactly once in the file.");
-            if (content.IndexOf(oldText, position + oldText.Length, StringComparison.Ordinal) >= 0)
-                return Error("patch_ambiguous", "old_text occurs more than once; use a more specific text block.");
-            File.WriteAllText(fullPath, content[..position] + newText + content[(position + oldText.Length)..], new UTF8Encoding(false));
-            return Ok("Patched the file.", new JsonObject { ["path"] = fullPath });
+            var edits = ParsePatchEdits(arguments);
+            var resolved = new List<ResolvedPatch>();
+
+            // Resolve every edit against the untouched file so a partial patch can never be persisted.
+            foreach (var edit in edits)
+            {
+                var matches = FindPatchMatches(content, edit);
+                if (matches.Count == 0) return PatchNotFound(content, edit.OldText);
+                if (!edit.ReplaceAll && matches.Count > 1) return PatchAmbiguous(content, matches);
+                resolved.AddRange(matches.Select(match => new ResolvedPatch(match.Start, match.Length, match.NewText)));
+            }
+
+            var overlaps = resolved.OrderBy(match => match.Start).ToArray();
+            for (var index = 1; index < overlaps.Length; index++)
+                if (overlaps[index].Start < overlaps[index - 1].Start + overlaps[index - 1].Length)
+                    return Error("patch_overlap", "Two edits target overlapping text. Refine the edits so each original range is distinct.");
+
+            var patched = content;
+            foreach (var patch in resolved.OrderByDescending(match => match.Start))
+                patched = patched[..patch.Start] + patch.NewText + patched[(patch.Start + patch.Length)..];
+
+            if (OptionalBoolean(arguments, "syntax_check") && Path.GetExtension(fullPath).Equals(".cs", StringComparison.OrdinalIgnoreCase))
+            {
+                var errors = CSharpSyntaxTree.ParseText(patched).GetDiagnostics().Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error).Take(10).ToArray();
+                if (errors.Length > 0)
+                    return Error("patch_syntax_error", $"C# syntax validation failed; no file was changed. {string.Join("; ", errors.Select(error => error.ToString()))}");
+            }
+
+            File.WriteAllText(fullPath, patched, new UTF8Encoding(false));
+            var snippets = new JsonArray(resolved.OrderBy(patch => patch.Start).Select(patch => (JsonNode)new JsonObject
+            {
+                ["line_start"] = LineNumberAt(patched, TranslatePatchStart(patch.Start, resolved)),
+                ["snippet"] = CreatePatchSnippet(patched, TranslatePatchStart(patch.Start, resolved), patch.NewText.Length)
+            }).ToArray());
+            return Ok($"Patched the file with {resolved.Count} edit(s).", new JsonObject { ["path"] = fullPath, ["edits"] = snippets });
+        }
+
+        private static List<PatchEdit> ParsePatchEdits(JsonObject arguments)
+        {
+            var edits = new List<PatchEdit>();
+            if (arguments["edits"] is JsonArray editArray)
+            {
+                foreach (var node in editArray)
+                {
+                    if (node is not JsonObject edit) throw new FormatException("Every edits item must be an object.");
+                    edits.Add(new PatchEdit(RequiredContent(edit, "old_text"), RequiredContent(edit, "new_text"), OptionalBoolean(edit, "replace_all")));
+                }
+            }
+            else if (arguments.ContainsKey("old_text") || arguments.ContainsKey("new_text"))
+            {
+                edits.Add(new PatchEdit(RequiredContent(arguments, "old_text"), RequiredContent(arguments, "new_text"), OptionalBoolean(arguments, "replace_all")));
+            }
+            if (edits.Count == 0) throw new FormatException("Provide old_text and new_text, or a non-empty edits array.");
+            if (edits.Any(edit => edit.OldText.Length == 0)) throw new FormatException("old_text cannot be empty.");
+            return edits;
+        }
+
+        private static List<ResolvedPatch> FindPatchMatches(string content, PatchEdit edit)
+        {
+            var exact = FindOccurrences(content, edit.OldText).Select(start => new ResolvedPatch(start, edit.OldText.Length, edit.NewText)).ToList();
+            if (exact.Count > 0) return exact;
+
+            var normalized = FindNormalizedOccurrences(content, edit.OldText);
+            if (normalized.Count > 0) return normalized.Select(match => new ResolvedPatch(match.Start, match.Length, edit.NewText)).ToList();
+
+            var trimmedEnd = FindLineMatches(content, edit.OldText, trimAll: false);
+            if (trimmedEnd.Count > 0) return trimmedEnd.Select(match => new ResolvedPatch(match.Start, match.Length, edit.NewText)).ToList();
+
+            var fullyTrimmed = FindLineMatches(content, edit.OldText, trimAll: true);
+            if (fullyTrimmed.Count > 0) return fullyTrimmed.Select(match => new ResolvedPatch(match.Start, match.Length, Reindent(edit.NewText, content[match.Start..(match.Start + match.Length)]))).ToList();
+
+            var fuzzy = FindFuzzyLineMatches(content, edit.OldText);
+            return fuzzy.Select(match => new ResolvedPatch(match.Start, match.Length, Reindent(edit.NewText, content[match.Start..(match.Start + match.Length)]))).ToList();
+        }
+
+        private static List<int> FindOccurrences(string content, string value)
+        {
+            var results = new List<int>();
+            for (var start = 0; (start = content.IndexOf(value, start, StringComparison.Ordinal)) >= 0; start += Math.Max(1, value.Length)) results.Add(start);
+            return results;
+        }
+
+        private static List<(int Start, int Length)> FindNormalizedOccurrences(string content, string oldText)
+        {
+            var (normalizedContent, positions) = NormalizeForPatch(content);
+            var (normalizedOld, _) = NormalizeForPatch(oldText);
+            var matches = new List<(int Start, int Length)>();
+            for (var index = 0; (index = normalizedContent.IndexOf(normalizedOld, index, StringComparison.Ordinal)) >= 0; index += Math.Max(1, normalizedOld.Length))
+            {
+                var start = positions[index];
+                var end = index + normalizedOld.Length < positions.Count ? positions[index + normalizedOld.Length] : content.Length;
+                matches.Add((start, end - start));
+            }
+            return matches;
+        }
+
+        private static (string Text, List<int> Positions) NormalizeForPatch(string value)
+        {
+            var builder = new StringBuilder(value.Length);
+            var positions = new List<int>(value.Length);
+            for (var index = value.Length > 0 && value[0] == '\uFEFF' ? 1 : 0; index < value.Length; index++)
+            {
+                if (value[index] == '\r' && index + 1 < value.Length && value[index + 1] == '\n') continue;
+                builder.Append(value[index]);
+                positions.Add(index);
+            }
+            return (builder.ToString(), positions);
+        }
+
+        private static List<(int Start, int Length)> FindLineMatches(string content, string oldText, bool trimAll)
+        {
+            var source = SplitLines(content);
+            var expected = SplitLines(oldText);
+            if (expected.Count == 0 || expected.Count > source.Count) return [];
+            var matches = new List<(int Start, int Length)>();
+            for (var start = 0; start <= source.Count - expected.Count; start++)
+            {
+                var matchesBlock = true;
+                for (var offset = 0; offset < expected.Count; offset++)
+                {
+                    var actual = source[start + offset].Text;
+                    var wanted = expected[offset].Text;
+                    if (trimAll ? !string.Equals(actual.Trim(), wanted.Trim(), StringComparison.Ordinal) : !string.Equals(actual.TrimEnd(), wanted.TrimEnd(), StringComparison.Ordinal)) { matchesBlock = false; break; }
+                }
+                if (matchesBlock)
+                {
+                    var first = source[start];
+                    var last = source[start + expected.Count - 1];
+                    matches.Add((first.Start, last.End - first.Start));
+                }
+            }
+            return matches;
+        }
+
+        private static List<(int Start, int Length)> FindFuzzyLineMatches(string content, string oldText)
+        {
+            var source = SplitLines(content);
+            var expected = SplitLines(oldText);
+            if (expected.Count == 0 || expected.Count > source.Count) return [];
+            var expectedText = string.Join("\n", expected.Select(line => line.Text.Trim()));
+            var matches = new List<(int Start, int Length)>();
+            for (var start = 0; start <= source.Count - expected.Count; start++)
+            {
+                var candidate = string.Join("\n", source.Skip(start).Take(expected.Count).Select(line => line.Text.Trim()));
+                if (Similarity(expectedText, candidate) < 0.95) continue;
+                var first = source[start];
+                var last = source[start + expected.Count - 1];
+                matches.Add((first.Start, last.End - first.Start));
+            }
+            return matches;
+        }
+
+        private static ToolResult PatchNotFound(string content, string oldText)
+        {
+            var closest = FindClosestCandidate(content, oldText);
+            return Error("patch_not_found", $"No match. Closest candidate lines {closest.StartLine}–{closest.EndLine} ({closest.Similarity:P0} similar):\n{closest.Snippet}");
+        }
+
+        private static ToolResult PatchAmbiguous(string content, IReadOnlyList<ResolvedPatch> matches)
+        {
+            var lines = string.Join(", ", matches.Take(10).Select(match => LineNumberAt(content, match.Start).ToString()));
+            return Error("patch_ambiguous", $"Found {matches.Count} matches (lines {lines}) — add context or set replace_all.");
+        }
+
+        private static (int StartLine, int EndLine, double Similarity, string Snippet) FindClosestCandidate(string content, string oldText)
+        {
+            var source = SplitLines(content);
+            var expected = SplitLines(oldText);
+            var count = Math.Max(1, Math.Min(expected.Count, source.Count));
+            var wanted = string.Join("\n", expected.Select(line => line.Text.Trim()));
+            var bestStart = 0;
+            var bestScore = -1d;
+            for (var start = 0; start <= source.Count - count; start++)
+            {
+                var candidate = string.Join("\n", source.Skip(start).Take(count).Select(line => line.Text.Trim()));
+                var score = Similarity(wanted, candidate);
+                if (score > bestScore) { bestScore = score; bestStart = start; }
+            }
+            var first = source[bestStart];
+            var last = source[bestStart + count - 1];
+            return (bestStart + 1, bestStart + count, bestScore, CreatePatchSnippet(content, first.Start, last.End - first.Start));
+        }
+
+        private static double Similarity(string left, string right)
+        {
+            if (left.Length == 0 && right.Length == 0) return 1;
+            var previous = Enumerable.Range(0, right.Length + 1).ToArray();
+            for (var row = 1; row <= left.Length; row++)
+            {
+                var current = new int[right.Length + 1];
+                current[0] = row;
+                for (var column = 1; column <= right.Length; column++)
+                    current[column] = Math.Min(Math.Min(current[column - 1] + 1, previous[column] + 1), previous[column - 1] + (left[row - 1] == right[column - 1] ? 0 : 1));
+                previous = current;
+            }
+            return 1d - (double)previous[right.Length] / Math.Max(left.Length, right.Length);
+        }
+
+        private static List<PatchLine> SplitLines(string value)
+        {
+            var lines = new List<PatchLine>();
+            var start = 0;
+            for (var index = 0; index < value.Length; index++)
+            {
+                if (value[index] != '\n') continue;
+                var textEnd = index > start && value[index - 1] == '\r' ? index - 1 : index;
+                lines.Add(new PatchLine(start, index + 1, value[start..textEnd]));
+                start = index + 1;
+            }
+            if (start < value.Length || value.Length == 0) lines.Add(new PatchLine(start, value.Length, value[start..]));
+            return lines;
+        }
+
+        private static string Reindent(string newText, string matchedBlock)
+        {
+            var firstContentLine = SplitLines(matchedBlock).FirstOrDefault(line => !string.IsNullOrWhiteSpace(line.Text));
+            var targetIndent = firstContentLine?.Text ?? string.Empty;
+            targetIndent = targetIndent[..(targetIndent.Length - targetIndent.TrimStart().Length)];
+            var lines = SplitLines(newText);
+            var indents = lines.Where(line => !string.IsNullOrWhiteSpace(line.Text)).Select(line => line.Text.Length - line.Text.TrimStart().Length).ToArray();
+            var sourceIndent = indents.Length == 0 ? 0 : indents.Min();
+            return string.Concat(lines.Select(line => string.IsNullOrWhiteSpace(line.Text) ? line.Text + NewLineSuffix(newText, line) : targetIndent + line.Text[Math.Min(sourceIndent, line.Text.Length)..] + NewLineSuffix(newText, line)));
+        }
+
+        private static string NewLineSuffix(string text, PatchLine line) => line.End > line.Start && text[line.End - 1] == '\n' ? (line.End > line.Start + 1 && text[line.End - 2] == '\r' ? "\r\n" : "\n") : string.Empty;
+
+        private static int TranslatePatchStart(int originalStart, IEnumerable<ResolvedPatch> patches) => originalStart + patches.Where(patch => patch.Start < originalStart).Sum(patch => patch.NewText.Length - patch.Length);
+
+        private static int LineNumberAt(string content, int position) => 1 + content.Take(position).Count(character => character == '\n');
+
+        private static string CreatePatchSnippet(string content, int start, int length)
+        {
+            var firstLine = Math.Max(0, LineNumberAt(content, start) - 4);
+            var lastLine = LineNumberAt(content, Math.Min(content.Length, start + length)) + 3;
+            return string.Join("\n", SplitLines(content).Skip(firstLine).Take(lastLine - firstLine).Select(line => line.Text));
         }
 
         private async Task<ToolResult> DeleteFileAsync(string path)
@@ -402,6 +634,7 @@ namespace App.Services
         private static string RequiredContent(JsonObject arguments, string name) => arguments[name]?.GetValue<string>() ?? throw new FormatException($"{name} is required.");
         private static string Optional(JsonObject arguments, string name) => arguments[name]?.GetValue<string>()?.Trim() ?? string.Empty;
         private static int OptionalInt(JsonObject arguments, string name, int fallback) => arguments[name]?.GetValue<int>() ?? fallback;
+        private static bool OptionalBoolean(JsonObject arguments, string name) => arguments[name]?.GetValue<bool>() ?? false;
         private static (int Start, int End)? OptionalRange(JsonObject arguments)
         {
             var start = arguments["start"]?.GetValue<int>();
@@ -411,9 +644,14 @@ namespace App.Services
         }
         private static JsonObject String() => new() { ["type"] = "string" };
         private static JsonObject Integer() => new() { ["type"] = "integer" };
+        private static JsonObject Boolean() => new() { ["type"] = "boolean" };
         private static JsonObject Props(params (string Name, JsonObject Schema)[] properties) { var result = new JsonObject(); foreach (var property in properties) result[property.Name] = property.Schema; return result; }
         private static JsonObject Function(string name, string description, JsonObject properties, params string[] required) { var parameters = new JsonObject { ["type"] = "object", ["properties"] = properties }; if (required.Length > 0) parameters["required"] = new JsonArray(required.Select(value => (JsonNode)value).ToArray()); return new JsonObject { ["type"] = "function", ["name"] = name, ["description"] = description, ["parameters"] = parameters }; }
         private static ToolResult Ok(string summary, JsonObject? details = null) { var root = details ?? new JsonObject(); root.Insert(0, "summary", summary); root.Insert(0, "status", "completed"); return new ToolResult(true, root.ToJsonString()); }
         private static ToolResult Error(string category, string summary) => new(false, new JsonObject { ["status"] = "failed", ["error_category"] = category, ["summary"] = summary }.ToJsonString());
+
+        private sealed record PatchEdit(string OldText, string NewText, bool ReplaceAll);
+        private sealed record ResolvedPatch(int Start, int Length, string NewText);
+        private sealed record PatchLine(int Start, int End, string Text);
     }
 }

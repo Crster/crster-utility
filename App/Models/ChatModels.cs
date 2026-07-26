@@ -48,6 +48,7 @@ namespace App.Models
         public List<JsonObject> History { get; } = [];
         public List<ChatMessage> Messages { get; } = [];
         public string ContextText { get; set; } = string.Empty;
+        public bool ProjectDocumentationScanned { get; set; }
         public bool HighThinkingEnabled { get; set; }
     }
 
