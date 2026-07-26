@@ -6,7 +6,7 @@ namespace App.Models
 {
     internal enum ChatItemKind { User, Assistant, Thinking, Tool, Error }
     internal enum ChatPersonality { Secretary, Technician }
-    internal enum GeminiThinkingLevel { Default, Low, High }
+    internal enum GeminiThinkingLevel { Default, Disabled, Minimal, Low, High }
 
     internal sealed class GeminiModel
     {
@@ -51,7 +51,6 @@ namespace App.Models
         public List<ChatMessage> Messages { get; } = [];
         public string ContextText { get; set; } = string.Empty;
         public bool ProjectDocumentationScanned { get; set; }
-        public bool HighThinkingEnabled { get; set; }
     }
 
     internal sealed record ChatMessage(

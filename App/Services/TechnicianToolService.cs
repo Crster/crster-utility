@@ -23,26 +23,18 @@ namespace App.Services
         private const int MaximumSearchFiles = 10;
         private const int MaximumMatchSnippetLength = 125;
         private readonly GeminiClient _client;
-        private readonly TechnicianMemoryService _memory;
         private readonly SecretaryToolService _secretaryTools;
         private readonly Func<string, Task<bool>> _confirmAsync;
         private readonly Func<Task<ToolResult>> _compactAsync;
         private readonly Func<Task<ToolResult>> _cleanupAsync;
-        private readonly Action _enableHighThinking;
-        private readonly Action _resetHighThinking;
-
-        public TechnicianToolService(GeminiClient client, TechnicianMemoryService memory, SecretaryToolService secretaryTools,
-            Func<string, Task<bool>> confirmAsync, Func<Task<ToolResult>> compactAsync, Func<Task<ToolResult>> cleanupAsync,
-            Action enableHighThinking, Action resetHighThinking)
+        public TechnicianToolService(GeminiClient client, SecretaryToolService secretaryTools,
+            Func<string, Task<bool>> confirmAsync, Func<Task<ToolResult>> compactAsync, Func<Task<ToolResult>> cleanupAsync)
         {
             _client = client;
-            _memory = memory;
             _secretaryTools = secretaryTools;
             _confirmAsync = confirmAsync;
             _compactAsync = compactAsync;
             _cleanupAsync = cleanupAsync;
-            _enableHighThinking = enableHighThinking;
-            _resetHighThinking = resetHighThinking;
         }
 
         public string WorkspacePath { get; set; } = string.Empty;
@@ -59,10 +51,6 @@ namespace App.Services
             Function("execute_sudo", "Run a command elevated through a Windows UAC prompt after confirmation.", Props(("command", String()), ("arguments", String())), "command"),
             Function("list_process", "List running processes.", new JsonObject()),
             Function("kill_process", "Terminate a process by process ID after confirmation.", Props(("process_id", Integer())), "process_id"),
-            Function("read_memo", "Semantically search the Technician's short-term memory before working on a topic.", Props(("query", String())), "query"),
-            Function("write_memo", "Save a concise, useful Technician memory about the workspace or user preference.", Props(("value", String())), "value"),
-            Function("clear_memo", "Clear all Technician short-term memory when explicitly requested.", new JsonObject()),
-            Function("think", "Enable high thinking for a difficult or repeated unresolved problem.", new JsonObject()),
             Function("compact", "Build rich continuation context from the Technician chat, workspace, and memos, then clear chat and memos.", new JsonObject()),
             Function("clean_up", "Clear Technician chat and Context-panel text while retaining Technician memory.", new JsonObject()),
             Function("research", "Research current official documentation with Google Search grounding and return source-linked context.", Props(("topic", String())), "topic"),
@@ -90,10 +78,6 @@ namespace App.Services
                     "execute_sudo" => await ExecuteCommandAsync(Required(arguments, "command"), Optional(arguments, "arguments"), true, token),
                     "list_process" => ListProcesses(),
                     "kill_process" => await KillProcessAsync(OptionalInt(arguments, "process_id", 0)),
-                    "read_memo" => await ReadMemoAsync(Required(arguments, "query"), token),
-                    "write_memo" => await WriteMemoAsync(Required(arguments, "value"), token),
-                    "clear_memo" => ClearMemo(),
-                    "think" => EnableHighThinking(),
                     "compact" => await CompactAsync(),
                     "clean_up" => await CleanUpAsync(),
                     "research" => await ResearchAsync(Required(arguments, "topic"), token),
@@ -533,40 +517,13 @@ namespace App.Services
             return Ok("Terminated the process.", new JsonObject { ["process_id"] = processId });
         }
 
-        private async Task<ToolResult> ReadMemoAsync(string query, CancellationToken token)
-        {
-            var items = await _memory.ReadAsync(query, 10, token);
-            return Ok($"Found {items.Count} memo(s).", new JsonObject { ["items"] = new JsonArray(items.Select(item => (JsonNode)new JsonObject { ["key"] = item.Key, ["value"] = item.Value }).ToArray()) });
-        }
-
-        private async Task<ToolResult> WriteMemoAsync(string value, CancellationToken token)
-        {
-            var memo = await _memory.WriteAsync(value, token);
-            return Ok("Saved the memo.", new JsonObject { ["key"] = memo.Key });
-        }
-
-        private ToolResult ClearMemo()
-        {
-            _resetHighThinking();
-            _memory.Clear();
-            return Ok("Cleared Technician memory.");
-        }
-
-        private ToolResult EnableHighThinking()
-        {
-            _enableHighThinking();
-            return Ok("Enabled high thinking for the current Technician request.");
-        }
-
         private async Task<ToolResult> CompactAsync()
         {
-            _resetHighThinking();
             return await _compactAsync();
         }
 
         private async Task<ToolResult> CleanUpAsync()
         {
-            _resetHighThinking();
             return await _cleanupAsync();
         }
 

@@ -149,10 +149,17 @@ namespace App.Services
                 ["input"] = input,
                 ["system_instruction"] = systemInstruction
             };
-            if (thinkingLevel != GeminiThinkingLevel.Default)
+            // Gemini 2.5 Flash-Lite does not think by default. The Interactions API rejects
+            // thinking_budget, so Disabled intentionally sends no generation configuration.
+            if (thinkingLevel is not (GeminiThinkingLevel.Default or GeminiThinkingLevel.Disabled))
                 body["generation_config"] = new JsonObject
                 {
-                    ["thinking_level"] = thinkingLevel == GeminiThinkingLevel.High ? "high" : "low",
+                    ["thinking_level"] = thinkingLevel switch
+                    {
+                        GeminiThinkingLevel.Minimal => "minimal",
+                        GeminiThinkingLevel.High => "high",
+                        _ => "low"
+                    },
                     ["thinking_summaries"] = "auto"
                 };
             if (tools is not null && tools.Count > 0) body["tools"] = tools.DeepClone();
