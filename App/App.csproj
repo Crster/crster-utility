@@ -109,5 +109,6 @@
     <AppxBundlePlatforms>x64</AppxBundlePlatforms>
     <AppInstallerUri>D:\CrsterSite</AppInstallerUri>
     <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
+    <AppxPackageDir>D:\CrsterSite\CrsterUtility\Installer\</AppxPackageDir>
   </PropertyGroup>
 </Project>
