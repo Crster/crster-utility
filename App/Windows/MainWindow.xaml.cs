@@ -144,10 +144,15 @@ namespace App.Windows
 
         internal void CaptureSnapshotFromHotkey()
         {
-            SidebarNavigation.SelectedItem = SnapshotsNavItem;
             _ = DispatcherQueue.TryEnqueue(async () =>
             {
-                if (Pages.SnapshotsPage.Current is not null) await Pages.SnapshotsPage.Current.CaptureFromShortcutAsync();
+                if (NavigationPresenter.CurrentSourcePageType == typeof(Pages.SnapshotsPage) && Pages.SnapshotsPage.Current is not null)
+                {
+                    await Pages.SnapshotsPage.Current.CaptureFromShortcutAsync();
+                    return;
+                }
+
+                await Pages.SnapshotsPage.CaptureFromHotkeyAsync();
             });
         }
 

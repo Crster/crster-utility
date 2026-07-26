@@ -39,6 +39,17 @@ namespace App.Pages
 
         internal Task CaptureFromShortcutAsync() => CaptureScreenAsync();
 
+        internal static async Task CaptureFromHotkeyAsync()
+        {
+            var snapshot = await ScreenCaptureService.CaptureAsync(App.Settings.Current.SnapshotCaptureMouseCursor);
+            if (snapshot is null) throw new Exception("Failed to capture desktop");
+
+            var editSnapshotWindow = new EditSnapshotWindow(snapshot);
+            editSnapshotWindow.Closed += (_, _) => snapshot.Dispose();
+            editSnapshotWindow.Activate();
+            NativeInputService.ActivateWindow(WinRT.Interop.WindowNative.GetWindowHandle(editSnapshotWindow));
+        }
+
         private async void CaptureScreenButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => await CaptureScreenAsync();
 
         private async Task CaptureScreenAsync()
