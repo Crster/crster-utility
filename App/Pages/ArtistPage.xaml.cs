@@ -9,6 +9,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
@@ -22,12 +23,15 @@ namespace App.Pages
     public sealed partial class ArtistPage : Page
     {
         private GeneratedImage? _image;
+        private GeneratedImage? _pendingAttachment;
         private uint _pixelWidth;
         private uint _pixelHeight;
         private Rect? _selection;
         private Rect? _normalizedSelection;
         private Point? _dragStart;
         private bool _isBusy;
+        private bool _includePreviewOnNextSend;
+        private bool _hasGeneratedPreview;
 
         public ArtistPage()
         {
@@ -79,15 +83,10 @@ namespace App.Pages
 
         private void SelectionButton_Click(object sender, RoutedEventArgs e)
         {
-            if (SelectionButton.IsChecked == true)
-            {
-                StatusText.Text = "Drag over the image to select an area.";
-            }
-            else
+            if (SelectionButton.IsChecked != true)
             {
                 _selection = null;
                 _normalizedSelection = null;
-                StatusText.Text = string.Empty;
                 UpdateSelectionOverlay();
             }
             UpdateControls();
@@ -111,7 +110,9 @@ namespace App.Pages
             EmptyState.Visibility = Visibility.Visible;
             SelectionButton.IsChecked = false;
             PromptBox.Text = string.Empty;
-            StatusText.Text = string.Empty;
+            _pendingAttachment = null;
+            _includePreviewOnNextSend = false;
+            _hasGeneratedPreview = false;
             UpdateSelectionOverlay();
             UpdateControls();
         }
@@ -129,11 +130,12 @@ namespace App.Pages
                 if (file is null) return;
                 var buffer = await FileIO.ReadBufferAsync(file);
                 await SetImageAsync(new GeneratedImage(buffer.ToArray(), NormalizeMimeType(file.ContentType, file.FileType)));
-                StatusText.Text = string.Empty;
+                _includePreviewOnNextSend = true;
+                _hasGeneratedPreview = false;
             }
             catch (Exception exception)
             {
-                StatusText.Text = $"The image could not be opened: {exception.Message}";
+                await ShowErrorAsync("The image could not be opened", exception.Message);
             }
         }
 
@@ -145,33 +147,37 @@ namespace App.Pages
             if (_isBusy || prompt.Length == 0) return;
             if (string.IsNullOrWhiteSpace(App.Settings.Current.GeminiApiKey))
             {
-                StatusText.Text = "Add a Gemini API key in Settings before using Artist.";
+                await ShowErrorAsync("Gemini API key required", "Add a Gemini API key in Settings before using Artist.");
                 return;
             }
 
-            byte[]? contextBytes = _image?.Data;
-            string? contextMimeType = _image?.MimeType;
+            var contextImages = new System.Collections.Generic.List<GeneratedImage>();
             try
             {
                 if (_normalizedSelection.HasValue)
                 {
-                    contextBytes = await CropSelectionAsync();
-                    contextMimeType = "image/png";
+                    var selection = new GeneratedImage(await CropSelectionAsync(), "image/jpeg");
+                    contextImages.Add(await CreateJpegContextImageAsync(selection));
                 }
-                _selection = null;
-                _normalizedSelection = null;
-                SelectionButton.IsChecked = false;
-                UpdateSelectionOverlay();
+                else if ((_includePreviewOnNextSend || _hasGeneratedPreview) && _image is not null)
+                {
+                    contextImages.Add(await CreateJpegContextImageAsync(_image));
+                }
+                if (_pendingAttachment is not null) contextImages.Add(_pendingAttachment);
+
                 SetBusy(true);
                 using var client = new GeminiClient(App.Settings.Current.GeminiApiKey);
-                var generated = await client.GenerateImageAsync(prompt, contextBytes, contextMimeType, CancellationToken.None);
+                var generated = await client.GenerateImageAsync(prompt, contextImages, CancellationToken.None);
                 await SetImageAsync(generated);
+                _pendingAttachment = null;
+                _includePreviewOnNextSend = false;
+                _hasGeneratedPreview = true;
                 PromptBox.Text = string.Empty;
-                StatusText.Text = "Image ready.";
+                UpdateControls();
             }
             catch (Exception exception)
             {
-                StatusText.Text = $"Artist could not generate the image: {exception.Message}";
+                await ShowErrorAsync("Artist could not generate the image", exception.Message);
             }
             finally
             {
@@ -186,7 +192,7 @@ namespace App.Pages
             {
                 var selected = _normalizedSelection.HasValue;
                 var data = selected ? await CropSelectionAsync() : _image.Data;
-                var mimeType = selected ? "image/png" : _image.MimeType;
+                var mimeType = selected ? "image/jpeg" : _image.MimeType;
                 var extension = ExtensionForMimeType(mimeType);
                 var picker = new FileSavePicker { SuggestedFileName = selected ? "artist-selection" : "artist-image" };
                 picker.FileTypeChoices.Add(NameForExtension(extension), [extension]);
@@ -195,12 +201,11 @@ namespace App.Pages
                 if (file is not null)
                 {
                     await FileIO.WriteBytesAsync(file, data);
-                    StatusText.Text = "Image saved.";
                 }
             }
             catch (Exception exception)
             {
-                StatusText.Text = $"The image could not be saved: {exception.Message}";
+                await ShowErrorAsync("The image could not be saved", exception.Message);
             }
         }
 
@@ -250,13 +255,13 @@ namespace App.Pages
             };
             var pixels = await decoder.GetPixelDataAsync(
                 BitmapPixelFormat.Bgra8,
-                BitmapAlphaMode.Premultiplied,
+                BitmapAlphaMode.Ignore,
                 transform,
                 ExifOrientationMode.RespectExifOrientation,
                 ColorManagementMode.ColorManageToSRgb);
             using var output = new InMemoryRandomAccessStream();
-            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, output);
-            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
+            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.JpegEncoderId, output);
+            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore,
                 sourceRect.Width, sourceRect.Height, 96, 96, pixels.DetachPixelData());
             await encoder.FlushAsync();
             output.Seek(0);
@@ -317,6 +322,79 @@ namespace App.Pages
 
         private void PromptBox_TextChanged(object sender, TextChangedEventArgs e) => UpdateControls();
 
+        private async void PromptBox_Paste(object sender, TextControlPasteEventArgs e)
+        {
+            var content = Clipboard.GetContent();
+            if (!content.Contains(StandardDataFormats.Bitmap)) return;
+
+            e.Handled = true;
+            try
+            {
+                var bitmapReference = await content.GetBitmapAsync();
+                using var input = await bitmapReference.OpenReadAsync();
+                _pendingAttachment = new GeneratedImage(await ConvertToJpegAsync(input), "image/jpeg");
+                UpdateControls();
+            }
+            catch (Exception exception)
+            {
+                await ShowErrorAsync("The pasted image could not be attached", exception.Message);
+            }
+        }
+
+        private static async Task<GeneratedImage> CreateJpegContextImageAsync(GeneratedImage image)
+        {
+            using var source = new InMemoryRandomAccessStream();
+            await source.WriteAsync(image.Data.AsBuffer());
+            source.Seek(0);
+            return new GeneratedImage(await ConvertToJpegAsync(source), "image/jpeg");
+        }
+
+        private static async Task<byte[]> ConvertToJpegAsync(IRandomAccessStream source)
+        {
+            var decoder = await BitmapDecoder.CreateAsync(source);
+            const uint maximumDimension = 780;
+            var scale = Math.Min(
+                1d,
+                maximumDimension / (double)Math.Max(decoder.OrientedPixelWidth, decoder.OrientedPixelHeight));
+            var width = Math.Max(1u, (uint)Math.Round(decoder.OrientedPixelWidth * scale));
+            var height = Math.Max(1u, (uint)Math.Round(decoder.OrientedPixelHeight * scale));
+            var transform = new BitmapTransform
+            {
+                ScaledWidth = width,
+                ScaledHeight = height,
+            };
+            var pixels = await decoder.GetPixelDataAsync(
+                BitmapPixelFormat.Bgra8,
+                BitmapAlphaMode.Ignore,
+                transform,
+                ExifOrientationMode.RespectExifOrientation,
+                ColorManagementMode.ColorManageToSRgb);
+            using var output = new InMemoryRandomAccessStream();
+            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.JpegEncoderId, output);
+            encoder.SetPixelData(
+                BitmapPixelFormat.Bgra8,
+                BitmapAlphaMode.Ignore,
+                width,
+                height,
+                decoder.DpiX,
+                decoder.DpiY,
+                pixels.DetachPixelData());
+            await encoder.FlushAsync();
+            output.Seek(0);
+            var data = new byte[output.Size];
+            using var reader = new DataReader(output);
+            await reader.LoadAsync((uint)output.Size);
+            reader.ReadBytes(data);
+            return data;
+        }
+
+        private void RemoveAttachmentButton_Click(object sender, RoutedEventArgs e)
+        {
+            _pendingAttachment = null;
+            UpdateControls();
+            PromptBox.Focus(FocusState.Programmatic);
+        }
+
         private async void PromptBox_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
         {
             if (e.Key == VirtualKey.Enter && !e.KeyStatus.IsMenuKeyDown)
@@ -330,7 +408,8 @@ namespace App.Pages
         {
             _isBusy = busy;
             BusyRing.IsActive = busy;
-            StatusText.Text = busy ? "Creating your image..." : StatusText.Text;
+            BusyRing.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+            SendIcon.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
             UpdateControls();
         }
 
@@ -340,8 +419,23 @@ namespace App.Pages
             SendButton.IsEnabled = !_isBusy && !string.IsNullOrWhiteSpace(PromptBox.Text);
             DownloadButton.IsEnabled = !_isBusy && _image is not null;
             SelectionButton.IsEnabled = !_isBusy && _image is not null;
-            ClearButton.IsEnabled = !_isBusy && (_image is not null || !string.IsNullOrWhiteSpace(PromptBox.Text));
+            ClearButton.IsEnabled = !_isBusy &&
+                (_image is not null || _pendingAttachment is not null || !string.IsNullOrWhiteSpace(PromptBox.Text));
+            RemoveAttachmentButton.Visibility = _pendingAttachment is null ? Visibility.Collapsed : Visibility.Visible;
+            RemoveAttachmentButton.IsEnabled = !_isBusy;
             PreviewSurface.IsHitTestVisible = !_isBusy;
+        }
+
+        private async Task ShowErrorAsync(string title, string message)
+        {
+            var dialog = new ContentDialog
+            {
+                Title = title,
+                Content = message,
+                CloseButtonText = "OK",
+                XamlRoot = XamlRoot
+            };
+            await dialog.ShowAsync();
         }
 
         private static Rect Normalize(Point first, Point second) =>

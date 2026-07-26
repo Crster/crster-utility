@@ -29,36 +29,36 @@
                     <Grid x:Name="PreviewHost" MinWidth="360" MinHeight="260">
                         <Image x:Name="PreviewImage" Stretch="None" />
 
-                <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center"
                             Spacing="10" Margin="24">
-                    <Border Width="72" Height="72" CornerRadius="24"
+                            <Border Width="72" Height="72" CornerRadius="24"
                             Background="{ThemeResource AccentFillColorSecondaryBrush}">
-                        <FontIcon Glyph="&#xE91B;" FontSize="28"
+                                <FontIcon Glyph="&#xE91B;" FontSize="28"
                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
-                    <TextBlock Text="Create something new" FontSize="24" FontWeight="SemiBold"
+                            </Border>
+                            <TextBlock Text="Create something new" FontSize="24" FontWeight="SemiBold"
                                HorizontalAlignment="Center"/>
-                    <TextBlock Text="Click here to choose an image, or describe one below."
+                            <TextBlock Text="Click here to choose an image, or describe one below."
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                TextAlignment="Center" TextWrapping="Wrap"/>
-                </StackPanel>
+                        </StackPanel>
 
-                <!-- Subsection: Selection overlay -->
-                <Canvas x:Name="SelectionCanvas" IsHitTestVisible="False" Visibility="Collapsed">
-                    <Rectangle x:Name="ShadeTop" Fill="#99000000"/>
-                    <Rectangle x:Name="ShadeLeft" Fill="#99000000"/>
-                    <Rectangle x:Name="ShadeRight" Fill="#99000000"/>
-                    <Rectangle x:Name="ShadeBottom" Fill="#99000000"/>
-                    <Border x:Name="SelectionBorder" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                        <!-- Subsection: Selection overlay -->
+                        <Canvas x:Name="SelectionCanvas" IsHitTestVisible="False" Visibility="Collapsed">
+                            <Rectangle x:Name="ShadeTop" Fill="#99000000"/>
+                            <Rectangle x:Name="ShadeLeft" Fill="#99000000"/>
+                            <Rectangle x:Name="ShadeRight" Fill="#99000000"/>
+                            <Rectangle x:Name="ShadeBottom" Fill="#99000000"/>
+                            <Border x:Name="SelectionBorder" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
                             BorderThickness="2" CornerRadius="2"/>
-                </Canvas>
+                        </Canvas>
 
                     </Grid>
                 </ScrollViewer>
 
                 <!-- Section: Artist composer -->
                 <StackPanel VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
-                            MaxWidth="680" Margin="16,16,16,8" Spacing="8">
+                            MaxWidth="680" Margin="16,16,16,0">
                     <Border x:Name="ComposerBorder"
                             Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -67,46 +67,54 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <ToggleButton x:Name="SelectionButton" Width="44" Height="44" Padding="0"
-                                          CornerRadius="22" Click="SelectionButton_Click"
-                                          ToolTipService.ToolTip="Select part of the image"
-                                          AutomationProperties.Name="Select part of image">
-                                <FontIcon Glyph="&#xEF20;" FontSize="14"/>
-                            </ToggleButton>
-                            <Button x:Name="ClearButton" Grid.Column="1" Width="44" Height="44" Padding="0"
-                                    CornerRadius="22" Click="ClearButton_Click"
-                                    ToolTipService.ToolTip="Clear artist workspace"
-                                    AutomationProperties.Name="Clear artist workspace">
+                            <Button x:Name="ClearButton" Grid.Column="0" Width="44" Height="44" Padding="0"
+                                CornerRadius="22" Click="ClearButton_Click"
+                                ToolTipService.ToolTip="Clear artist workspace"
+                                AutomationProperties.Name="Clear artist workspace">
                                 <FontIcon Glyph="&#xEA99;" FontSize="14"/>
                             </Button>
-                            <TextBox x:Name="PromptBox" Grid.Column="2" MinHeight="44" MaxHeight="132"
+                            <ToggleButton x:Name="SelectionButton" Grid.Column="1" Width="44" Height="44" Padding="0"
+                                    CornerRadius="22" Click="SelectionButton_Click"
+                                    ToolTipService.ToolTip="Select part of the image"
+                                    AutomationProperties.Name="Select part of image">
+                                <FontIcon Glyph="&#xEF20;" FontSize="14"/>
+                            </ToggleButton>
+                            <Button x:Name="RemoveAttachmentButton" Grid.Column="2" Width="44" Height="44" Padding="0"
+                                    CornerRadius="22" Style="{StaticResource AccentButtonStyle}"
+                                    Visibility="Collapsed" Click="RemoveAttachmentButton_Click"
+                                    ToolTipService.ToolTip="Remove pasted image"
+                                    AutomationProperties.Name="Remove pasted image">
+                                <FontIcon Glyph="&#xF5AB;" FontSize="14"/>
+                            </Button>
+                            <TextBox x:Name="PromptBox" Grid.Column="3" MinHeight="44" MaxHeight="132"
                                      BorderThickness="0" Background="Transparent" AcceptsReturn="True"
                                      TextWrapping="Wrap" PlaceholderText="Describe what to create or change..."
                                      TextChanged="PromptBox_TextChanged"
+                                     Paste="PromptBox_Paste"
                                      PreviewKeyDown="PromptBox_PreviewKeyDown"/>
-                            <Button x:Name="DownloadButton" Grid.Column="3" Width="44" Height="44" Padding="0"
-                                    CornerRadius="22" Click="DownloadButton_Click"
-                                    ToolTipService.ToolTip="Download preview"
-                                    AutomationProperties.Name="Download image">
-                                <FontIcon Glyph="&#xE896;" FontSize="14"/>
-                            </Button>
                             <Button x:Name="SendButton" Grid.Column="4" Width="44" Height="44" Padding="0"
                                     CornerRadius="22" Style="{StaticResource AccentButtonStyle}"
                                     Click="SendButton_Click" ToolTipService.ToolTip="Generate image"
                                     AutomationProperties.Name="Generate image">
-                                <FontIcon Glyph="&#xE724;" FontSize="14"/>
+                                <Grid>
+                                    <FontIcon x:Name="SendIcon" Glyph="&#xE724;" FontSize="14"/>
+                                    <ProgressRing x:Name="BusyRing" Width="16" Height="16"
+                                                  IsActive="False" Visibility="Collapsed"/>
+                                </Grid>
+                            </Button>
+                            <Button x:Name="DownloadButton" Grid.Column="5" Width="44" Height="44" Padding="0"
+                                    CornerRadius="22" Click="DownloadButton_Click"
+                                    ToolTipService.ToolTip="Download preview"
+                                    AutomationProperties.Name="Download image">
+                                <FontIcon Glyph="&#xE78C;" FontSize="14"/>
                             </Button>
                         </Grid>
                     </Border>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
-                        <ProgressRing x:Name="BusyRing" Width="16" Height="16" IsActive="False"/>
-                        <TextBlock x:Name="StatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   TextWrapping="Wrap" TextAlignment="Center"/>
-                    </StackPanel>
                 </StackPanel>
             </Grid>
         </Border>

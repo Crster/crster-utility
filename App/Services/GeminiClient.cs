@@ -112,22 +112,21 @@ namespace App.Services
 
         public async Task<GeneratedImage> GenerateImageAsync(
             string prompt,
-            byte[]? contextImage,
-            string? contextMimeType,
+            IReadOnlyList<GeneratedImage> contextImages,
             CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(prompt)) throw new ArgumentException("An image prompt is required.", nameof(prompt));
 
             var parts = new JsonArray { new JsonObject { ["text"] = prompt.Trim() } };
-            if (contextImage is not null)
+            foreach (var contextImage in contextImages)
             {
-                if (contextImage.Length == 0) throw new ArgumentException("The context image is empty.", nameof(contextImage));
+                if (contextImage.Data.Length == 0) throw new ArgumentException("A context image is empty.", nameof(contextImages));
                 parts.Add(new JsonObject
                 {
                     ["inline_data"] = new JsonObject
                     {
-                        ["mime_type"] = string.IsNullOrWhiteSpace(contextMimeType) ? "image/png" : contextMimeType,
-                        ["data"] = Convert.ToBase64String(contextImage)
+                        ["mime_type"] = string.IsNullOrWhiteSpace(contextImage.MimeType) ? "image/png" : contextImage.MimeType,
+                        ["data"] = Convert.ToBase64String(contextImage.Data)
                     }
                 });
             }
