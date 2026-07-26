@@ -42,6 +42,7 @@ namespace App.Pages
             foreach (var entry in (await _database.LoadAsync()).OrderByDescending(entry => entry.Timestamp)) _entries.Add(entry);
             _isLoading = false;
             BlocksHost.ItemsSource = _entries;
+            UpdateEmptyState();
         }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -56,6 +57,12 @@ namespace App.Pages
             if (type == "improve")
             {
                 await ImproveSelectionAsync(sender as Button);
+                return;
+            }
+            if (type == "new")
+            {
+                AddEntry(string.Empty, true);
+                UpdateEmptyState();
                 return;
             }
             if (type is "image" or "file") { await AddAttachmentAsync(type); return; }
@@ -140,6 +147,7 @@ namespace App.Pages
             var entry = new NotebookEntry { Type = "note", Content = content, Timestamp = DateTime.UtcNow };
             _entryToEdit = startEditing ? entry : null;
             _entries.Insert(0, entry);
+            UpdateEmptyState();
             return entry;
         }
 
@@ -187,6 +195,7 @@ namespace App.Pages
             if (ReferenceEquals(block, _hoveredBlock)) _hoveredBlock = null;
             if (ReferenceEquals(block, _focusedBlock)) _focusedBlock = null;
             _entries.Remove(block.Entry);
+            UpdateEmptyState();
             _ = SaveNotebookAsync();
         }
 
@@ -208,6 +217,9 @@ namespace App.Pages
             }
             return null;
         }
+
+        private void UpdateEmptyState() =>
+            EmptyState.Visibility = _entries.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
         private async Task<bool> SaveNotebookAsync()
         {

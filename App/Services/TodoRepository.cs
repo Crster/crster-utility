@@ -62,6 +62,39 @@ namespace App.Services
         public bool Delete(string key) => Database.Todos.Delete(key);
         public IReadOnlyList<TodoCategoryDocument> ListCategories() => Database.TodoCategories.FindAll().OrderBy(item => item.Id).ToList();
 
+        public bool RenameCategory(string category, string newCategory)
+        {
+            category = Required(category, nameof(category));
+            newCategory = Required(newCategory, nameof(newCategory));
+            if (string.Equals(category, newCategory, StringComparison.Ordinal)) return true;
+
+            Database.Database.BeginTrans();
+            try
+            {
+                foreach (var todo in Database.Todos.Find(item => item.Category == category))
+                {
+                    todo.Category = newCategory;
+                    todo.Embedding = [];
+                    Database.Todos.Update(todo);
+                }
+
+                var existing = Database.TodoCategories.FindById(category);
+                Database.TodoCategories.Upsert(new TodoCategoryDocument
+                {
+                    Id = newCategory,
+                    Description = existing?.Description ?? string.Empty
+                });
+                Database.TodoCategories.Delete(category);
+                Database.Database.Commit();
+                return true;
+            }
+            catch
+            {
+                Database.Database.Rollback();
+                throw;
+            }
+        }
+
         public void SetCategoryDescription(string category, string description) =>
             Database.TodoCategories.Upsert(new TodoCategoryDocument { Id = Required(category, nameof(category)), Description = description.Trim() });
 

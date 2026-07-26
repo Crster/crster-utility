@@ -65,6 +65,11 @@
                         <FontIcon Glyph="&#xE70B;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
+                <NavigationViewItem x:Name="TodoNavItem" Content="Todos" Tag="TodoPage">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE73A;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
                 <NavigationViewItem x:Name="SnapshotsNavItem" Icon="Camera" Content="Snapshots" Tag="SnapshotsPage" />
                 <NavigationViewItem x:Name="RecordingsNavItem" Icon="Video" Content="Recordings" Tag="RecordingsPage" />
                 <NavigationViewItem x:Name="ArtistNavItem" Content="Artist" Tag="ArtistPage">

@@ -13,12 +13,12 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <Border Padding="6" HorizontalAlignment="Left" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+            <Border Padding="10,12" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal" Spacing="2">
                         <Button Tag="heading" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Heading"><FontIcon Glyph="&#xE8D2;" /></Button>
                         <Button Tag="bold" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Bold"><FontIcon Glyph="&#xE8DD;" /></Button>
@@ -36,7 +36,6 @@
                         <Button Tag="random" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Random"><FontIcon Glyph="&#xE8B1;" /></Button>
                         <Button Tag="improve" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Improve"><FontIcon Glyph="&#xF4A5;" /></Button>
                     </StackPanel>
-                </Border>
                 <Button Grid.Column="1" Tag="new" Click="ToolButton_Click" Content="New note" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False">
                     <Button.ContentTemplate>
                         <DataTemplate>
@@ -47,20 +46,21 @@
                         </DataTemplate>
                     </Button.ContentTemplate>
                 </Button>
-            </Grid>
+                </Grid>
+            </Border>
 
-        <ListView x:Name="BlocksHost"
-                  Grid.Row="2"
-                  Padding="0"
-                  HorizontalContentAlignment="Stretch"
-                  SelectionMode="None"
-                  IsItemClickEnabled="False"
-                  DoubleTapped="BlocksHost_DoubleTapped"
-                  ScrollViewer.VerticalScrollBarVisibility="Auto"
-                  ScrollViewer.VerticalScrollMode="Enabled"
-                  ScrollViewer.HorizontalScrollMode="Disabled"
-                  Background="Transparent"
-                  BorderThickness="0">
+        <Grid Grid.Row="2">
+            <ListView x:Name="BlocksHost"
+                      Padding="0"
+                      HorizontalContentAlignment="Stretch"
+                      SelectionMode="None"
+                      IsItemClickEnabled="False"
+                      DoubleTapped="BlocksHost_DoubleTapped"
+                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                      ScrollViewer.VerticalScrollMode="Enabled"
+                      ScrollViewer.HorizontalScrollMode="Disabled"
+                      Background="Transparent"
+                      BorderThickness="0">
             <ListView.ItemTemplate>
                 <DataTemplate>
                     <controls:Noteblock Loaded="Block_Loaded" />
@@ -92,7 +92,26 @@
                     <ItemsStackPanel />
                 </ItemsPanelTemplate>
             </ListView.ItemsPanel>
-        </ListView>
+            </ListView>
+            <!-- Section: Empty State -->
+            <StackPanel x:Name="EmptyState"
+                        Visibility="Collapsed"
+                        IsHitTestVisible="False"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center">
+                <FontIcon Glyph="&#xE70B;" FontSize="64"
+                          Foreground="{ThemeResource TextFillColorDisabledBrush}"
+                          HorizontalAlignment="Center" />
+                <TextBlock Text="No notes yet"
+                           Style="{StaticResource SubtitleTextBlockStyle}"
+                           HorizontalAlignment="Center"
+                           Margin="0,16,0,4" />
+                <TextBlock Text="Create a new note to start writing."
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+        </Grid>
         <TextBlock x:Name="SaveStatusText"
                    Grid.Row="3"
                    Margin="10,8,10,0"

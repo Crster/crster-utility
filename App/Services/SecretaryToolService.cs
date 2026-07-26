@@ -47,7 +47,7 @@ namespace App.Services
                     "find_todos" => FindTodos(RequiredString(arguments, "category"), RequiredString(arguments, "query")),
                     "get_todo_categories" => GetTodoCategories(),
                     "get_todos" => GetTodos(),
-                    "write_todo" => WriteTodo(RequiredString(arguments, "value"), RequiredString(arguments, "category"), OptionalString(arguments, "notify")),
+                    "write_todo" => await WriteTodoAsync(RequiredString(arguments, "value"), RequiredString(arguments, "category"), OptionalString(arguments, "notify"), token),
                     "get_data" => await GetDataAsync(RequiredString(arguments, "kind"), token),
                     _ => Error("unknown_tool", $"Secretary cannot use the tool “{name}”.")
                 };
@@ -131,7 +131,7 @@ namespace App.Services
             return Ok($"Found {items.Count} relevant unfinished todo(s).", new JsonObject { ["items"] = items });
         }
 
-        private ToolResult WriteTodo(string value, string category, string notify)
+        private async Task<ToolResult> WriteTodoAsync(string value, string category, string notify, CancellationToken token)
         {
             if (!string.IsNullOrWhiteSpace(notify))
             {
@@ -139,6 +139,9 @@ namespace App.Services
                 catch (CronFormatException exception) { throw new FormatException($"notify is not a valid five-field cron expression: {exception.Message}"); }
             }
             var todo = _todos.Create(value, category, "secretary", notify);
+            try { await new TodoSearchService().RefreshEmbeddingAsync(todo, token); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception exception) { System.Diagnostics.Debug.WriteLine($"Todo embedding failed: {exception.Message}"); }
             return Ok("Saved the todo.", new JsonObject { ["item"] = TodoJson(todo) });
         }
 

@@ -82,10 +82,16 @@
             <ScrollViewer x:Name="ConversationScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollMode="Disabled"
                           HorizontalContentAlignment="Stretch">
                 <StackPanel x:Name="ConversationHost" HorizontalAlignment="Stretch" Spacing="14" Padding="4,8,8,16">
-                    <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10" Margin="0,76,0,0">
-                        <Border Width="64" Height="64" CornerRadius="20" Background="{ThemeResource AccentFillColorSecondaryBrush}"><FontIcon Glyph="&#xE8BD;" FontSize="26" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                        <TextBlock x:Name="EmptyTitle" Text="How can I help?" FontSize="25" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-                        <TextBlock x:Name="EmptyDescription" Text="Ask a question, or add reference material from Context." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="500"/>
+                    <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,76,0,0">
+                        <FontIcon Glyph="&#xE8BD;" FontSize="64"
+                                  Foreground="{ThemeResource TextFillColorDisabledBrush}"
+                                  HorizontalAlignment="Center" />
+                        <TextBlock x:Name="EmptyTitle" Text="How can I help?" Style="{StaticResource SubtitleTextBlockStyle}"
+                                   HorizontalAlignment="Center" Margin="0,16,0,4" />
+                        <TextBlock x:Name="EmptyDescription" Text="Ask a question, or add reference material from Context."
+                                   Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   TextWrapping="Wrap" TextAlignment="Center" MaxWidth="500"/>
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>

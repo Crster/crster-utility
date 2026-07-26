@@ -30,16 +30,15 @@
                         <Image x:Name="PreviewImage" Stretch="None" />
 
                         <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center"
-                            Spacing="10" Margin="24">
-                            <Border Width="72" Height="72" CornerRadius="24"
-                            Background="{ThemeResource AccentFillColorSecondaryBrush}">
-                                <FontIcon Glyph="&#xE91B;" FontSize="28"
-                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Border>
-                            <TextBlock Text="Create something new" FontSize="24" FontWeight="SemiBold"
-                               HorizontalAlignment="Center"/>
+                            Margin="24">
+                            <FontIcon Glyph="&#xE91B;" FontSize="64"
+                              Foreground="{ThemeResource TextFillColorDisabledBrush}"
+                              HorizontalAlignment="Center" />
+                            <TextBlock Text="Create something new" Style="{StaticResource SubtitleTextBlockStyle}"
+                               HorizontalAlignment="Center" Margin="0,16,0,4" />
                             <TextBlock Text="Click here to choose an image, or describe one below."
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                TextAlignment="Center" TextWrapping="Wrap"/>
                         </StackPanel>
 

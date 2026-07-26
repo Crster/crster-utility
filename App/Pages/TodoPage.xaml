@@ -1,0 +1,50 @@
+<Page
+    x:Class="App.Pages.TodoPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    IsTabStop="True"
+    KeyDown="Page_KeyDown"
+    mc:Ignorable="d">
+
+    <Grid>
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollMode="Disabled"
+                      Padding="24,20,24,36">
+            <StackPanel x:Name="GroupsHost" Spacing="24">
+                <!-- Section: Todo Groups -->
+                <StackPanel x:Name="TodoGroupsHost" Spacing="20" />
+
+                <!-- Section: Empty State -->
+                <StackPanel x:Name="EmptyState" Visibility="Collapsed" HorizontalAlignment="Center" Margin="0,48,0,0">
+                    <FontIcon Glyph="&#xE73A;"
+                              FontSize="64"
+                              Foreground="{ThemeResource TextFillColorDisabledBrush}"
+                              HorizontalAlignment="Center" />
+                    <TextBlock Text="No todos yet"
+                               Style="{StaticResource SubtitleTextBlockStyle}"
+                               HorizontalAlignment="Center"
+                               Margin="0,16,0,4" />
+                    <TextBlock Text="Create a group to add your first todo"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               HorizontalAlignment="Center" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Button x:Name="CreateGroupButton"
+                Style="{StaticResource AccentButtonStyle}"
+                Width="52"
+                Height="52"
+                Padding="0"
+                CornerRadius="26"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,28,28"
+                Click="CreateGroupButton_Click">
+            <FontIcon Glyph="&#xE710;" FontSize="20" />
+        </Button>
+    </Grid>
+</Page>

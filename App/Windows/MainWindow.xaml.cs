@@ -17,6 +17,7 @@ namespace App.Windows
     public sealed partial class MainWindow : Window
     {
         private readonly NotebookDatabaseService _notebookDatabase = new();
+        private readonly TodoSearchService _todoSearch = new();
         private int _searchVersion;
         private bool _allowClose;
         internal bool IsHiddenToTray { get; private set; }
@@ -26,6 +27,7 @@ namespace App.Windows
             new() { Title = "Take a screenshot", Details = "Capture and edit your screen", SearchTerms = "screenshot screen capture snapshot take picture", Destination = "SnapshotsPage" },
             new() { Title = "Record screen", Details = "Start a screen recording", SearchTerms = "record screen recording video capture start recording", Destination = "RecordingsPage" },
             new() { Title = "Artist", Details = "Generate and edit images with Gemini", SearchTerms = "artist image generate generator edit nano banana gemini", Destination = "ArtistPage" },
+            new() { Title = "Todos", Details = "View and complete your todos", SearchTerms = "todo todos tasks checklist complete done", Destination = "TodoPage" },
             new() { Title = "Start with Windows", Details = "Launch Crster Utility after sign-in", SearchTerms = "start with windows startup launch boot sign in login tray", Destination = "SettingsPage" }
         ];
         public MainWindow()
@@ -123,6 +125,10 @@ namespace App.Windows
                 {
                     NavigationPresenter.Navigate(typeof(Pages.ToolsPage));
                 }
+                else if (tag == "TodoPage")
+                {
+                    NavigationPresenter.Navigate(typeof(Pages.TodoPage));
+                }
                 else if (tag == "ArtistPage")
                 {
                     NavigationPresenter.Navigate(typeof(Pages.ArtistPage));
@@ -179,11 +185,13 @@ namespace App.Windows
                 await Task.Delay(1000);
                 if (searchVersion != _searchVersion) return;
                 var notebookResults = _notebookDatabase.FuzzySearch(query);
+                var todoResults = _todoSearch.FuzzySearch(query);
                 var featureResults = FeatureSearchResults
                     .Where(result => MatchesSearch(result.SearchTerms, query))
                     .ToList();
-                var results = new List<object>(featureResults.Count + notebookResults.Count);
+                var results = new List<object>(featureResults.Count + notebookResults.Count + todoResults.Count);
                 results.AddRange(featureResults);
+                results.AddRange(todoResults);
                 results.AddRange(notebookResults);
                 if (searchVersion == _searchVersion && string.Equals(sender.Text.Trim(), query, StringComparison.Ordinal))
                     sender.ItemsSource = results;
@@ -215,10 +223,17 @@ namespace App.Windows
 
             try
             {
-                var notebookResults = await _notebookDatabase.SearchAsync(query);
+                var notebookSearch = _notebookDatabase.SearchAsync(query);
+                var todoSearch = _todoSearch.SearchAsync(query);
+                await Task.WhenAll(notebookSearch, todoSearch);
+                var notebookResults = await notebookSearch;
+                var todoResults = await todoSearch;
                 if (searchVersion != _searchVersion) return;
                 var featureResults = FeatureSearchResults.Where(result => MatchesSearch(result.SearchTerms, query));
-                sender.ItemsSource = featureResults.Cast<object>().Concat(notebookResults).ToList();
+                sender.ItemsSource = featureResults.Cast<object>()
+                    .Concat(todoResults)
+                    .Concat(notebookResults)
+                    .ToList();
             }
             catch (Exception exception)
             {
@@ -233,6 +248,11 @@ namespace App.Windows
             {
                 SidebarNavigation.SelectedItem = NotebookNavItem;
                 NavigationPresenter.Navigate(typeof(Pages.NotebookPage), notebookResult.EntryKey);
+            }
+            else if (result is TodoSearchResult todoResult)
+            {
+                SidebarNavigation.SelectedItem = TodoNavItem;
+                NavigationPresenter.Navigate(typeof(Pages.TodoPage), todoResult.TodoId);
             }
             else if (result is FeatureSearchResult featureResult)
             {
@@ -259,6 +279,9 @@ namespace App.Windows
                     break;
                 case "ArtistPage":
                     SidebarNavigation.SelectedItem = ArtistNavItem;
+                    break;
+                case "TodoPage":
+                    SidebarNavigation.SelectedItem = TodoNavItem;
                     break;
                 case "SettingsPage":
                     SidebarNavigation.SelectedItem = SidebarNavigation.SettingsItem;

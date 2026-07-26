@@ -33,4 +33,11 @@ namespace App.Models
 
         public required string Destination { get; init; }
     }
+
+    internal sealed class TodoSearchResult
+    {
+        public required string TodoId { get; init; }
+        public required string Title { get; init; }
+        public required string Details { get; init; }
+    }
 }
