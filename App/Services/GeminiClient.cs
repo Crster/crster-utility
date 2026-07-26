@@ -156,10 +156,26 @@ namespace App.Services
                     ["thinking_summaries"] = "auto"
                 };
             if (tools is not null && tools.Count > 0) body["tools"] = tools.DeepClone();
-            using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/interactions");
-            request.Content = JsonContent(body);
-            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            var root = await ReadJsonAsync(response, cancellationToken);
+            JsonObject root;
+            try
+            {
+                root = await SendInteractionAsync(body, cancellationToken);
+            }
+            catch (InvalidOperationException exception) when (IsInvalidModelJsonError(exception.Message))
+            {
+                // The API rejected the model's generated function-call JSON before any local tool ran.
+                // A single constrained retry is safe and follows the API's recovery guidance.
+                var retryBody = (JsonObject)body.DeepClone();
+                retryBody["system_instruction"] = $"{systemInstruction}\n\nThe previous response could not be parsed because it contained invalid JSON. Retry this request and ensure every tool call uses valid JSON with the declared argument schema. Do not emit JSON outside a tool call.";
+                try
+                {
+                    root = await SendInteractionAsync(retryBody, cancellationToken);
+                }
+                catch (InvalidOperationException retryException) when (IsInvalidModelJsonError(retryException.Message))
+                {
+                    throw new InvalidOperationException("Gemini returned invalid tool-call JSON twice. No local tools were run; retry the request.", retryException);
+                }
+            }
             return ParseInteraction(root);
         }
 
@@ -227,6 +243,17 @@ namespace App.Services
         }
 
         private static StringContent JsonContent(JsonNode node) => new(node.ToJsonString(), Encoding.UTF8, "application/json");
+
+        private async Task<JsonObject> SendInteractionAsync(JsonObject body, CancellationToken cancellationToken)
+        {
+            using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/interactions");
+            request.Content = JsonContent(body);
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            return await ReadJsonAsync(response, cancellationToken);
+        }
+
+        private static bool IsInvalidModelJsonError(string message) => message.Contains("model generated invalid json", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("output could not be parsed", StringComparison.OrdinalIgnoreCase);
 
         private static string TruncateFunctionResult(string value) => value.Length <= MaximumFunctionResultCharacters
             ? value

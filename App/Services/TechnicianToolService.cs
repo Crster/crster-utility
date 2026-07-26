@@ -574,29 +574,29 @@ namespace App.Services
         {
             try
             {
-                var result = await _client.CreateGroundedInteractionAsync("gemini-3.6-flash", topic,
+                var result = await _client.CreateGroundedInteractionAsync("gemini-3.5-flash-lite", topic,
                     "Research the topic using current authoritative sources. Return concise, practical context for another agent to act on; identify version-specific facts and cite sources.", token);
-                if (string.IsNullOrWhiteSpace(result.Text)) return Error("research_unavailable", "gemini-3.6-flash did not return research context.");
+                if (string.IsNullOrWhiteSpace(result.Text)) return Error("research_unavailable", "gemini-3.5-flash-lite did not return research context.");
                 return Ok("Generated grounded research context.", new JsonObject { ["context"] = result.Text, ["sources"] = new JsonArray(result.Sources.Select(source => (JsonNode)new JsonObject { ["title"] = source.Title, ["uri"] = source.Uri }).ToArray()) });
             }
             catch (Exception)
             {
-                return Error("research_unavailable", "gemini-3.6-flash with Google Search grounding is unavailable for this API key.");
+                return Error("research_unavailable", "gemini-3.5-flash-lite with Google Search grounding is unavailable for this API key.");
             }
         }
 
         private async Task<ToolResult> PlanAsync(string request, CancellationToken token)
         {
-            var result = await _client.CreateSimpleInteractionAsync("gemini-3.6-flash", [], [GeminiClient.CreateUserStep(request, [])],
+            var result = await _client.CreateSimpleInteractionAsync("gemini-3.5-flash-lite", [], [GeminiClient.CreateUserStep(request, [])],
                 "Create a comprehensive, implementation-ready plan. Do not execute changes. State assumptions, risks, interfaces, and validation.", null, token);
-            return string.IsNullOrWhiteSpace(result.Text) ? Error("plan_unavailable", "gemini-3.6-flash did not return a plan.") : Ok("Generated an implementation plan.", new JsonObject { ["plan"] = result.Text });
+            return string.IsNullOrWhiteSpace(result.Text) ? Error("plan_unavailable", "gemini-3.5-flash-lite did not return a plan.") : Ok("Generated an implementation plan.", new JsonObject { ["plan"] = result.Text });
         }
 
         private async Task<ToolResult> DesignAsync(string request, CancellationToken token)
         {
-            var result = await _client.CreateSimpleInteractionAsync("gemini-3.6-flash", [], [GeminiClient.CreateUserStep(request, [])],
+            var result = await _client.CreateSimpleInteractionAsync("gemini-3.5-flash-lite", [], [GeminiClient.CreateUserStep(request, [])],
                 "Act as a senior UI/UX designer. Create a concise, implementation-ready design brief without editing files. Prefer current UI/UX design trends and contemporary visual conventions, while preserving and extending existing product patterns when context is available. Specify the user goal, information hierarchy, layout and responsive behavior, component and interaction states, accessibility requirements, visual direction, and implementation considerations. Prefer practical, consistent decisions over generic design advice.", null, token);
-            return string.IsNullOrWhiteSpace(result.Text) ? Error("design_unavailable", "gemini-3.6-flash did not return a design brief.") : Ok("Generated a UI/UX design brief.", new JsonObject { ["design"] = result.Text });
+            return string.IsNullOrWhiteSpace(result.Text) ? Error("design_unavailable", "gemini-3.5-flash-lite did not return a design brief.") : Ok("Generated a UI/UX design brief.", new JsonObject { ["design"] = result.Text });
         }
 
         private string ResolveWorkspacePath(string path)
