@@ -16,6 +16,7 @@ namespace App.Services
     internal sealed class GeminiClient : IDisposable
     {
         private const string ApiRoot = "https://generativelanguage.googleapis.com/v1beta";
+        private const int MaximumFunctionResultCharacters = 12_000;
         private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromMinutes(3) };
         private readonly string _apiKey;
 
@@ -194,7 +195,7 @@ namespace App.Services
             {
                 // Gemini 2.x treats a content-block array as a multimodal function response,
                 // even when that array contains only text. Use the standard text result shape.
-                content = JsonValue.Create(result.Output)!;
+                content = JsonValue.Create(TruncateFunctionResult(result.Output))!;
             }
             else
             {
@@ -227,6 +228,10 @@ namespace App.Services
 
         private static StringContent JsonContent(JsonNode node) => new(node.ToJsonString(), Encoding.UTF8, "application/json");
 
+        private static string TruncateFunctionResult(string value) => value.Length <= MaximumFunctionResultCharacters
+            ? value
+            : $"Tool response exceeded {MaximumFunctionResultCharacters:N0} characters and was truncated. Request a narrower range or more specific command.\n\n{value[..MaximumFunctionResultCharacters]}";
+
         private static async Task<JsonObject> ReadJsonAsync(HttpResponseMessage response, CancellationToken cancellationToken)
         {
             var content = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -237,6 +242,9 @@ namespace App.Services
         private static GeminiTurnResult ParseInteraction(JsonObject root)
         {
             var result = new GeminiTurnResult { InteractionId = root["id"]?.GetValue<string>() };
+            var usage = root["usage_metadata"] as JsonObject ?? root["usageMetadata"] as JsonObject;
+            result.InputTokens = usage?["prompt_token_count"]?.GetValue<int>() ?? usage?["promptTokenCount"]?.GetValue<int>();
+            result.OutputTokens = usage?["candidates_token_count"]?.GetValue<int>() ?? usage?["candidatesTokenCount"]?.GetValue<int>();
             foreach (var node in root["steps"]?.AsArray() ?? [])
             {
                 if (node is not JsonObject step) continue;

@@ -40,6 +40,8 @@ namespace App.Models
         public string Thinking { get; set; } = string.Empty;
         public GeneratedImage? Image { get; set; }
         public string? InteractionId { get; set; }
+        public int? InputTokens { get; set; }
+        public int? OutputTokens { get; set; }
     }
 
     internal sealed class ChatSession

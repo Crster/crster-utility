@@ -18,6 +18,8 @@ namespace App.Services
     internal sealed class TechnicianToolService
     {
         private const int MaximumFileBytes = 1_000_000;
+        private const int MaximumReadResultCharacters = 60_000;
+        private const int MaximumCommandOutputCharacters = 20_000;
         private const int MaximumSearchFiles = 10;
         private const int MaximumMatchSnippetLength = 125;
         private readonly GeminiClient _client;
@@ -122,15 +124,28 @@ namespace App.Services
             if (!info.Exists) return Error("file_not_found", "The file does not exist.");
             if (info.Length > MaximumFileBytes) return Error("file_too_large", "The file exceeds the 1 MB read limit.");
             var content = File.ReadAllText(fullPath);
-            if (range is null) return Ok("Read the file.", new JsonObject { ["path"] = fullPath, ["content"] = content });
+            if (range is null)
+            {
+                var initialContent = content.Length <= MaximumReadResultCharacters ? content : content[..MaximumReadResultCharacters];
+                return Ok(content.Length <= MaximumReadResultCharacters ? "Read the file." : "Read the first portion of the file; use start and end to read additional ranges.", new JsonObject
+                {
+                    ["path"] = fullPath,
+                    ["content"] = initialContent,
+                    ["truncated"] = initialContent.Length < content.Length,
+                    ["total_characters"] = content.Length
+                });
+            }
 
             ValidateRange(range.Value, content.Length);
+            var selectedContent = content[range.Value.Start..range.Value.End];
+            var returnedContent = selectedContent.Length <= MaximumReadResultCharacters ? selectedContent : selectedContent[..MaximumReadResultCharacters];
             return Ok("Read the selected character range.", new JsonObject
             {
                 ["path"] = fullPath,
-                ["content"] = content[range.Value.Start..range.Value.End],
+                ["content"] = returnedContent,
                 ["start"] = range.Value.Start,
-                ["end"] = range.Value.End
+                ["end"] = range.Value.End,
+                ["truncated"] = returnedContent.Length < selectedContent.Length
             });
         }
 
@@ -489,7 +504,15 @@ namespace App.Services
             var outputTask = process.StandardOutput.ReadToEndAsync(token);
             var errorTask = process.StandardError.ReadToEndAsync(token);
             await process.WaitForExitAsync(token);
-            return Ok("Command completed.", new JsonObject { ["exit_code"] = process.ExitCode, ["stdout"] = await outputTask, ["stderr"] = await errorTask });
+            var stdout = await outputTask;
+            var stderr = await errorTask;
+            return Ok("Command completed.", new JsonObject
+            {
+                ["exit_code"] = process.ExitCode,
+                ["stdout"] = TruncateOutput(stdout),
+                ["stderr"] = TruncateOutput(stderr),
+                ["output_truncated"] = stdout.Length > MaximumCommandOutputCharacters || stderr.Length > MaximumCommandOutputCharacters
+            });
         }
 
         private ToolResult ListProcesses()
@@ -625,6 +648,7 @@ namespace App.Services
         }
 
         private static bool IsRiskyCommand(string command, string arguments) => Regex.IsMatch($"{command} {arguments}", @"\b(rm|rmdir|rd|del|erase|format|diskpart|cipher|mkdir|md|copy|xcopy|robocopy|move|ren|rename|Remove-Item|Clear-Content|New-Item|Copy-Item|Move-Item|Rename-Item|Set-Content|Add-Content|Out-File|Set-ItemProperty|Remove-ItemProperty|reg(?:\.exe)?|regedit|takeown|icacls|cacls|attrib|bcdedit|shutdown|restart|taskkill|Stop-Process|Stop-Service|Restart-Service|sc|net|msiexec|winget|choco|scoop|Set-ExecutionPolicy)\b", RegexOptions.IgnoreCase);
+        private static string TruncateOutput(string value) => value.Length <= MaximumCommandOutputCharacters ? value : value[..MaximumCommandOutputCharacters] + "\n[Output truncated]";
         private static void ValidateRange((int Start, int End) range, int length)
         {
             if (range.Start < 0 || range.End < range.Start || range.End > length)
