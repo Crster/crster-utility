@@ -7,6 +7,8 @@ namespace App.Services
     {
         private const uint InputMouse = 0;
         private const uint InputKeyboard = 1;
+        private const uint MouseeventfLeftdown = 0x0002;
+        private const uint MouseeventfLeftup = 0x0004;
         private const uint MouseeventfWheel = 0x0800;
         private const uint KeyeventfKeyup = 0x0002;
         private const ushort VkMenu = 0x12;
@@ -16,13 +18,6 @@ namespace App.Services
         private const int SmYVirtualScreen = 77;
         private const int SmCxVirtualScreen = 78;
         private const int SmCyVirtualScreen = 79;
-        private const int GwlExStyle = -20;
-        private const nint WsExToolWindow = 0x00000080;
-        private const uint SwpNoSize = 0x0001;
-        private const uint SwpNoMove = 0x0002;
-        private const uint SwpNoZOrder = 0x0004;
-        private const uint SwpNoActivate = 0x0010;
-        private const uint SwpFrameChanged = 0x0020;
         private const int SwRestore = 9;
 
         [DllImport("user32.dll", SetLastError = true)]
@@ -39,15 +34,6 @@ namespace App.Services
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
-
-        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
-        private static extern nint GetWindowLongPtr(IntPtr windowHandle, int index);
-
-        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
-        private static extern nint SetWindowLongPtr(IntPtr windowHandle, int index, nint value);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool SetWindowPos(IntPtr windowHandle, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool SetForegroundWindow(IntPtr windowHandle);
@@ -72,30 +58,6 @@ namespace App.Services
         {
             public int Right => Left + Width - 1;
             public int Bottom => Top + Height - 1;
-        }
-
-        public static bool TryExcludeForegroundWindowFromTaskSwitcher(out IntPtr windowHandle, out nint originalExtendedStyle)
-        {
-            windowHandle = GetForegroundWindow();
-            if (windowHandle == IntPtr.Zero)
-            {
-                originalExtendedStyle = default;
-                return false;
-            }
-
-            originalExtendedStyle = GetWindowLongPtr(windowHandle, GwlExStyle);
-            SetWindowLongPtr(windowHandle, GwlExStyle, originalExtendedStyle | WsExToolWindow);
-            RefreshWindowFrame(windowHandle);
-            return true;
-        }
-
-        public static void RestoreTaskSwitcherVisibility(IntPtr windowHandle, nint originalExtendedStyle)
-        {
-            if (windowHandle == IntPtr.Zero)
-                return;
-
-            SetWindowLongPtr(windowHandle, GwlExStyle, originalExtendedStyle);
-            RefreshWindowFrame(windowHandle);
         }
 
         public static void ActivateWindow(IntPtr windowHandle)
@@ -179,6 +141,39 @@ namespace App.Services
             return true;
         }
 
+        public static bool MoveCursorNearScreenCenter(Random random, ScreenBounds bounds, out CursorPosition position)
+        {
+            var horizontalRadius = Math.Max(1, bounds.Width / 10);
+            var verticalRadius = Math.Max(1, bounds.Height / 10);
+            var centerX = bounds.Left + (bounds.Width / 2);
+            var centerY = bounds.Top + (bounds.Height / 2);
+            var x = Math.Clamp(centerX + random.Next(-horizontalRadius, horizontalRadius + 1), bounds.Left, bounds.Right);
+            var y = Math.Clamp(centerY + random.Next(-verticalRadius, verticalRadius + 1), bounds.Top, bounds.Bottom);
+            if (!SetCursorPos(x, y))
+            {
+                position = default;
+                return false;
+            }
+
+            position = new CursorPosition(x, y);
+            return true;
+        }
+
+        public static void ClickLeftMouseButton()
+        {
+            Send(
+                new Input
+                {
+                    Type = InputMouse,
+                    Data = new InputUnion { Mouse = new MouseInput { Flags = MouseeventfLeftdown } }
+                },
+                new Input
+                {
+                    Type = InputMouse,
+                    Data = new InputUnion { Mouse = new MouseInput { Flags = MouseeventfLeftup } }
+                });
+        }
+
         public static void Scroll(int wheelDelta)
         {
             Send(new Input
@@ -191,16 +186,6 @@ namespace App.Services
         public static void SendAltTab() => SendModifiedKey(VkMenu, VkTab);
 
         public static void SendCtrlTab() => SendModifiedKey(VkControl, VkTab);
-
-        private static void RefreshWindowFrame(IntPtr windowHandle) =>
-            SetWindowPos(
-                windowHandle,
-                IntPtr.Zero,
-                0,
-                0,
-                0,
-                0,
-                SwpNoSize | SwpNoMove | SwpNoZOrder | SwpNoActivate | SwpFrameChanged);
 
         private static void SendModifiedKey(ushort modifier, ushort key)
         {

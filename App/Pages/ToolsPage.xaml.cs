@@ -14,6 +14,7 @@ namespace App.Pages
         private const int MaximumVirtualScrollOffset = 3;
         private const double MouseMovementScreenCoverage = 0.70;
         private const int MaximumMouseJumpDistance = 200;
+        private const int CenterJumpChance = 8;
         private const int MinimumScrollActionsPerCycle = 3;
         private const int MaximumScrollActionsPerCycle = 6;
 
@@ -23,8 +24,6 @@ namespace App.Pages
         private readonly int[] _browserTabScrollOffsets = new int[BrowserTabCount];
         private NativeInputService.CursorPosition _lastAutomatedCursorPosition;
         private NativeInputService.ScreenBounds _mouseMovementBounds;
-        private IntPtr _caffeineWindowHandle;
-        private nint _caffeineWindowExtendedStyle;
         private int _ideScrollOffset;
         private int _browserTabIndex;
         private int _remainingScrollActions;
@@ -65,13 +64,13 @@ namespace App.Pages
 
             _isRunning = true;
             _switchBrowserTabNext = false;
-            NativeInputService.TryExcludeForegroundWindowFromTaskSwitcher(out _caffeineWindowHandle, out _caffeineWindowExtendedStyle);
             CaffeineButton.Content = "Stop Caffeine";
-            CaffeineDescriptionText.Text = "Caffeine is active across your IDE and browser. Move the pointer 100 pixels away from its last automated position to stop.";
+            CaffeineDescriptionText.Text = "Caffeine will begin in 5 seconds. Move the pointer 100 pixels away from its last automated position to stop.";
             _mouseMonitorTimer.Start();
-            SwitchToIde();
+            FocusNextWindow();
             BeginActivityBlock();
-            ScheduleNextActivity();
+            _activityTimer.Interval = TimeSpan.FromSeconds(5);
+            _activityTimer.Start();
         }
 
         private void StopCaffeine()
@@ -79,17 +78,13 @@ namespace App.Pages
             _isRunning = false;
             _activityTimer.Stop();
             _mouseMonitorTimer.Stop();
-            NativeInputService.RestoreTaskSwitcherVisibility(_caffeineWindowHandle, _caffeineWindowExtendedStyle);
-            if (App.MainWindow is not Windows.MainWindow { IsHiddenToTray: true })
-                NativeInputService.ActivateWindow(_caffeineWindowHandle);
-            _caffeineWindowHandle = IntPtr.Zero;
-            _caffeineWindowExtendedStyle = default;
             CaffeineButton.Content = "Start Caffeine";
             CaffeineDescriptionText.Text = "Keeps your computer active with occasional cursor movement, scrolling, or tab switching. Move the pointer 100 pixels away to stop.";
         }
 
         private void ActivityTimer_Tick(object? sender, object e)
         {
+            CaffeineDescriptionText.Text = "Caffeine is active across your IDE and browser. Move the pointer 100 pixels away from its last automated position to stop.";
             PerformActivity();
             ScheduleNextActivity();
         }
@@ -116,11 +111,14 @@ namespace App.Pages
             if (_movePending)
             {
                 _movePending = false;
-                if (NativeInputService.MoveCursorNearCurrentPosition(
-                    _random,
-                    _mouseMovementBounds,
-                    MaximumMouseJumpDistance,
-                    out var position))
+                var moved = _random.Next(CenterJumpChance) == 0
+                    ? NativeInputService.MoveCursorNearScreenCenter(_random, _mouseMovementBounds, out var position)
+                    : NativeInputService.MoveCursorNearCurrentPosition(
+                        _random,
+                        _mouseMovementBounds,
+                        MaximumMouseJumpDistance,
+                        out position);
+                if (moved)
                 {
                     _lastAutomatedCursorPosition = position;
                 }
@@ -153,16 +151,23 @@ namespace App.Pages
             BeginActivityBlock();
         }
 
+        private void FocusNextWindow()
+        {
+            if (App.MainWindow is Windows.MainWindow mainWindow)
+            {
+                if (!mainWindow.IsHiddenToTray)
+                    mainWindow.HideToTray();
+            }
+
+            NativeInputService.ClickLeftMouseButton();
+            NativeInputService.TryGetCursorPosition(out _lastAutomatedCursorPosition);
+            _activeExternalApp = ActiveExternalApp.Ide;
+        }
+
         private void BeginActivityBlock()
         {
             _movePending = true;
             _remainingScrollActions = _random.Next(MinimumScrollActionsPerCycle, MaximumScrollActionsPerCycle + 1);
-        }
-
-        private void SwitchToIde()
-        {
-            NativeInputService.SendAltTab();
-            _activeExternalApp = ActiveExternalApp.Ide;
         }
 
         private void SwitchExternalApp()
