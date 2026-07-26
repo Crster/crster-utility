@@ -25,6 +25,7 @@ namespace App.Windows
             new() { Title = "Caffeine", Details = "Keep your computer active", SearchTerms = "caffeine keep awake active prevent sleep", Destination = "ToolsPage" },
             new() { Title = "Take a screenshot", Details = "Capture and edit your screen", SearchTerms = "screenshot screen capture snapshot take picture", Destination = "SnapshotsPage" },
             new() { Title = "Record screen", Details = "Start a screen recording", SearchTerms = "record screen recording video capture start recording", Destination = "RecordingsPage" },
+            new() { Title = "Artist", Details = "Generate and edit images with Gemini", SearchTerms = "artist image generate generator edit nano banana gemini", Destination = "ArtistPage" },
             new() { Title = "Start with Windows", Details = "Launch Crster Utility after sign-in", SearchTerms = "start with windows startup launch boot sign in login tray", Destination = "SettingsPage" }
         ];
         public MainWindow()
@@ -121,6 +122,10 @@ namespace App.Windows
                 else if (tag == "ToolsPage")
                 {
                     NavigationPresenter.Navigate(typeof(Pages.ToolsPage));
+                }
+                else if (tag == "ArtistPage")
+                {
+                    NavigationPresenter.Navigate(typeof(Pages.ArtistPage));
                 }
                 else if (tag == "ChatPage")
                 {
@@ -246,6 +251,9 @@ namespace App.Windows
                     break;
                 case "ToolsPage":
                     SidebarNavigation.SelectedItem = ToolsNavItem;
+                    break;
+                case "ArtistPage":
+                    SidebarNavigation.SelectedItem = ArtistNavItem;
                     break;
                 case "SettingsPage":
                     SidebarNavigation.SelectedItem = SidebarNavigation.SettingsItem;

@@ -6,10 +6,13 @@ using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
@@ -51,6 +54,7 @@ namespace App.Windows
         private readonly List<DrawnShape> shapes = new();
         private DateTime? lastClickTime;
         private bool isCopying;
+        private bool isCopyingText;
 
         // Text editing state
         private bool isTextEditing;
@@ -636,6 +640,11 @@ namespace App.Windows
             await CopyAndCloseAsync();
         }
 
+        private async void CopyTextButton_Click(object sender, RoutedEventArgs e)
+        {
+            await CopyTextAndCloseAsync();
+        }
+
         private async Task CopyAndCloseAsync()
         {
             if (isCopying) return;
@@ -668,6 +677,96 @@ namespace App.Windows
             {
                 isCopying = false;
             }
+        }
+
+        private async Task CopyTextAndCloseAsync()
+        {
+            if (isCopyingText) return;
+            if (string.IsNullOrWhiteSpace(App.Settings.Current.GeminiApiKey))
+            {
+                await ShowCopyTextErrorAsync("A Gemini API key is required to copy text from a snapshot.");
+                return;
+            }
+
+            isCopyingText = true;
+            CopyTextButton.IsEnabled = false;
+            CopyTextButton.Label = "Reading…";
+            CanvasBitmap? image = null;
+            string? temporaryImagePath = null;
+            string? remoteFileName = null;
+
+            try
+            {
+                CommitText();
+                image = await RenderFinalImageAsync() ?? throw new InvalidOperationException("The selected snapshot could not be rendered.");
+                temporaryImagePath = Path.Combine(Path.GetTempPath(), $"CrsterSnapshot-{Guid.NewGuid():N}.png");
+                await image.SaveAsync(temporaryImagePath, CanvasBitmapFileFormat.Png);
+
+                using var client = new GeminiClient(App.Settings.Current.GeminiApiKey);
+                var attachment = await client.UploadFileAsync(temporaryImagePath, CancellationToken.None);
+                remoteFileName = attachment.RemoteName;
+                var request = GeminiClient.CreateUserStep(
+                    "Analyze the attached image. First, extract every readable piece of text exactly, preserving useful line breaks. If there is no readable text, provide one short, factual description of the image. Return only the extracted text or description, with no introduction or labels.",
+                    [attachment]);
+                var response = await client.CreateSimpleInteractionAsync(
+                    "gemini-2.5-flash-lite",
+                    [],
+                    [request],
+                    "You perform precise OCR. Prefer verbatim transcription whenever the image contains readable text; describe the image only when no text can be read.",
+                    null,
+                    CancellationToken.None);
+                var text = response.Text.Trim();
+                if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("Gemini returned no text for the selected image.");
+
+                var dataPackage = new DataPackage();
+                dataPackage.SetText(text);
+                Clipboard.SetContent(dataPackage);
+
+                var result = await RenderSavedImageResultAsync();
+                if (result is not null)
+                {
+                    ImageSaved?.Invoke(this, result);
+                }
+
+                Close();
+            }
+            catch (Exception exception)
+            {
+                await ShowCopyTextErrorAsync($"Copy Text failed: {exception.Message}");
+            }
+            finally
+            {
+                if (!string.IsNullOrWhiteSpace(remoteFileName))
+                {
+                    try
+                    {
+                        using var client = new GeminiClient(App.Settings.Current.GeminiApiKey);
+                        await client.DeleteFileAsync(remoteFileName, CancellationToken.None);
+                    }
+                    catch { }
+                }
+                if (!string.IsNullOrWhiteSpace(temporaryImagePath))
+                {
+                    try { File.Delete(temporaryImagePath); }
+                    catch { }
+                }
+                image?.Dispose();
+                CopyTextButton.Label = "Read";
+                CopyTextButton.IsEnabled = true;
+                isCopyingText = false;
+            }
+        }
+
+        private async Task ShowCopyTextErrorAsync(string message)
+        {
+            var dialog = new ContentDialog
+            {
+                Title = "Read",
+                Content = message,
+                CloseButtonText = "OK",
+                XamlRoot = RootGrid.XamlRoot
+            };
+            await dialog.ShowAsync();
         }
 
         private async void SaveButton_Click(object sender, RoutedEventArgs e)

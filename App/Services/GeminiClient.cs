@@ -110,6 +110,62 @@ namespace App.Services
                 : result.Text.Trim();
         }
 
+        public async Task<GeneratedImage> GenerateImageAsync(
+            string prompt,
+            byte[]? contextImage,
+            string? contextMimeType,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(prompt)) throw new ArgumentException("An image prompt is required.", nameof(prompt));
+
+            var parts = new JsonArray { new JsonObject { ["text"] = prompt.Trim() } };
+            if (contextImage is not null)
+            {
+                if (contextImage.Length == 0) throw new ArgumentException("The context image is empty.", nameof(contextImage));
+                parts.Add(new JsonObject
+                {
+                    ["inline_data"] = new JsonObject
+                    {
+                        ["mime_type"] = string.IsNullOrWhiteSpace(contextMimeType) ? "image/png" : contextMimeType,
+                        ["data"] = Convert.ToBase64String(contextImage)
+                    }
+                });
+            }
+
+            var body = new JsonObject
+            {
+                ["contents"] = new JsonArray
+                {
+                    new JsonObject { ["role"] = "user", ["parts"] = parts }
+                },
+                ["generationConfig"] = new JsonObject
+                {
+                    ["responseModalities"] = new JsonArray("IMAGE")
+                }
+            };
+            using var request = CreateRequest(
+                HttpMethod.Post,
+                "https://generativelanguage.googleapis.com/v1/models/gemini-3.1-flash-image:generateContent");
+            request.Content = JsonContent(body);
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            var root = await ReadJsonAsync(response, cancellationToken);
+
+            foreach (var candidate in root["candidates"]?.AsArray() ?? [])
+            foreach (var part in candidate?["content"]?["parts"]?.AsArray() ?? [])
+            {
+                var inlineData = part?["inlineData"] as JsonObject ?? part?["inline_data"] as JsonObject;
+                var data = inlineData?["data"]?.GetValue<string>();
+                if (string.IsNullOrWhiteSpace(data)) continue;
+                return new GeneratedImage(
+                    Convert.FromBase64String(data),
+                    inlineData?["mimeType"]?.GetValue<string>()
+                        ?? inlineData?["mime_type"]?.GetValue<string>()
+                        ?? "image/png");
+            }
+
+            throw new InvalidOperationException("Gemini completed the request without returning an image.");
+        }
+
         private async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken)
         {
             if (text.Length > 24_000) text = text[..24_000];
