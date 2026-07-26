@@ -193,6 +193,7 @@ namespace App.Pages
                 var handledFortyCallCheckpoint = false;
                 var consecutiveFailedToolCalls = 0;
                 var troubleGuidanceGenerated = false;
+                var emptyCompletionRecoveryAttempted = false;
                 while (true)
                 {
                     round++;
@@ -251,7 +252,22 @@ namespace App.Pages
                     if (result.Image is not null) AddMessage(new ChatMessage(ChatItemKind.Assistant, _personality.ToString(), "", Image: result.Image));
                     if (result.Sources.Count > 0) AddMessage(new ChatMessage(ChatItemKind.Assistant, "Sources", string.Join("\n", result.Sources.DistinctBy(source => source.Uri).Select(source => $"- [{source.Title}]({source.Uri})"))));
                     if (string.IsNullOrWhiteSpace(result.Text) && result.Image is null && result.FunctionCalls.Count == 0)
-                        throw new InvalidOperationException("Gemini completed the request without returning a response.");
+                    {
+                        if (emptyCompletionRecoveryAttempted)
+                            throw new InvalidOperationException("Gemini completed two consecutive requests without returning a response.");
+
+                        // Gemini occasionally completes the turn immediately after a tool result without
+                        // emitting its user-facing answer. Ask for that answer once using the same history.
+                        emptyCompletionRecoveryAttempted = true;
+                        nextSteps =
+                        [
+                            GeminiClient.CreateUserStep(
+                                "Using the available tool results, give the user a concise direct answer now. Do not call another tool unless more information is required.",
+                                [])
+                        ];
+                        await _chatLog.WriteAsync("response.empty.recovery", ("personality", _personality), ("round", round));
+                        continue;
+                    }
                     if (result.FunctionCalls.Count == 0)
                     {
                         break;

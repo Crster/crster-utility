@@ -11,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using Windows.System;
 
 namespace App.Pages
@@ -23,6 +24,7 @@ namespace App.Pages
         private Action? _cancelOperation;
         private string? _requestedTodoId;
         private bool _isCreatingGroup;
+        private string? _creatingTodoCategory;
 
         public TodoPage()
         {
@@ -45,7 +47,9 @@ namespace App.Pages
             _cancelOperation = null;
             TodoGroupsHost.Children.Clear();
             var todos = _repository.List();
-            var categories = _repository.ListCategories()
+            var categoryDocuments = _repository.ListCategories();
+            var categoryDescriptions = categoryDocuments.ToDictionary(category => category.Id, category => category.Description, StringComparer.Ordinal);
+            var categories = categoryDocuments
                 .Select(category => category.Id)
                 .Concat(todos.Select(todo => todo.Category))
                 .Distinct(StringComparer.Ordinal)
@@ -57,9 +61,12 @@ namespace App.Pages
             if (urgent.Count > 0) TodoGroupsHost.Children.Add(CreateUrgentSection(urgent));
             if (_isCreatingGroup) TodoGroupsHost.Children.Add(CreateNewGroupEditor());
             foreach (var category in categories)
-                TodoGroupsHost.Children.Add(CreateGroup(category, todos.Where(todo => todo.Category == category).ToList(), urgent));
+            {
+                categoryDescriptions.TryGetValue(category, out var description);
+                TodoGroupsHost.Children.Add(CreateGroup(category, description ?? string.Empty, todos.Where(todo => todo.Category == category).ToList()));
+            }
 
-            EmptyState.Visibility = todos.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            EmptyState.Visibility = categories.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private UIElement CreateNewGroupEditor()
@@ -84,6 +91,7 @@ namespace App.Pages
             {
                 Orientation = Orientation.Horizontal,
                 Spacing = 4,
+                Margin = new Thickness(8, 0, 0, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
             var save = IconButton("\uE74E", "Create group");
@@ -100,14 +108,21 @@ namespace App.Pages
                 _isCreatingGroup = false;
                 Render();
             }
-            _cancelOperation = Cancel;
-            cancel.Click += (_, _) => Cancel();
-            save.Click += (_, _) =>
+            void Save()
             {
                 if (string.IsNullOrWhiteSpace(input.Text)) return;
                 _repository.SetCategoryDescription(input.Text, string.Empty);
                 _isCreatingGroup = false;
                 Render();
+            }
+            _cancelOperation = Cancel;
+            cancel.Click += (_, _) => Cancel();
+            save.Click += (_, _) => Save();
+            input.KeyDown += (_, e) =>
+            {
+                if (e.Key != VirtualKey.Enter) return;
+                e.Handled = true;
+                Save();
             };
             return card;
         }
@@ -125,7 +140,7 @@ namespace App.Pages
             return panel;
         }
 
-        private UIElement CreateGroup(string category, IReadOnlyList<TodoDocument> todos, IReadOnlyList<TodoDocument> urgent)
+        private UIElement CreateGroup(string category, string description, IReadOnlyList<TodoDocument> todos)
         {
             var card = new Border
             {
@@ -137,78 +152,211 @@ namespace App.Pages
             };
             var panel = new StackPanel { Spacing = 10 };
             card.Child = panel;
-            panel.Children.Add(CreateGroupHeader(category));
+            panel.Children.Add(CreateGroupHeader(category, description, todos.Count));
 
             var showDone = _expandedGroups.Contains(category);
             var visible = todos
-                .Where(todo => (showDone || !todo.IsDone) && !urgent.Any(item => item.Id == todo.Id))
+                .Where(todo => showDone || !todo.IsDone)
                 .OrderByDescending(todo => !string.IsNullOrWhiteSpace(todo.Notify))
                 .ThenByDescending(todo => todo.CreatedAt)
                 .ToList();
             if (visible.Count > 0)
                 panel.Children.Add(CreateList(visible, false));
-            else
-                panel.Children.Add(new TextBlock
-                {
-                    Text = todos.Any(todo => todo.IsDone) ? "All todos are done." : "No todos in this group.",
-                    Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
-                    Margin = new Thickness(12, 8, 12, 8)
-                });
 
-            if (todos.Any(todo => todo.IsDone))
+            if (string.Equals(_creatingTodoCategory, category, StringComparison.Ordinal))
+                panel.Children.Add(CreateNewTodoEditor(category));
+            else
             {
-                var toggle = new Button
+                var actions = new StackPanel
                 {
-                    Content = showDone ? "Hide done" : $"Show done ({todos.Count(todo => todo.IsDone)})",
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 8,
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
-                toggle.Click += (_, _) =>
+                var newTodo = new HyperlinkButton
                 {
-                    if (!_expandedGroups.Add(category)) _expandedGroups.Remove(category);
-                    Render();
+                    Content = "New Todo",
+                    Tag = category
                 };
-                panel.Children.Add(toggle);
+                newTodo.Click += NewTodoButton_Click;
+                actions.Children.Add(newTodo);
+                if (todos.Any(todo => todo.IsDone))
+                {
+                    var toggle = new HyperlinkButton
+                    {
+                        Content = showDone ? "Hide done" : $"Show done ({todos.Count(todo => todo.IsDone)})"
+                    };
+                    toggle.Click += (_, _) =>
+                    {
+                        if (!_expandedGroups.Add(category)) _expandedGroups.Remove(category);
+                        Render();
+                    };
+                    actions.Children.Add(toggle);
+                }
+                panel.Children.Add(actions);
             }
             return card;
         }
 
-        private UIElement CreateGroupHeader(string category)
+        private UIElement CreateNewTodoEditor(string category)
         {
             var grid = new Grid();
             grid.ColumnDefinitions.Add(new ColumnDefinition());
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var title = new TextBlock
+            var input = new TextBox
+            {
+                PlaceholderText = "New todo",
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var actions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 4,
+                Margin = new Thickness(8, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var save = IconButton("\uE74E", "Create todo");
+            var cancel = IconButton("\uE7A7", "Cancel");
+            actions.Children.Add(save);
+            actions.Children.Add(cancel);
+            Grid.SetColumn(actions, 1);
+            grid.Children.Add(input);
+            grid.Children.Add(actions);
+            grid.Loaded += (_, _) => input.Focus(FocusState.Programmatic);
+            void Cancel()
+            {
+                _creatingTodoCategory = null;
+                Render();
+            }
+            async void Save()
+            {
+                if (string.IsNullOrWhiteSpace(input.Text)) return;
+                var todo = _repository.Create(input.Text, category, "user");
+                _creatingTodoCategory = null;
+                Render();
+                try { await _search.RefreshEmbeddingAsync(todo); }
+                catch (Exception exception) { System.Diagnostics.Debug.WriteLine($"Todo embedding failed: {exception.Message}"); }
+            }
+            _cancelOperation = Cancel;
+            cancel.Click += (_, _) => Cancel();
+            save.Click += (_, _) => Save();
+            input.KeyDown += (_, e) =>
+            {
+                if (e.Key != VirtualKey.Enter) return;
+                e.Handled = true;
+                Save();
+            };
+            return grid;
+        }
+
+        private UIElement CreateGroupHeader(string category, string description, int todoCount)
+        {
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition());
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var titleHost = new StackPanel { Spacing = 3 };
+            titleHost.Children.Add(new TextBlock
             {
                 Text = category,
                 Style = (Style)Application.Current.Resources["SubtitleTextBlockStyle"],
                 VerticalAlignment = VerticalAlignment.Center
-            };
+            });
+            if (!string.IsNullOrWhiteSpace(description))
+            {
+                titleHost.Children.Add(new TextBlock
+                {
+                    Text = description,
+                    Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+                    Foreground = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 0, 0, 4)
+                });
+            }
             var edit = IconButton("\uE70F", "Rename group");
+            edit.Visibility = Visibility.Collapsed;
             Grid.SetColumn(edit, 1);
-            grid.Children.Add(title);
+            grid.Children.Add(titleHost);
             grid.Children.Add(edit);
+            grid.PointerEntered += (_, _) => edit.Visibility = Visibility.Visible;
+            grid.PointerExited += (_, _) => edit.Visibility = Visibility.Collapsed;
+            grid.GotFocus += (_, _) => edit.Visibility = Visibility.Visible;
+            grid.LostFocus += (_, _) => edit.Visibility = Visibility.Collapsed;
             edit.Click += (_, _) =>
             {
-                var input = new TextBox { Text = category, Header = "Group name" };
-                var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+                var input = new TextBox { Text = category, VerticalAlignment = VerticalAlignment.Center };
+                var descriptionInput = new TextBox
+                {
+                    Text = description,
+                    PlaceholderText = "Description",
+                    FontSize = 12,
+                    MinHeight = 0,
+                    Margin = new Thickness(0, 4, 0, 0)
+                };
+                var inputs = new StackPanel();
+                inputs.Children.Add(input);
+                inputs.Children.Add(descriptionInput);
+                var actions = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 4,
+                    Margin = new Thickness(8, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
                 var save = IconButton("\uE74E", "Save");
                 var cancel = IconButton("\uE7A7", "Cancel");
                 actions.Children.Add(save);
                 actions.Children.Add(cancel);
                 Grid.SetColumn(actions, 1);
                 grid.Children.Clear();
-                grid.Children.Add(input);
+                grid.Children.Add(inputs);
                 grid.Children.Add(actions);
                 input.SelectAll();
                 input.Focus(FocusState.Programmatic);
                 void Cancel() => Render();
+                async void Save()
+                {
+                    if (string.IsNullOrWhiteSpace(input.Text))
+                    {
+                        if (todoCount > 0)
+                        {
+                            var dialog = new ContentDialog
+                            {
+                                XamlRoot = XamlRoot,
+                                Title = "Delete group?",
+                                Content = new TextBlock
+                                {
+                                    Text = $"This group contains {todoCount} todo{(todoCount == 1 ? string.Empty : "s")}. Deleting it will also delete all of them.",
+                                    TextWrapping = TextWrapping.Wrap
+                                },
+                                PrimaryButtonText = "Delete group",
+                                CloseButtonText = "Cancel",
+                                DefaultButton = ContentDialogButton.Close
+                            };
+                            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+                        }
+                        _repository.DeleteCategory(category);
+                    }
+                    else
+                    {
+                        _repository.RenameCategory(category, input.Text);
+                        _repository.SetCategoryDescription(input.Text, descriptionInput.Text);
+                    }
+                    Render();
+                }
                 _cancelOperation = Cancel;
                 cancel.Click += (_, _) => Cancel();
-                save.Click += (_, _) =>
+                save.Click += (_, _) => Save();
+                input.KeyDown += (_, e) =>
                 {
-                    if (string.IsNullOrWhiteSpace(input.Text)) return;
-                    _repository.RenameCategory(category, input.Text);
-                    Render();
+                    if (e.Key != VirtualKey.Enter) return;
+                    e.Handled = true;
+                    Save();
+                };
+                descriptionInput.KeyDown += (_, e) =>
+                {
+                    if (e.Key != VirtualKey.Enter) return;
+                    e.Handled = true;
+                    Save();
                 };
             };
             return grid;
@@ -222,7 +370,14 @@ namespace App.Pages
                 IsItemClickEnabled = false,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch
             };
-            foreach (var todo in todos) list.Items.Add(CreateTodoItem(todo, urgent));
+            foreach (var todo in todos)
+            {
+                list.Items.Add(new ListViewItem
+                {
+                    Content = CreateTodoItem(todo, urgent),
+                    HorizontalContentAlignment = HorizontalAlignment.Stretch
+                });
+            }
             return list;
         }
 
@@ -233,7 +388,14 @@ namespace App.Pages
             root.ColumnDefinitions.Add(new ColumnDefinition());
             root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            var checkBox = new CheckBox { IsChecked = todo.IsDone, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 2, 8, 0) };
+            var checkBox = new CheckBox
+            {
+                IsChecked = todo.IsDone,
+                Width = 20,
+                MinWidth = 0,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 2, 8, 0)
+            };
             checkBox.Click += (_, _) =>
             {
                 _repository.SetDone(todo.Id, checkBox.IsChecked == true);
@@ -249,7 +411,9 @@ namespace App.Pages
                 FontSize = 16,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = urgent ? new SolidColorBrush(Colors.Red) : null
+                Foreground = urgent
+                    ? new SolidColorBrush(Colors.Red)
+                    : (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
             };
             if (todo.IsDone) title.TextDecorations = global::Windows.UI.Text.TextDecorations.Strikethrough;
             text.Children.Add(title);
@@ -263,14 +427,17 @@ namespace App.Pages
 
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, Visibility = Visibility.Collapsed };
             Grid.SetColumn(actions, 2);
+            var notify = IconButton("\uEE93", "Set notification");
             var edit = IconButton("\uE70F", "Edit todo");
             var delete = IconButton("\uE74D", "Delete todo");
+            actions.Children.Add(notify);
             actions.Children.Add(edit);
             actions.Children.Add(delete);
             root.Children.Add(actions);
             root.PointerEntered += (_, _) => actions.Visibility = Visibility.Visible;
             root.PointerExited += (_, _) => { if (_cancelOperation is null) actions.Visibility = Visibility.Collapsed; };
 
+            notify.Click += async (_, _) => await ConfigureNotificationAsync(todo);
             edit.Click += (_, _) => BeginTodoEdit(root, todo);
             delete.Click += (_, _) => BeginDelete(actions, todo);
             if (todo.Id == _requestedTodoId)
@@ -282,9 +449,78 @@ namespace App.Pages
             return root;
         }
 
+        private async Task ConfigureNotificationAsync(TodoDocument todo)
+        {
+            var now = DateTimeOffset.Now;
+            var date = new CalendarDatePicker
+            {
+                Header = "Date",
+                Date = now,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            var time = new TimePicker
+            {
+                Header = "Time",
+                Time = now.TimeOfDay,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            var preset = new ComboBox
+            {
+                Header = "Repeat",
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                SelectedIndex = 0
+            };
+            preset.Items.Add(new ComboBoxItem { Content = "Selected date" });
+            preset.Items.Add(new ComboBoxItem { Content = "Every hour" });
+            preset.Items.Add(new ComboBoxItem { Content = "Every day" });
+            preset.Items.Add(new ComboBoxItem { Content = "Tomorrow" });
+            preset.Items.Add(new ComboBoxItem { Content = "Every morning" });
+            preset.Items.Add(new ComboBoxItem { Content = "Every evening" });
+            preset.Items.Add(new ComboBoxItem { Content = "Every week" });
+            preset.Items.Add(new ComboBoxItem { Content = "Every month" });
+            preset.Items.Add(new ComboBoxItem { Content = "Every year" });
+
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = $"Notify: {todo.Value}",
+                Content = new StackPanel
+                {
+                    Spacing = 12,
+                    Children = { preset, date, time }
+                },
+                PrimaryButtonText = "Save notification",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Primary
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+            var selectedDate = date.Date?.LocalDateTime ?? DateTime.Now;
+            todo.Notify = NotificationSchedule(preset.SelectedIndex, selectedDate, time.Time);
+            _repository.Update(todo);
+            Render();
+        }
+
+        private static string NotificationSchedule(int preset, DateTime date, TimeSpan time)
+        {
+            var minute = time.Minutes;
+            var hour = time.Hours;
+            return preset switch
+            {
+                1 => $"{minute} * * * *",
+                2 => $"{minute} {hour} * * *",
+                3 => $"{minute} {hour} {DateTime.Today.AddDays(1).Day} {DateTime.Today.AddDays(1).Month} *",
+                4 => "0 9 * * *",
+                5 => "0 18 * * *",
+                6 => $"{minute} {hour} * * {(int)date.DayOfWeek}",
+                7 => $"{minute} {hour} {date.Day} * *",
+                _ => $"{minute} {hour} {date.Day} {date.Month} *"
+            };
+        }
+
         private void BeginTodoEdit(Grid root, TodoDocument todo)
         {
-            var input = new TextBox { Text = todo.Value, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap };
+            var input = new TextBox { Text = todo.Value, TextWrapping = TextWrapping.Wrap };
             Grid.SetColumn(input, 1);
             var actions = (StackPanel)root.Children[2];
             actions.Children.Clear();
@@ -297,17 +533,30 @@ namespace App.Pages
             input.SelectAll();
             input.Focus(FocusState.Programmatic);
             void Cancel() => Render();
-            _cancelOperation = Cancel;
-            cancel.Click += (_, _) => Cancel();
-            save.Click += async (_, _) =>
+            async void Save()
             {
-                if (string.IsNullOrWhiteSpace(input.Text)) return;
+                if (string.IsNullOrWhiteSpace(input.Text))
+                {
+                    _repository.Delete(todo.Id);
+                    Render();
+                    return;
+                }
+
                 todo.Value = input.Text.Trim();
                 todo.Embedding = [];
                 _repository.Update(todo);
                 Render();
                 try { await _search.RefreshEmbeddingAsync(todo); }
                 catch (Exception exception) { System.Diagnostics.Debug.WriteLine($"Todo embedding failed: {exception.Message}"); }
+            }
+            _cancelOperation = Cancel;
+            cancel.Click += (_, _) => Cancel();
+            save.Click += (_, _) => Save();
+            input.KeyDown += (_, e) =>
+            {
+                if (e.Key != VirtualKey.Enter) return;
+                e.Handled = true;
+                Save();
             };
         }
 
@@ -337,14 +586,51 @@ namespace App.Pages
 
         private static string TodoDetails(TodoDocument todo)
         {
-            var localCreated = todo.CreatedAt.ToLocalTime();
-            var age = Math.Max(0, (DateTime.Now.Date - localCreated.Date).Days);
-            var details = $"Created {localCreated:g} by {todo.CreatedBy} · {age} day{(age == 1 ? string.Empty : "s")} ago";
-            if (!string.IsNullOrWhiteSpace(todo.Notify))
-                details += TryNextSchedule(todo.Notify, out var next)
-                    ? $" · Scheduled {next:g}"
-                    : $" · Scheduled ({todo.Notify})";
+            if (!string.IsNullOrWhiteSpace(todo.Notify) && TryNextSchedule(todo.Notify, out var next))
+                return $"{RelativeSchedule(next)} · {ScheduleRecurrence(todo.Notify)}";
+
+            var details = todo.CreatedBy == "secretary" ? "Added by Assistant" : CreatedDescription(todo.CreatedAt);
+            if (!string.IsNullOrWhiteSpace(todo.Notify)) details += " · Schedule unavailable";
             return details;
+        }
+
+        private static string RelativeSchedule(DateTimeOffset occurrence)
+        {
+            var remaining = occurrence - DateTimeOffset.Now;
+            if (remaining <= TimeSpan.Zero) return "Due now";
+            if (remaining < TimeSpan.FromMinutes(60)) return $"Due in {Math.Max(1, (int)Math.Ceiling(remaining.TotalMinutes))} min";
+            if (occurrence.Date == DateTimeOffset.Now.Date) return $"Due at {occurrence:t}";
+            if (occurrence.Date == DateTimeOffset.Now.AddDays(1).Date) return $"Due tomorrow at {occurrence:t}";
+            return $"Due {occurrence:MMM d, h:mm tt}";
+        }
+
+        private static string ScheduleRecurrence(string expression)
+        {
+            var fields = expression.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (fields.Length != 5) return "Scheduled";
+            if (fields[1] == "*") return "Repeats hourly";
+            if (fields[2] == "*" && fields[3] == "*" && fields[4] == "*")
+            {
+                if (fields[0] == "0" && fields[1] == "9") return "Every morning";
+                if (fields[0] == "0" && fields[1] == "18") return "Every evening";
+                return "Repeats daily";
+            }
+            if (fields[2] == "*" && fields[3] == "*") return "Repeats weekly";
+            if (fields[3] == "*") return "Repeats monthly";
+            return "Repeats yearly";
+        }
+
+        private static string CreatedDescription(DateTime createdAt)
+        {
+            var localCreated = createdAt.ToLocalTime().Date;
+            var age = Math.Max(0, (DateTime.Now.Date - localCreated).Days);
+            return age switch
+            {
+                0 => "Created today",
+                1 => "Created yesterday",
+                < 7 => $"Created {age} days ago",
+                _ => $"Created {localCreated:MMM d}"
+            };
         }
 
         private static bool IsUrgent(TodoDocument todo, out DateTimeOffset occurrence)
@@ -381,6 +667,13 @@ namespace App.Pages
         {
             if (_isCreatingGroup) return;
             _isCreatingGroup = true;
+            Render();
+        }
+
+        private void NewTodoButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not HyperlinkButton { Tag: string category }) return;
+            _creatingTodoCategory = category;
             Render();
         }
     }

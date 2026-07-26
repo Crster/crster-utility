@@ -14,7 +14,7 @@ namespace App.Services
             value = Required(value, nameof(value));
             category = Required(category, nameof(category));
             createdBy = createdBy.Trim().ToLowerInvariant();
-            notify = notify.Trim();
+            notify = notify?.Trim() ?? string.Empty;
             if (createdBy is not ("user" or "secretary")) throw new ArgumentOutOfRangeException(nameof(createdBy), "CreatedBy must be user or secretary.");
             var createdAt = DateTime.UtcNow;
             var todo = new TodoDocument
@@ -45,7 +45,7 @@ namespace App.Services
         {
             todo.Value = Required(todo.Value, nameof(todo.Value));
             todo.Category = Required(todo.Category, nameof(todo.Category));
-            todo.Notify = todo.Notify.Trim();
+            todo.Notify = todo.Notify?.Trim() ?? string.Empty;
             if (todo.CreatedBy is not ("user" or "secretary")) throw new ArgumentOutOfRangeException(nameof(todo.CreatedBy));
             return Database.Todos.Update(todo);
         }
@@ -60,6 +60,26 @@ namespace App.Services
         }
 
         public bool Delete(string key) => Database.Todos.Delete(key);
+        public bool DeleteCategory(string category)
+        {
+            category = Required(category, nameof(category));
+            var todos = Database.Todos.Find(item => item.Category == category).ToList();
+            Database.Database.BeginTrans();
+            try
+            {
+                foreach (var todo in todos)
+                    Database.Todos.Delete(todo.Id);
+
+                var deleted = Database.TodoCategories.Delete(category);
+                Database.Database.Commit();
+                return deleted;
+            }
+            catch
+            {
+                Database.Database.Rollback();
+                throw;
+            }
+        }
         public IReadOnlyList<TodoCategoryDocument> ListCategories() => Database.TodoCategories.FindAll().OrderBy(item => item.Id).ToList();
 
         public bool RenameCategory(string category, string newCategory)
@@ -68,10 +88,11 @@ namespace App.Services
             newCategory = Required(newCategory, nameof(newCategory));
             if (string.Equals(category, newCategory, StringComparison.Ordinal)) return true;
 
+            var todos = Database.Todos.Find(item => item.Category == category).ToList();
             Database.Database.BeginTrans();
             try
             {
-                foreach (var todo in Database.Todos.Find(item => item.Category == category))
+                foreach (var todo in todos)
                 {
                     todo.Category = newCategory;
                     todo.Embedding = [];
