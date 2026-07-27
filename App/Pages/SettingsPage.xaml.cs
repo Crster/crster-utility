@@ -47,6 +47,7 @@ namespace App.Pages
         {
             _loading = true;
             _settings = App.Settings.Current.Clone();
+            await SynchronizeStartupSettingAsync();
             StartupToggle.IsOn = _settings.StartWithWindows;
             NotebookPathBox.Text = _settings.DatabaseFolder;
             GeminiApiKeyBox.Password = _settings.GeminiApiKey;
@@ -60,6 +61,23 @@ namespace App.Pages
             await LoadMicrophonesAsync();
             await LoadModelsAsync();
             _loading = false;
+        }
+
+        private async Task SynchronizeStartupSettingAsync()
+        {
+            try
+            {
+                var isEnabled = await StartupService.IsEnabledAsync();
+                if (_settings.StartWithWindows == isEnabled)
+                    return;
+
+                _settings.StartWithWindows = isEnabled;
+                App.Settings.Save(_settings);
+            }
+            catch (Exception exception)
+            {
+                StatusText.Text = $"Windows startup status could not be checked: {exception.Message}";
+            }
         }
 
         private async Task LoadModelsAsync()

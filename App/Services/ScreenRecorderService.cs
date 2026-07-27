@@ -13,6 +13,7 @@ using Windows.Graphics.DirectX.Direct3D11;
 using Windows.Media.Core;
 using Windows.Media.MediaProperties;
 using Windows.Media.Transcoding;
+using Windows.Security.Authorization.AppCapabilityAccess;
 using Windows.Storage;
 using Windows.Storage.Streams;
 using Microsoft.UI.Xaml.Controls;
@@ -75,7 +76,6 @@ namespace App.Services
         private WaveFileWriter? _micWriter;
         private bool _isAudioRecording;
         private Task? _loopbackRecordTask;
-        private Task? _micRecordTask;
         private WaveFormat? _micWaveFormat;
         private ConcurrentQueue<byte[]>? _micAudioQueue;
         private Task? _micProcessingTask;
@@ -95,6 +95,17 @@ namespace App.Services
         {
             _device = device ?? throw new ArgumentNullException(nameof(device));
             _sampleProcessedHandler = OnSampleProcessed;
+        }
+
+        public static async Task EnsureMicrophoneAccessAsync(string? microphoneDeviceId)
+        {
+            if (string.IsNullOrWhiteSpace(microphoneDeviceId))
+                return;
+
+            var accessStatus = await AppCapability.Create("microphone").RequestAccessAsync();
+            if (accessStatus != AppCapabilityAccessStatus.Allowed)
+                throw new InvalidOperationException(
+                    "Microphone access is disabled. Allow Crster Utility to use the microphone in Windows Privacy & security settings.");
         }
 
         [Conditional("RECORDER_DIAGNOSTICS")]
@@ -638,81 +649,69 @@ namespace App.Services
                     catch { }
                 });
 
-                _micRecordTask = Task.Run(() =>
+                _micCapture.DataAvailable += (s, e) =>
                 {
-                    try
+                    if (_isAudioRecording)
                     {
-                        _micCapture.DataAvailable += (s, e) =>
+                        if (e.BytesRecorded > 0)
                         {
-                            if (_isAudioRecording)
+                            _micSamplesReceived++;
+                            const float volumeBoost = 2.0f;
+                            var boostedBuffer = new byte[e.BytesRecorded];
+                            System.Buffer.BlockCopy(e.Buffer, 0, boostedBuffer, 0, e.BytesRecorded);
+
+                            // WasapiCapture can expose either 32-bit IEEE float or 32-bit PCM.
+                            // Only reinterpret IEEE float samples as floats; treating PCM bytes
+                            // as floats produces invalid audio and can result in silence.
+                            if (_micWaveFormat?.Encoding == WaveFormatEncoding.IeeeFloat && _micWaveFormat.BitsPerSample == 32)
                             {
-                                if (e.BytesRecorded > 0)
+                                for (int i = 0; i < e.BytesRecorded; i += 4)
                                 {
-                                    _micSamplesReceived++;
-                                    const float volumeBoost = 2.0f;
-                                    var boostedBuffer = new byte[e.BytesRecorded];
-                                    System.Buffer.BlockCopy(e.Buffer, 0, boostedBuffer, 0, e.BytesRecorded);
-
-                                    // WasapiCapture can expose either 32-bit IEEE float or 32-bit PCM.
-                                    // Only reinterpret IEEE float samples as floats; treating PCM bytes
-                                    // as floats produces invalid audio and can result in silence.
-                                    if (_micWaveFormat?.Encoding == WaveFormatEncoding.IeeeFloat && _micWaveFormat.BitsPerSample == 32)
-                                    {
-                                        for (int i = 0; i < e.BytesRecorded; i += 4)
-                                        {
-                                            float sample = BitConverter.ToSingle(boostedBuffer, i);
-                                            sample *= volumeBoost;
-                                            sample = Math.Max(-1.0f, Math.Min(1.0f, sample));
-                                            BitConverter.TryWriteBytes(boostedBuffer.AsSpan(i, sizeof(float)), sample);
-                                        }
-                                    }
-
-                                    var queue = _micAudioQueue;
-                                    if (queue != null)
-                                    {
-                                        while (queue.Count >= MaxMicQueueDepth && queue.TryDequeue(out var droppedBuffer))
-                                        {
-                                            Interlocked.Add(ref _micQueuedBytes, -droppedBuffer.Length);
-                                            Interlocked.Increment(ref _micDroppedBuffers);
-                                        }
-
-                                        Interlocked.Add(ref _micQueuedBytes, boostedBuffer.Length);
-                                        queue.Enqueue(boostedBuffer);
-                                    }
-                                    _micSamplesQueued++;
-                                    if (_micSamplesReceived % TraceSampleModulo == 0)
-                                    {
-                                        Trace($"Mic callback bytes={e.BytesRecorded} received={_micSamplesReceived} queued={_micSamplesQueued} queueDepth={_micAudioQueue?.Count ?? 0} queuedBytes={Interlocked.Read(ref _micQueuedBytes):N0} droppedBuffers={_micDroppedBuffers}");
-                                    }
-                                    
-                                }
-                                else
-                                {
-                                    _micEmptyCallbacks++;
-                                    if (_micEmptyCallbacks % TraceSampleModulo == 0)
-                                    {
-                                        Trace($"Mic callback empty count={_micEmptyCallbacks}");
-                                    }
+                                    float sample = BitConverter.ToSingle(boostedBuffer, i);
+                                    sample *= volumeBoost;
+                                    sample = Math.Max(-1.0f, Math.Min(1.0f, sample));
+                                    BitConverter.TryWriteBytes(boostedBuffer.AsSpan(i, sizeof(float)), sample);
                                 }
                             }
-                        };
 
-                        _micCapture.StartRecording();
-                        Trace("Mic recording started");
-                        // Keep task alive while recording
-                        while (_isAudioRecording)
+                            var queue = _micAudioQueue;
+                            if (queue != null)
+                            {
+                                while (queue.Count >= MaxMicQueueDepth && queue.TryDequeue(out var droppedBuffer))
+                                {
+                                    Interlocked.Add(ref _micQueuedBytes, -droppedBuffer.Length);
+                                    Interlocked.Increment(ref _micDroppedBuffers);
+                                }
+
+                                Interlocked.Add(ref _micQueuedBytes, boostedBuffer.Length);
+                                queue.Enqueue(boostedBuffer);
+                            }
+                            _micSamplesQueued++;
+                            if (_micSamplesReceived % TraceSampleModulo == 0)
+                            {
+                                Trace($"Mic callback bytes={e.BytesRecorded} received={_micSamplesReceived} queued={_micSamplesQueued} queueDepth={_micAudioQueue?.Count ?? 0} queuedBytes={Interlocked.Read(ref _micQueuedBytes):N0} droppedBuffers={_micDroppedBuffers}");
+                            }
+                        }
+                        else
                         {
-                            System.Threading.Thread.Sleep(100);
+                            _micEmptyCallbacks++;
+                            if (_micEmptyCallbacks % TraceSampleModulo == 0)
+                            {
+                                Trace($"Mic callback empty count={_micEmptyCallbacks}");
+                            }
                         }
                     }
-                    catch { }
-                });
+                };
+
+                _micCapture.StartRecording();
+                Trace("Mic recording started");
             }
-            catch
+            catch (Exception exception)
             {
                 Trace("Mic recording setup failed");
                 _micCapture?.Dispose();
                 _micCapture = null;
+                throw new InvalidOperationException("The configured microphone could not be started.", exception);
             }
         }
 
@@ -769,13 +768,6 @@ namespace App.Services
                 try { await _loopbackRecordTask; }
                 catch { }
                 _loopbackRecordTask = null;
-            }
-
-            if (_micRecordTask != null)
-            {
-                try { await _micRecordTask; }
-                catch { }
-                _micRecordTask = null;
             }
 
             if (_micProcessingTask != null)

@@ -77,6 +77,17 @@ namespace App.Pages
             if (App.MainWindow is null)
                 throw new InvalidOperationException("MainWindow is not available");
 
+            var microphoneDeviceId = App.Settings.Current.RecordingMicrophoneDeviceId;
+            try
+            {
+                await ScreenRecorderService.EnsureMicrophoneAccessAsync(microphoneDeviceId);
+            }
+            catch (Exception exception)
+            {
+                ShowError(exception.Message);
+                return;
+            }
+
             var item = await ScreenCaptureService.GetMainDisplayItemAsync();
             if (item == null)
                 return;
@@ -114,7 +125,7 @@ namespace App.Pages
                     bitrateBps: 12_000_000,
                     frameRate: 30,
                     includeCursor: true,
-                    microphoneDeviceId: App.Settings.Current.RecordingMicrophoneDeviceId);
+                    microphoneDeviceId: microphoneDeviceId);
             }
             catch (Exception ex)
             {

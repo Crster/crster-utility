@@ -6,6 +6,12 @@ namespace App.Services
 {
     internal static class StartupService
     {
+        public static async Task<bool> IsEnabledAsync()
+        {
+            var task = await StartupTask.GetAsync("CrsterUtilityStartup");
+            return task.State is StartupTaskState.Enabled or StartupTaskState.EnabledByPolicy;
+        }
+
         public static async Task<bool> SetEnabledAsync(bool enabled)
         {
             var task = await StartupTask.GetAsync("CrsterUtilityStartup");
