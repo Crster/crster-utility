@@ -41,7 +41,7 @@ namespace App.Services
         private const string ExactMatchMode = "exact";
         private const string LineEndingMatchMode = "line_endings";
         private const string WhitespaceMatchMode = "whitespace";
-        private const string PatchFormatGuidance = "Call patch_file using exactly one format: either path with literal old_text and new_text (or an edits array of those pairs), or path with one raw single-file Git/unified diff in diff. Copy source text exactly; only line-ending and whitespace differences are tolerated. Do not include prose, Markdown fences, line numbers, labels, ellipses, or guessed text. After patch_not_found, reuse closest_old_text directly when it is the intended complete block; call read_file only when the candidate is truncated or targets the wrong block.";
+        private const string PatchFormatGuidance = "Call patch_file with path and literal old_text/new_text, or an edits array of those pairs. Copy old_text from the source exactly; only line-ending and whitespace differences are tolerated. Put only final source in new_text. Do not include prose, Markdown fences, line numbers, labels, ellipses, or guessed text. After patch_not_found, reuse closest_old_text directly when it is the intended complete block; call read_file only when the candidate is truncated or targets the wrong block.";
         private readonly GeminiClient _client;
         private readonly SecretaryToolService _secretaryTools;
         private readonly Func<string, Task<bool>> _confirmAsync;
@@ -63,7 +63,7 @@ namespace App.Services
         [
             Function("read_file", "Read a text file inside the selected workspace. Optionally provide zero-based, end-exclusive start and end offsets to read a character range. Re-reading the same file is allowed when fresh source text is needed for a patch.", Props(("path", String()), ("start", Integer()), ("end", Integer())), "path"),
             Function("write_file", "Write text to a file inside the workspace. Creates parent folders when needed. Optionally provide zero-based, end-exclusive start and end offsets to replace a character range in an existing file; provide neither offset to replace the whole file. After corrected patch_file attempts fail, write_file remains available to complete the requested source change.", Props(("path", String()), ("content", String()), ("start", Integer()), ("end", Integer())), "path", "content"),
-            Function("patch_file", "Atomically patch one existing file. Choose exactly one input format: (1) path + literal old_text + literal new_text; (2) path + edits: [{ old_text, new_text, replace_all }]; or (3) path + diff containing one raw single-file Git/unified diff. old_text and diff context/removal lines must come from source; new_text and added diff lines must contain only final source. Matching permits exact text, CRLF/LF normalization, and whitespace-only differences—never fuzzy, approximate, reordered, missing, or invented text. Do not include prose, Markdown fences, line numbers, labels, quotes, or ellipses. On success, the tool returns applied ranges and match modes. On patch_not_found, nothing is written and closest_old_text contains the nearest raw source block; reuse it directly when it is complete and intended, otherwise call read_file.", Props(("path", String()), ("old_text", String()), ("new_text", String()), ("replace_all", Boolean()), ("edits", new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "object", ["properties"] = Props(("old_text", String()), ("new_text", String()), ("replace_all", Boolean())), ["required"] = new JsonArray("old_text", "new_text") } }), ("diff", String()), ("syntax_check", Boolean())), "path"),
+            Function("patch_file", "Atomically patch one existing file. Use path + literal old_text + literal new_text, or path + edits: [{ old_text, new_text, replace_all }]. Copy old_text from source and put only final source in new_text. Matching permits exact text, CRLF/LF normalization, and whitespace-only differences—never fuzzy, approximate, reordered, missing, or invented text. Do not include prose, Markdown fences, line numbers, labels, quotes, or ellipses. On success, the tool returns applied ranges and match modes. On patch_not_found, nothing is written and closest_old_text contains the nearest raw source block; reuse it directly when it is complete and intended, otherwise call read_file.", Props(("path", String()), ("old_text", String()), ("new_text", String()), ("replace_all", Boolean()), ("edits", new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "object", ["properties"] = Props(("old_text", String()), ("new_text", String()), ("replace_all", Boolean())), ["required"] = new JsonArray("old_text", "new_text") } }), ("syntax_check", Boolean())), "path"),
             Function("delete_file", "Delete a file or empty directory inside the workspace after user confirmation.", Props(("path", String())), "path"),
             Function("search_file", "Recursively search workspace files in a directory by regular expression, like grep. Returns matching file paths and contextual line snippets up to 125 characters; start and end are zero-based, end-exclusive offsets of the match in each snippet.", Props(("directory", String()), ("regex_pattern", String())), "directory", "regex_pattern"),
             Function("list_file_and_directory", "List workspace files and directories. Optionally filter by regex and depth.", Props(("path", String()), ("depth", Integer()), ("regex", String())), "path"),
@@ -1358,9 +1358,9 @@ namespace App.Services
         {
             try
             {
-                var result = await _client.CreateSimpleInteractionAsync("gemini-3.5-flash-lite", [], [GeminiClient.CreateUserStep(topic, [])],
+                var result = await _client.CreateSimpleInteractionAsync(App.Settings.Current.HighCostModel, [], [GeminiClient.CreateUserStep(topic, [])],
                     "You are an internal context consultant. Create concise research context only from the supplied request and context. You have no tools, no web access, no file-system access, no command access, and no process access. Do not claim current, verified, or source-backed facts unless they are explicitly supplied. State uncertainty where it matters. Do not write a user-facing answer or reveal reasoning.", null, token);
-                if (string.IsNullOrWhiteSpace(result.Text)) return Error("research_unavailable", "gemini-3.5-flash-lite did not return research context.");
+                if (string.IsNullOrWhiteSpace(result.Text)) return Error("research_unavailable", "The high-cost Gemini model did not return research context.");
                 return Ok("Generated private research context.", new JsonObject { ["context"] = result.Text });
             }
             catch (Exception exception)
@@ -1377,16 +1377,16 @@ namespace App.Services
 
         private async Task<ToolResult> PlanAsync(string request, CancellationToken token)
         {
-            var result = await _client.CreateSimpleInteractionAsync("gemini-3.5-flash-lite", [], [GeminiClient.CreateUserStep(request, [])],
+            var result = await _client.CreateSimpleInteractionAsync(App.Settings.Current.HighCostModel, [], [GeminiClient.CreateUserStep(request, [])],
                 "You are an internal context consultant. Create a concise, implementation-ready private plan from the supplied request and context only. You have no tools, no file-system access, no command access, no process access, and no web access. Do not claim independent inspection. Do not execute changes, write a user-facing answer, or reveal reasoning. State assumptions, risks, interfaces, and validation.", null, token);
-            return string.IsNullOrWhiteSpace(result.Text) ? Error("plan_unavailable", "gemini-3.5-flash-lite did not return a plan.") : Ok("Generated an implementation plan.", new JsonObject { ["plan"] = result.Text });
+            return string.IsNullOrWhiteSpace(result.Text) ? Error("plan_unavailable", "The high-cost Gemini model did not return a plan.") : Ok("Generated an implementation plan.", new JsonObject { ["plan"] = result.Text });
         }
 
         private async Task<ToolResult> DesignAsync(string request, CancellationToken token)
         {
-            var result = await _client.CreateSimpleInteractionAsync("gemini-3.5-flash-lite", [], [GeminiClient.CreateUserStep(request, [])],
+            var result = await _client.CreateSimpleInteractionAsync(App.Settings.Current.HighCostModel, [], [GeminiClient.CreateUserStep(request, [])],
                 "You are an internal UI/UX context consultant. Create a concise, implementation-ready private design brief from the supplied request and context only. You have no tools, no file-system access, no command access, no process access, and no web access. Do not claim independent inspection or current-trend research. Do not edit files, write a user-facing answer, or reveal reasoning. Specify the user goal, information hierarchy, layout and responsive behavior, component and interaction states, accessibility requirements, visual direction, and implementation considerations. Prefer practical, consistent decisions over generic design advice.", null, token);
-            return string.IsNullOrWhiteSpace(result.Text) ? Error("design_unavailable", "gemini-3.5-flash-lite did not return a design brief.") : Ok("Generated a UI/UX design brief.", new JsonObject { ["design"] = result.Text });
+            return string.IsNullOrWhiteSpace(result.Text) ? Error("design_unavailable", "The high-cost Gemini model did not return a design brief.") : Ok("Generated a UI/UX design brief.", new JsonObject { ["design"] = result.Text });
         }
 
         private string ResolveWorkspacePath(string path)

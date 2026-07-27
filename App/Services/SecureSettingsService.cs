@@ -81,8 +81,10 @@ namespace App.Services
                 collection.Update(document);
             }
             WriteBootstrap(settings.DatabaseFolder, settings.GeminiApiKey);
+            var embeddingModelChanged = !string.Equals(Current.EmbeddingModel, settings.EmbeddingModel, StringComparison.OrdinalIgnoreCase);
             Current = settings;
             Changed?.Invoke(this, settings);
+            if (embeddingModelChanged) EmbeddingMaintenanceService.InvalidateAndRebuild();
         }
 
         public Task SaveAsync(AppSettings settings) { Save(settings); return Task.CompletedTask; }
@@ -174,6 +176,10 @@ namespace App.Services
             new("recording.microphoneDeviceId", "Recording microphone", "", value => value.RecordingMicrophoneDeviceId),
             new("caffeine.shortcut", "Caffeine shortcut", "Ctrl+Shift+Alt+F12", value => value.CaffeineShortcut),
             new("gemini.lastChatPersonality", "Last chat personality", "Secretary", value => value.LastChatPersonality),
+            new("gemini.embeddingModel", "Embedding model", "gemini-embedding-001", value => value.EmbeddingModel),
+            new("gemini.lowCostModel", "Low cost model", "gemini-2.5-flash-lite", value => value.LowCostModel),
+            new("gemini.highCostModel", "High cost model", "gemini-3.5-flash", value => value.HighCostModel),
+            new("gemini.artistModel", "Artist model", "gemini-3.1-flash-image", value => value.ArtistModel),
             new("technician.workspace", "Technician workspace", "", value => value.TechnicianWorkspace),
             new("general.city", "City", "Manila", value => value.City),
             new("general.country", "Country", "Philippines", value => value.Country)
@@ -188,6 +194,10 @@ namespace App.Services
         public string RecordingMicrophoneDeviceId { get; set; } = string.Empty;
         public string CaffeineShortcut { get; set; } = "Ctrl+Shift+Alt+F12";
         public string LastChatPersonality { get; set; } = "Secretary";
+        public string EmbeddingModel { get; set; } = "gemini-embedding-001";
+        public string LowCostModel { get; set; } = "gemini-2.5-flash-lite";
+        public string HighCostModel { get; set; } = "gemini-3.5-flash";
+        public string ArtistModel { get; set; } = "gemini-3.1-flash-image";
         public string TechnicianWorkspace { get; set; } = string.Empty;
         public string City { get; set; } = "Manila";
         public string Country { get; set; } = "Philippines";
@@ -208,6 +218,10 @@ namespace App.Services
             result.RecordingMicrophoneDeviceId = Text("recording.microphoneDeviceId", result.RecordingMicrophoneDeviceId);
             result.CaffeineShortcut = Text("caffeine.shortcut", result.CaffeineShortcut);
             result.LastChatPersonality = Text("gemini.lastChatPersonality", result.LastChatPersonality);
+            result.EmbeddingModel = Text("gemini.embeddingModel", result.EmbeddingModel);
+            result.LowCostModel = Text("gemini.lowCostModel", result.LowCostModel);
+            result.HighCostModel = Text("gemini.highCostModel", result.HighCostModel);
+            result.ArtistModel = Text("gemini.artistModel", result.ArtistModel);
             result.TechnicianWorkspace = Text("technician.workspace", result.TechnicianWorkspace);
             result.City = Text("general.city", result.City);
             result.Country = Text("general.country", result.Country);

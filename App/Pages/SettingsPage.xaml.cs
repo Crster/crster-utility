@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using App.Models;
 using App.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -22,6 +23,10 @@ namespace App.Pages
             public override string ToString() => Name;
         }
         private sealed record ShortcutChoice(string Value, string Name);
+        private sealed record ModelChoice(string Id, string Name)
+        {
+            public override string ToString() => Name;
+        }
         private static readonly IReadOnlyList<ShortcutChoice> SnapshotShortcuts =
         [
             new(string.Empty, "None"), new("PrintScreen", "PrintScreen"), new("Alt+PrintScreen", "Alt + PrintScreen"), new("Ctrl+Shift+3", "Ctrl + Shift + 3"),
@@ -53,7 +58,45 @@ namespace App.Pages
             CaffeineShortcutBox.ItemsSource = CaffeineShortcuts;
             CaffeineShortcutBox.SelectedItem = FindShortcut(CaffeineShortcuts, _settings.CaffeineShortcut);
             await LoadMicrophonesAsync();
+            await LoadModelsAsync();
             _loading = false;
+        }
+
+        private async Task LoadModelsAsync()
+        {
+            SetModelBoxesEnabled(false);
+            try
+            {
+                using var client = new GeminiClient(_settings.GeminiApiKey);
+                var models = await client.ListModelsAsync(System.Threading.CancellationToken.None);
+                SetModelChoices(EmbeddingModelBox, models.Where(model => model.SupportsEmbedding), _settings.EmbeddingModel);
+                SetModelChoices(LowCostModelBox, models.Where(model => model.SupportsChat && !model.SupportsImageGeneration), _settings.LowCostModel);
+                SetModelChoices(HighCostModelBox, models.Where(model => model.SupportsChat && !model.SupportsImageGeneration), _settings.HighCostModel);
+                SetModelChoices(ArtistModelBox, models.Where(model => model.SupportsImageGeneration), _settings.ArtistModel);
+                SetModelBoxesEnabled(true);
+            }
+            catch (Exception exception)
+            {
+                StatusText.Text = $"Gemini models could not be loaded: {exception.Message}";
+            }
+        }
+
+        private static void SetModelChoices(ComboBox box, IEnumerable<GeminiModel> models, string selectedId)
+        {
+            var choices = models.Select(model => new ModelChoice(model.Id, string.IsNullOrWhiteSpace(model.Description) ? model.DisplayName : $"{model.DisplayName} — {model.Description}"))
+                .OrderBy(choice => choice.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+            if (!choices.Any(choice => string.Equals(choice.Id, selectedId, StringComparison.OrdinalIgnoreCase)))
+                choices.Insert(0, new ModelChoice(selectedId, $"{selectedId} (saved model; unavailable)"));
+            box.ItemsSource = choices;
+            box.SelectedItem = choices.First(choice => string.Equals(choice.Id, selectedId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void SetModelBoxesEnabled(bool enabled)
+        {
+            EmbeddingModelBox.IsEnabled = enabled;
+            LowCostModelBox.IsEnabled = enabled;
+            HighCostModelBox.IsEnabled = enabled;
+            ArtistModelBox.IsEnabled = enabled;
         }
 
         private Task LoadMicrophonesAsync()
@@ -117,6 +160,10 @@ namespace App.Pages
         }
 
         private void GeminiApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e) { if (!_loading) Save(settings => settings.GeminiApiKey = GeminiApiKeyBox.Password.Trim()); }
+        private void EmbeddingModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && EmbeddingModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.EmbeddingModel = choice.Id); }
+        private void LowCostModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && LowCostModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.LowCostModel = choice.Id); }
+        private void HighCostModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && HighCostModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.HighCostModel = choice.Id); }
+        private void ArtistModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && ArtistModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.ArtistModel = choice.Id); }
         private void LocationBox_LostFocus(object sender, RoutedEventArgs e)
         {
             if (_loading) return;

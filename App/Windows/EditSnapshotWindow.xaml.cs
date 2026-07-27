@@ -709,7 +709,7 @@ namespace App.Windows
                     "Analyze the attached image. First, extract every readable piece of text exactly, preserving useful line breaks. If there is no readable text, provide one short, factual description of the image. Return only the extracted text or description, with no introduction or labels.",
                     [attachment]);
                 var response = await client.CreateSimpleInteractionAsync(
-                    "gemini-2.5-flash-lite",
+                    App.Settings.Current.LowCostModel,
                     [],
                     [request],
                     "You perform precise OCR. Prefer verbatim transcription whenever the image contains readable text; describe the image only when no text can be read.",

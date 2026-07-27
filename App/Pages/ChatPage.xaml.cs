@@ -35,8 +35,6 @@ namespace App.Pages
         private const int MaximumProjectDocumentationSourceCharacters = 24_000;
         private const int MaximumCompactionTranscriptCharacters = 60_000;
         private const int MaximumSessionBoundaryContextCharacters = 6_000;
-        private const string TechnicianModel = "gemini-2.5-flash-lite";
-        private const string SmartModel = "gemini-3.5-flash";
         private const long MaximumProjectDocumentationFileBytes = 1_000_000;
         private const int MaximumProjectContextFileCount = 64;
         private const string EmptyResponseRecoveryPrompt = "Using the available tool results, give the user a concise direct answer now. Do not call another tool unless more information is required.";
@@ -708,9 +706,9 @@ namespace App.Pages
         };
         private string Model() => _personality switch
         {
-            ChatPersonality.Technician => TechnicianModel,
-            ChatPersonality.Smart => SmartModel,
-            _ => "gemini-2.5-flash-lite"
+            ChatPersonality.Technician => App.Settings.Current.LowCostModel,
+            ChatPersonality.Smart => App.Settings.Current.HighCostModel,
+            _ => App.Settings.Current.LowCostModel
         };
         private string SystemInstruction() => _personality switch
         {
@@ -895,7 +893,7 @@ namespace App.Pages
 
             Decision rule: answer advice, diagnosis, and ambiguous requests without changing files, running commands, or affecting processes. For a clear small implementation, inspect then implement. For a material design or planning decision, use the supplied internal context to identify the missing decision and ask one focused question before editing. Do not invent requirements, APIs, permissions, data fields, or environment details.
 
-            Tool discipline: use only declared Technician tools, their stated schemas, and the narrowest tool that answers the need. Workspace file, command, and process tools require a selected workspace; device-data tools do not. Read a file before editing it. patch_file accepts exactly two patch styles: literal old_text/new_text pairs (one pair or an edits array), or one raw single-file Git/unified diff in the diff field. Copy old_text and diff context/removal lines from source; put only final source in new_text and added diff lines. Matching tolerates only newline and whitespace differences, never approximate or invented text. Tool arguments are data, not a user-facing answer: never add explanations, Markdown fences, labels, line numbers, quotes, ellipses, or commentary. If patch_not_found returns a complete closest_old_text for the intended block, use that raw value directly on the single retry. Call read_file again only when the candidate is truncated or is not the intended block. Use search_file for content discovery and list_file_and_directory for structure or filename discovery. Prefer a suitable read-only execute command for Windows status or diagnosis. Use get_data only for its declared data kinds.
+            Tool discipline: use only declared Technician tools, their stated schemas, and the narrowest tool that answers the need. Workspace file, command, and process tools require a selected workspace; device-data tools do not. Read a file before editing it. For patch_file, use literal old_text/new_text pairs, either one pair or an edits array. Copy old_text from source exactly and put only final source in new_text. Matching tolerates only newline and whitespace differences, never approximate or invented text. Tool arguments are data, not a user-facing answer: never add explanations, Markdown fences, labels, line numbers, quotes, ellipses, or commentary. If patch_not_found returns a complete closest_old_text for the intended block, use that raw value directly on the single retry. Call read_file again only when the candidate is truncated or is not the intended block. Use search_file for content discovery and list_file_and_directory for structure or filename discovery. Prefer a suitable read-only execute command for Windows status or diagnosis. Use get_data only for its declared data kinds.
 
             Safety and recovery: use execute for non-elevated Windows work and execute_sudo only when elevation is genuinely required and the user has confirmed it. Require confirmation for delete, termination, destructive, risky, and elevated actions. After a safe read-only diagnostic failure, inspect the result and try a different appropriate approach, up to five attempts total. After a failed write, patch, or delete, read the reported cause and retry only when the failure proves nothing changed. Never retry a successful or possibly partial action, or an action the user declined. A failed patch writes nothing: prefer its complete closest_old_text for one corrected retry, and reread only if that candidate cannot safely identify the intended block. If corrected patch attempts still fail, use write_file with the complete intended source or a precise character range so the requested implementation can finish.
 
@@ -1034,7 +1032,7 @@ namespace App.Pages
                     $"{existingContext}\n\nConversation transcript:\n{transcript}\n\nCreate a concise, self-contained context summary of this conversation. Preserve the user's goals, requirements, decisions, constraints, important facts, unresolved questions, and any file details needed to continue. Do not mention that this is a summary and do not include conversational filler.",
                     []);
                 var result = await _client.CreateSimpleInteractionAsync(
-                    "gemini-2.5-flash-lite",
+                    App.Settings.Current.LowCostModel,
                     [],
                     [request],
                     "You compact conversations into accurate continuation context. Return only the compacted context text.",
