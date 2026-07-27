@@ -273,14 +273,20 @@ namespace App.Pages
                 });
             }
             var edit = IconButton("\uE70F", "Rename group");
-            edit.Visibility = Visibility.Collapsed;
+            edit.Opacity = 0;
+            edit.IsHitTestVisible = false;
             Grid.SetColumn(edit, 1);
             grid.Children.Add(titleHost);
             grid.Children.Add(edit);
-            grid.PointerEntered += (_, _) => edit.Visibility = Visibility.Visible;
-            grid.PointerExited += (_, _) => edit.Visibility = Visibility.Collapsed;
-            grid.GotFocus += (_, _) => edit.Visibility = Visibility.Visible;
-            grid.LostFocus += (_, _) => edit.Visibility = Visibility.Collapsed;
+            void SetEditVisibility(bool visible)
+            {
+                edit.Opacity = visible ? 1 : 0;
+                edit.IsHitTestVisible = visible;
+            }
+            grid.PointerEntered += (_, _) => SetEditVisibility(true);
+            grid.PointerExited += (_, _) => SetEditVisibility(false);
+            grid.GotFocus += (_, _) => SetEditVisibility(true);
+            grid.LostFocus += (_, _) => SetEditVisibility(false);
             edit.Click += (_, _) =>
             {
                 var input = new TextBox { Text = category, VerticalAlignment = VerticalAlignment.Center };
@@ -497,6 +503,7 @@ namespace App.Pages
 
             var selectedDate = date.Date?.LocalDateTime ?? DateTime.Now;
             todo.Notify = NotificationSchedule(preset.SelectedIndex, selectedDate, time.Time);
+            todo.NotifiedAt = DateTime.UtcNow;
             _repository.Update(todo);
             Render();
         }
@@ -638,7 +645,9 @@ namespace App.Pages
             occurrence = default;
             if (string.IsNullOrWhiteSpace(todo.Notify) || !TryNextSchedule(todo.Notify, out occurrence)) return false;
             var now = DateTimeOffset.Now;
-            return occurrence >= now.AddHours(-1) && occurrence <= now.AddHours(1);
+            return occurrence >= now.AddHours(-1)
+                && occurrence <= now.AddHours(1)
+                && occurrence.UtcDateTime > todo.NotifiedAt.ToUniversalTime();
         }
 
         private static bool TryNextSchedule(string expression, out DateTimeOffset occurrence)
