@@ -1,7 +1,6 @@
 ## .NET / C#
 bin/
 obj/
-Installer/
 *.user
 *.suo
 *.cache
@@ -36,6 +35,7 @@ x64/
 x86/
 ARM/
 ARM64/
+Installer/
 
 ## Rider / VS Code
 .idea/
