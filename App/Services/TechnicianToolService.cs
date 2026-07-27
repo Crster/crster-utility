@@ -84,7 +84,7 @@ namespace App.Services
             var declarations = CreateDeclarations();
             return new JsonArray(declarations
                 .OfType<JsonObject>()
-                .Where(declaration => declaration["name"]?.GetValue<string>() is not ("plan" or "design" or "research"))
+                .Where(declaration => declaration["name"]?.GetValue<string>() is not ("plan" or "design" or "research" or "clean_up"))
                 .Select(declaration => (JsonNode)declaration.DeepClone())
                 .ToArray());
         }
