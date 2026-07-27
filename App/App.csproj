@@ -107,7 +107,7 @@
     <GenerateTestArtifacts>False</GenerateTestArtifacts>
     <AppxBundle>Auto</AppxBundle>
     <AppxBundlePlatforms>x86|x64</AppxBundlePlatforms>
-    <AppInstallerUri>D:\CrsterSite</AppInstallerUri>
+    <AppInstallerUri>D:\CrsterSite\CrsterUtility\Installer</AppInstallerUri>
     <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
     <AppxPackageDir>D:\CrsterSite\CrsterUtility\Installer\</AppxPackageDir>
   </PropertyGroup>
