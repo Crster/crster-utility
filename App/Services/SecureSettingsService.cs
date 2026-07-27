@@ -76,9 +76,10 @@ namespace App.Services
             var collection = Database.Settings;
             foreach (var definition in AppSettings.Definitions)
             {
-                var document = collection.FindById(definition.Key)!;
+                var document = collection.FindById(definition.Key)
+                    ?? throw new InvalidOperationException($"Setting '{definition.Key}' is missing from application storage.");
                 document.Value = definition.Read(settings);
-                collection.Update(document);
+                collection.Update(definition.Key, document);
             }
             WriteBootstrap(settings.DatabaseFolder, settings.GeminiApiKey);
             var embeddingModelChanged = !string.Equals(Current.EmbeddingModel, settings.EmbeddingModel, StringComparison.OrdinalIgnoreCase);
@@ -93,7 +94,7 @@ namespace App.Services
         {
             var document = Database.Settings.FindById(key) ?? throw new KeyNotFoundException($"Unknown setting '{key}'.");
             document.Value = document.Default;
-            Database.Settings.Update(document);
+            Database.Settings.Update(key, document);
             Current = AppSettings.FromDatabase(Current.DatabaseFolder, Current.GeminiApiKey, Database.Settings);
             Changed?.Invoke(this, Current);
         }
