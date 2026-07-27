@@ -23,6 +23,18 @@ namespace App.Services
         [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool DestroyMenu(IntPtr menu);
         [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool GetCursorPos(out POINT point);
         [LibraryImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static partial bool SetForegroundWindow(IntPtr window);
+        [LibraryImport("user32.dll", SetLastError = true)]
+        private static partial IntPtr CreateIcon(
+            IntPtr instance,
+            int width,
+            int height,
+            byte planes,
+            byte bitsPerPixel,
+            byte[] andBits,
+            byte[] xorBits);
+        [LibraryImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static partial bool DestroyIcon(IntPtr icon);
 
         [DllImport("user32.dll")]
         private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, WndProcDelegate newProc);
@@ -83,9 +95,13 @@ namespace App.Services
         }
 
         private readonly Window window;
+        private readonly DispatcherTimer _pulseTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
         private NOTIFYICONDATA _nid;
         private WndProcDelegate? newWndProc;
         private IntPtr oldWndProc;
+        private IntPtr _appIcon;
+        private IntPtr _transparentIcon;
+        private bool _showTransparentIcon;
         private bool _isAdded;
 
         public event Action? TrayLeftClick;
@@ -105,6 +121,7 @@ namespace App.Services
         public NotifyIconService(Window window)
         {
             this.window = window;
+            _pulseTimer.Tick += PulseTimer_Tick;
             InitializeTrayIcon();
         }
 
@@ -112,6 +129,8 @@ namespace App.Services
         {
             IntPtr hWnd = WindowNative.GetWindowHandle(window);
             IntPtr hIcon = SendMessage(hWnd, WM_GETICON, (IntPtr)ICON_SMALL, IntPtr.Zero);
+            _appIcon = hIcon;
+            _transparentIcon = CreateTransparentIcon();
 
             _nid = new NOTIFYICONDATA
             {
@@ -132,6 +151,46 @@ namespace App.Services
                 newWndProc = CustomWndProc;
                 oldWndProc = SetWindowLongPtr(hWnd, GWLP_WNDPROC, newWndProc);
             }
+        }
+
+        private static IntPtr CreateTransparentIcon()
+        {
+            const int iconSize = 16;
+            const int maskBytes = iconSize * iconSize / 8;
+            var transparentMask = new byte[maskBytes];
+            Array.Fill(transparentMask, byte.MaxValue);
+            return CreateIcon(
+                IntPtr.Zero,
+                iconSize,
+                iconSize,
+                1,
+                1,
+                transparentMask,
+                new byte[maskBytes]);
+        }
+
+        public void SetProcessing(bool isProcessing)
+        {
+            if (!_isAdded) return;
+
+            if (isProcessing)
+            {
+                if (_pulseTimer.IsEnabled) return;
+                _showTransparentIcon = false;
+                _pulseTimer.Start();
+                PulseTimer_Tick(null, EventArgs.Empty);
+                return;
+            }
+
+            _pulseTimer.Stop();
+            _showTransparentIcon = false;
+            SetIcon(_appIcon);
+        }
+
+        private void PulseTimer_Tick(object? sender, object e)
+        {
+            _showTransparentIcon = !_showTransparentIcon;
+            SetIcon(_showTransparentIcon && _transparentIcon != IntPtr.Zero ? _transparentIcon : _appIcon);
         }
 
         private IntPtr CustomWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
@@ -199,10 +258,16 @@ namespace App.Services
 
         public void Dispose()
         {
+            _pulseTimer.Stop();
             if (_isAdded)
             {
                 _ = Shell_NotifyIcon(NIM_DELETE, ref _nid);
                 _isAdded = false;
+            }
+            if (_transparentIcon != IntPtr.Zero)
+            {
+                _ = DestroyIcon(_transparentIcon);
+                _transparentIcon = IntPtr.Zero;
             }
         }
     }

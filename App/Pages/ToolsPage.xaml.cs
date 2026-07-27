@@ -15,8 +15,8 @@ namespace App.Pages
         private const double MouseMovementScreenCoverage = 0.70;
         private const int MaximumMouseJumpDistance = 200;
         private const int CenterJumpChance = 8;
-        private const int MinimumScrollActionsPerCycle = 3;
-        private const int MaximumScrollActionsPerCycle = 6;
+        private const int MinimumScrollActionsPerCycle = 1;
+        private const int MaximumScrollActionsPerCycle = 3;
 
         private readonly DispatcherTimer _activityTimer = new();
         private readonly DispatcherTimer _mouseMonitorTimer = new();
@@ -29,7 +29,6 @@ namespace App.Pages
         private int _remainingScrollActions;
         private ActiveExternalApp _activeExternalApp;
         private bool _movePending;
-        private bool _switchBrowserTabNext;
         private bool _isRunning;
 
         public ToolsPage()
@@ -63,7 +62,7 @@ namespace App.Pages
                 return;
 
             _isRunning = true;
-            _switchBrowserTabNext = false;
+            App.SystemTray?.SetProcessing(true);
             CaffeineButton.Content = "Stop Caffeine";
             CaffeineDescriptionText.Text = "Caffeine will begin in 5 seconds. Move the pointer 100 pixels away from its last automated position to stop.";
             _mouseMonitorTimer.Start();
@@ -76,6 +75,7 @@ namespace App.Pages
         private void StopCaffeine()
         {
             _isRunning = false;
+            App.SystemTray?.SetProcessing(false);
             _activityTimer.Stop();
             _mouseMonitorTimer.Stop();
             CaffeineButton.Content = "Start Caffeine";
@@ -133,21 +133,8 @@ namespace App.Pages
                 return;
             }
 
-            if (_activeExternalApp == ActiveExternalApp.Ide)
-            {
-                SwitchExternalApp();
-                _switchBrowserTabNext = true;
-            }
-            else if (_switchBrowserTabNext)
-            {
-                SwitchBrowserTab();
-                _switchBrowserTabNext = false;
-            }
-            else
-            {
-                SwitchExternalApp();
-            }
-
+            SwitchActiveTab();
+            SwitchExternalApp();
             BeginActivityBlock();
         }
 
@@ -178,10 +165,11 @@ namespace App.Pages
                 : ActiveExternalApp.Ide;
         }
 
-        private void SwitchBrowserTab()
+        private void SwitchActiveTab()
         {
             NativeInputService.SendCtrlTab();
-            _browserTabIndex = (_browserTabIndex + 1) % BrowserTabCount;
+            if (_activeExternalApp == ActiveExternalApp.Browser)
+                _browserTabIndex = (_browserTabIndex + 1) % BrowserTabCount;
         }
 
         private void ScrollWithinVirtualBounds()
