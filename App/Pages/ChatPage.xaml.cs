@@ -28,7 +28,7 @@ namespace App.Pages
     public sealed partial class ChatPage : Page
     {
         private static readonly Regex AttachmentTokenRegex = new(@"\[(?<icon>📎|🖼)\s(?<name>[a-z]+-[A-Z0-9]{4})\]", RegexOptions.Compiled);
-        private static readonly string[] AttachmentTokenWords = ["amber", "cedar", "coral", "dawn", "ember", "frost", "grove", "harbor", "indigo", "juniper", "meadow", "river"];
+        private const string AttachmentTokenCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         private const int MaximumTechnicianToolCalls = 80;
         private const int MaximumRepeatedContextCharacters = 24_000;
         private const int MaximumHistoryCharacters = 100_000;
@@ -39,6 +39,10 @@ namespace App.Pages
         private const string SmartModel = "gemini-3.5-flash";
         private const long MaximumProjectDocumentationFileBytes = 1_000_000;
         private const int MaximumProjectContextFileCount = 64;
+        private static readonly string[] RetryCommandForms = ["try", "retry", "retryagain", "tryagain", "repeat", "redo", "resend", "doitagain"];
+        private static readonly string[] RetryPolitePrefixes = ["please", "canyou", "couldyou", "wouldyou"];
+        private static readonly string[] ConfirmationCommandForms = ["yes", "yescontinue", "yesplease", "implementnow", "proceed", "goahead", "continue", "no", "dontcontinue", "donotcontinue", "stop", "cancel", "notnow", "nothanks"];
+        private static readonly string[] DeepPreparationPhrases = ["plan", "desperate", "urgent", "stuck", "tried everything", "nothing works", "need a solution", "please help"];
         private static readonly HashSet<string> ProjectDocumentationFileNames = new(StringComparer.OrdinalIgnoreCase)
         {
             "README.md", "AGENTS.md", "CLAUDE.md"
@@ -121,8 +125,12 @@ namespace App.Pages
         {
             if (_operationCancellation is not null) return;
             if (_client is null) throw new InvalidOperationException("Chat is not connected. Add a Gemini API key and reopen the Chat page.");
-            var prompt = GetComposerText().Trim();
-            var stagedAttachments = GetReferencedAttachments(prompt);
+            var composerPrompt = GetComposerText().Trim();
+            var isTechnicianRetry = TryGetTechnicianRetryPrompt(composerPrompt, out var prompt);
+            if (!isTechnicianRetry) prompt = composerPrompt;
+            var isTechnicianConfirmation = !isTechnicianRetry && IsTechnicianConfirmationPrompt(composerPrompt);
+            var requiresDeepPreparation = !isTechnicianRetry && !isTechnicianConfirmation && RequiresDeepTechnicianPreparation(prompt);
+            var stagedAttachments = isTechnicianRetry ? [] : GetReferencedAttachments(prompt);
             if (prompt.Length == 0 && stagedAttachments.Count == 0) return;
 
             _suppressAttachmentCleanup = true;
@@ -141,8 +149,14 @@ namespace App.Pages
             var uploadedAttachments = new List<ChatAttachment>();
             try
             {
-                var shouldContinue = _personality != ChatPersonality.Technician
-                    || await PrepareTechnicianTurnAsync(prompt, _operationCancellation.Token);
+                if (isTechnicianRetry)
+                    await _chatLog.WriteAsync("technician.retry", ("promptLength", prompt.Length));
+                else if (isTechnicianConfirmation)
+                    await _chatLog.WriteAsync("technician.confirmation", ("promptLength", prompt.Length));
+                else if (requiresDeepPreparation)
+                    await _chatLog.WriteAsync("technician.deep_preparation", ("promptLength", prompt.Length));
+                var shouldContinue = isTechnicianRetry || isTechnicianConfirmation || _personality != ChatPersonality.Technician
+                    || await PrepareTechnicianTurnAsync(prompt, _operationCancellation.Token, requiresDeepPreparation);
                 await _chatLog.WriteAsync("send.started",
                     ("personality", _personality),
                     ("model", Model()),
@@ -163,7 +177,7 @@ namespace App.Pages
                 uploadedAttachments = await UploadMessageAttachmentsAsync(attachmentsToUpload, _operationCancellation.Token);
                 var initialPrompt = CreateAttachmentPrompt(prompt, stagedAttachments);
                 var userStep = GeminiClient.CreateUserStep(initialPrompt, uploadedAttachments);
-                await RunInteractionAsync(userStep, prompt);
+                await RunInteractionAsync(userStep, prompt, requiresDeepPreparation);
             }
             catch
             {
@@ -179,7 +193,69 @@ namespace App.Pages
             }
         }
 
-        private async Task RunInteractionAsync(JsonObject initialStep, string userPrompt)
+        private bool TryGetTechnicianRetryPrompt(string value, out string prompt)
+        {
+            prompt = string.Empty;
+            if (_personality != ChatPersonality.Technician || _messageAttachments.Count > 0 || !IsRetryCommand(value)) return false;
+
+            prompt = Session.Messages
+                .LastOrDefault(message => message.Kind == ChatItemKind.User && !string.IsNullOrWhiteSpace(message.Content))
+                ?.Content
+                ?? string.Empty;
+            return !string.IsNullOrWhiteSpace(prompt);
+        }
+
+        private static bool IsRetryCommand(string value)
+        {
+            var normalized = NormalizeShortCommand(value, RetryPolitePrefixes);
+            return IsFuzzyCommandMatch(normalized, RetryCommandForms);
+        }
+
+        private bool IsTechnicianConfirmationPrompt(string value) =>
+            _personality == ChatPersonality.Technician
+            && _messageAttachments.Count == 0
+            && Session.Messages.Any(message => message.Kind is ChatItemKind.User or ChatItemKind.Assistant)
+            && IsFuzzyCommandMatch(NormalizeShortCommand(value, RetryPolitePrefixes), ConfirmationCommandForms);
+
+        private bool RequiresDeepTechnicianPreparation(string prompt)
+        {
+            if (_personality != ChatPersonality.Technician) return false;
+            var normalized = prompt.Trim().ToLowerInvariant();
+            return DeepPreparationPhrases.Any(phrase => phrase.Equals("plan", StringComparison.Ordinal)
+                ? Regex.IsMatch(normalized, @"\bplan\b", RegexOptions.CultureInvariant)
+                : normalized.Contains(phrase, StringComparison.Ordinal));
+        }
+
+        private static string NormalizeShortCommand(string value, IEnumerable<string> prefixes)
+        {
+            var normalized = new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+            foreach (var prefix in prefixes)
+                if (normalized.StartsWith(prefix, StringComparison.Ordinal))
+                    normalized = normalized[prefix.Length..];
+            return normalized;
+        }
+
+        private static bool IsFuzzyCommandMatch(string value, IEnumerable<string> commands) =>
+            value.Length > 0 && commands.Any(command => value.Equals(command, StringComparison.Ordinal)
+                || (value.Length >= 3 && EditDistance(value, command) <= 1));
+
+        private static int EditDistance(string left, string right)
+        {
+            var previous = Enumerable.Range(0, right.Length + 1).ToArray();
+            for (var leftIndex = 1; leftIndex <= left.Length; leftIndex++)
+            {
+                var current = new int[right.Length + 1];
+                current[0] = leftIndex;
+                for (var rightIndex = 1; rightIndex <= right.Length; rightIndex++)
+                    current[rightIndex] = Math.Min(
+                        Math.Min(previous[rightIndex] + 1, current[rightIndex - 1] + 1),
+                        previous[rightIndex - 1] + (left[leftIndex - 1] == right[rightIndex - 1] ? 0 : 1));
+                previous = current;
+            }
+            return previous[right.Length];
+        }
+
+        private async Task RunInteractionAsync(JsonObject initialStep, string userPrompt, bool startTechnicianEscalated = false)
         {
             var operationCancellation = _operationCancellation ??= new CancellationTokenSource();
             SetBusy(true, $"{_personality} is working...");
@@ -188,12 +264,13 @@ namespace App.Pages
                 IReadOnlyList<JsonObject> nextSteps = [initialStep];
                 var round = 0;
                 var technicianToolCallCount = 0;
-                var technicianTier = TechnicianModelTier.Standard;
+                var technicianTier = startTechnicianEscalated ? TechnicianModelTier.Escalated : TechnicianModelTier.Standard;
                 var handledTwentyCallCheckpoint = false;
                 var handledFortyCallCheckpoint = false;
                 var consecutiveFailedToolCalls = 0;
                 var troubleGuidanceGenerated = false;
                 var emptyCompletionRecoveryAttempted = false;
+                var technicianAppliedFileChange = false;
                 while (true)
                 {
                     round++;
@@ -299,18 +376,32 @@ namespace App.Pages
                         }
 
                         var toolResult = await ExecuteToolAsync(call.Name, call.Arguments, operationCancellation.Token);
+                        if (_personality == ChatPersonality.Technician
+                            && toolResult.Success
+                            && IsFileMutationTool(call.Name))
+                            technicianAppliedFileChange = true;
+                        if (_personality == ChatPersonality.Technician
+                            && call.Name.Equals("patch_file", StringComparison.Ordinal))
+                        {
+                            JsonNode? parsedResult;
+                            try { parsedResult = JsonNode.Parse(toolResult.Output); }
+                            catch (JsonException) { parsedResult = toolResult.Output; }
+                            await _chatLog.WriteJsonAsync("technician.patch_file", new JsonObject
+                            {
+                                ["arguments"] = call.Arguments.DeepClone(),
+                                ["success"] = toolResult.Success,
+                                ["result"] = parsedResult
+                            });
+                        }
                         if (_personality == ChatPersonality.Technician) technicianToolCallCount++;
                         consecutiveFailedToolCalls = toolResult.Success ? 0 : consecutiveFailedToolCalls + 1;
-                        if (!IsReusedCompleteRead(call.Name, toolResult))
-                        {
-                            AddMessage(new ChatMessage(
-                                ChatItemKind.Tool,
-                                call.Name,
-                                toolResult.Output,
-                                Image: toolResult.Image,
-                                ToolArguments: (JsonObject)call.Arguments.DeepClone(),
-                                ToolSucceeded: toolResult.Success));
-                        }
+                        AddMessage(new ChatMessage(
+                            ChatItemKind.Tool,
+                            call.Name,
+                            toolResult.Output,
+                            Image: toolResult.Image,
+                            ToolArguments: (JsonObject)call.Arguments.DeepClone(),
+                            ToolSucceeded: toolResult.Success));
                         responses.Add(GeminiClient.CreateFunctionResult(call, toolResult));
                     }
 
@@ -361,6 +452,13 @@ namespace App.Pages
                         await _chatLog.WriteAsync("technician.trouble_guidance", ("toolCallCount", technicianToolCallCount));
                     }
 
+                    if (_personality == ChatPersonality.Technician && !technicianAppliedFileChange)
+                    {
+                        responses.Add(GeminiClient.CreateUserStep(
+                            "Execution status: this turn has only inspected files; no file change has succeeded. If the request requires a code change, call patch_file or write_file now. Otherwise, state clearly that no files were changed. Never say or imply that a read_file result updated a file.",
+                            []));
+                    }
+
                     nextSteps = responses;
                 }
             }
@@ -398,7 +496,7 @@ namespace App.Pages
             }
         }
 
-        private async Task<bool> PrepareTechnicianTurnAsync(string prompt, CancellationToken token)
+        private async Task<bool> PrepareTechnicianTurnAsync(string prompt, CancellationToken token, bool requiresDeepPreparation = false)
         {
             if (_technicianOrchestrator is null) throw new InvalidOperationException("Technician orchestration is unavailable.");
 
@@ -442,7 +540,7 @@ namespace App.Pages
                 RenderSession();
             }
 
-            var usesWorkspace = classification.Scope == TechnicianScope.Project
+            var usesWorkspace = classification.Scope is TechnicianScope.Project or TechnicianScope.Coding
                 || classification.WorkType is TechnicianWorkType.Implementation or TechnicianWorkType.Diagnosis;
             if (usesWorkspace) await LoadProjectDocumentationContextAsync(token);
 
@@ -473,24 +571,36 @@ namespace App.Pages
                 }
             }
 
-            if (classification.Specialist != TechnicianSpecialist.None)
+            var specialists = requiresDeepPreparation
+                ? new[] { TechnicianSpecialist.Plan, TechnicianSpecialist.Research, TechnicianSpecialist.Design }
+                : classification.Specialist == TechnicianSpecialist.None
+                    ? []
+                    : new[] { classification.Specialist };
+            if (specialists.Length > 0)
             {
                 try
                 {
-                    var specialistContext = await _technicianOrchestrator.CreateSpecialistContextAsync(
-                        classification.Specialist,
-                        prompt,
-                        Session.ContextText,
-                        token);
-                    if (!string.IsNullOrWhiteSpace(specialistContext))
-                        ReplaceTechnicianContextRegion(TechnicianContextRegion.Specialist, specialistContext);
+                    var guidance = new List<string>();
+                    foreach (var specialist in specialists)
+                    {
+                        var specialistContext = await _technicianOrchestrator.CreateSpecialistContextAsync(
+                            specialist,
+                            prompt,
+                            Session.ContextText,
+                            token);
+                        if (!string.IsNullOrWhiteSpace(specialistContext))
+                            guidance.Add($"### {specialist}\n{specialistContext}");
+                    }
+                    var combinedGuidance = string.Join("\n\n", guidance);
+                    if (!string.IsNullOrWhiteSpace(combinedGuidance))
+                        ReplaceTechnicianContextRegion(TechnicianContextRegion.Specialist, combinedGuidance);
                 }
                 catch (Exception exception)
                 {
                     await _chatLog.WriteAsync("technician.specialist_failed",
-                        ("specialist", classification.Specialist),
+                        ("specialist", string.Join(",", specialists)),
                         ("exceptionType", exception.GetType().Name));
-                    AddMessage(new ChatMessage(ChatItemKind.Tool, classification.Specialist.ToString().ToLowerInvariant(), exception.Message, ToolSucceeded: false));
+                    AddMessage(new ChatMessage(ChatItemKind.Tool, "specialist", exception.Message, ToolSucceeded: false));
                 }
             }
 
@@ -584,18 +694,8 @@ namespace App.Pages
                 : await _secretaryTools.ExecuteAsync(name, arguments, token);
         }
 
-        private static bool IsReusedCompleteRead(string toolName, ToolResult result)
-        {
-            if (!toolName.Equals("read_file", StringComparison.Ordinal) || !result.Success) return false;
-            try
-            {
-                return JsonNode.Parse(result.Output)?["reused_previous_read"]?.GetValue<bool>() == true;
-            }
-            catch (JsonException)
-            {
-                return false;
-            }
-        }
+        private static bool IsFileMutationTool(string toolName) =>
+            toolName is "write_file" or "patch_file" or "delete_file";
 
         private string EffectiveSystemInstruction()
         {
@@ -729,15 +829,15 @@ namespace App.Pages
 
             Scope: selected-workspace project work, software engineering, coding questions, and Windows or computer troubleshooting. For anything outside that scope, decline briefly and warmly, say what you can help with, and do not use tools or research.
 
-            Work mode: for a clear implementation request, begin work immediately. Do not send a progress acknowledgement, restate the request, narrate routine investigation, or ask to proceed. Inspect relevant files before changing them, make the smallest complete convention-consistent change, and give one final user-facing answer once the work is done. The selected workspace authorizes safe reads and non-destructive edits within it. Ask for confirmation only before destructive, risky, or elevated actions.
+            Work mode: for a clear implementation request, begin work immediately. Do not send a progress acknowledgement, restate the request, narrate routine investigation, or ask to proceed. Inspect relevant files before changing them, make the smallest complete convention-consistent change, and give one final user-facing answer once the work is done. When a selected workspace contains the relevant project files, inspect them with the available file tools instead of asking the user to paste their contents. The selected workspace authorizes safe reads and non-destructive edits within it. Ask for confirmation only before destructive, risky, or elevated actions.
 
-            Engineering standard: preserve existing architecture and conventions; make focused, readable changes; use descriptive names; validate external inputs at boundaries; and add comments only for non-obvious intent, constraints, or tradeoffs. Never claim that a file change, command, test, or diagnosis succeeded unless the corresponding tool result proves it.
+            Engineering standard: preserve existing architecture and conventions; make focused, readable changes; use descriptive names; validate external inputs at boundaries; and add comments only for non-obvious intent, constraints, or tradeoffs. Never claim that a file change, command, test, or diagnosis succeeded unless the corresponding tool result proves it. A successful read_file result proves only that the file was inspected; it never proves that the file was edited. State that a file was changed only after a successful patch_file, write_file, or delete_file result in the current turn.
 
             Decision rule: answer advice, diagnosis, and ambiguous requests without changing files, running commands, or affecting processes. For a clear small implementation, inspect then implement. For a material design or planning decision, use the supplied internal context to identify the missing decision and ask one focused question before editing. Do not invent requirements, APIs, permissions, data fields, or environment details.
 
-            Tool discipline: use only declared Technician tools, their stated schemas, and the narrowest tool that answers the need. Workspace file, command, and process tools require a selected workspace; device-data tools do not. Read a file before editing it. Use search_file for content discovery and list_file_and_directory for structure or filename discovery. Prefer a suitable read-only execute command for Windows status or diagnosis. Use get_data only for its declared data kinds.
+            Tool discipline: use only declared Technician tools, their stated schemas, and the narrowest tool that answers the need. Workspace file, command, and process tools require a selected workspace; device-data tools do not. Read a file before editing it. patch_file accepts exactly two patch styles: literal old_text/new_text pairs (one pair or an edits array), or one raw single-file Git/unified diff in the diff field. Copy old_text and diff context/removal lines from source; put only final source in new_text and added diff lines. Matching tolerates only newline and whitespace differences, never approximate or invented text. Tool arguments are data, not a user-facing answer: never add explanations, Markdown fences, labels, line numbers, quotes, ellipses, or commentary. If patch_not_found returns a complete closest_old_text for the intended block, use that raw value directly on the single retry. Call read_file again only when the candidate is truncated or is not the intended block. Use search_file for content discovery and list_file_and_directory for structure or filename discovery. Prefer a suitable read-only execute command for Windows status or diagnosis. Use get_data only for its declared data kinds.
 
-            Safety and recovery: use execute for non-elevated Windows work and execute_sudo only when elevation is genuinely required and the user has confirmed it. Require confirmation for delete, termination, destructive, risky, and elevated actions. After a safe read-only diagnostic failure, inspect the result and try a different appropriate approach, up to five attempts total. After a failed write, patch, or delete, read the reported cause and retry once only when the failure proves nothing changed. Never use a whole-file write to bypass a failed patch, retry a successful or possibly partial action, or retry an action the user declined. Copy patch old_text verbatim from a read result and reuse a complete read while its file_state remains unchanged.
+            Safety and recovery: use execute for non-elevated Windows work and execute_sudo only when elevation is genuinely required and the user has confirmed it. Require confirmation for delete, termination, destructive, risky, and elevated actions. After a safe read-only diagnostic failure, inspect the result and try a different appropriate approach, up to five attempts total. After a failed write, patch, or delete, read the reported cause and retry only when the failure proves nothing changed. Never retry a successful or possibly partial action, or an action the user declined. A failed patch writes nothing: prefer its complete closest_old_text for one corrected retry, and reread only if that candidate cannot safely identify the intended block. If corrected patch attempts still fail, use write_file with the complete intended source or a precise character range so the requested implementation can finish.
 
             Verification: run targeted validation for new or substantial changes. Do not launch the project automatically; ask or leave manual verification to the user unless they explicitly request execution. State unrun verification clearly.
 
@@ -1552,8 +1652,11 @@ namespace App.Pages
             return text.EndsWith("\r", StringComparison.Ordinal) ? text[..^1] : text;
         }
 
-        private void SetComposerText(string text) =>
+        private void SetComposerText(string text)
+        {
             ComposerBox.Document.SetText(Microsoft.UI.Text.TextSetOptions.None, text);
+            ResetComposerInsertionFormat(text.Length);
+        }
         private async void ComposerBox_Paste(object sender, TextControlPasteEventArgs e)
         {
             if (_client is null || _isBusy || _operationCancellation is not null) return;
@@ -1599,7 +1702,7 @@ namespace App.Pages
             var attachments = new List<ChatAttachment>();
             foreach (var file in files)
             {
-                var tokenName = CreateAttachmentTokenName();
+                var tokenName = CreateAttachmentTokenName(file.ContentType);
                 attachments.Add(new ChatAttachment(
                     file.Path,
                     clipboardImageName ?? GetClipboardAttachmentDisplayName(file),
@@ -1629,7 +1732,7 @@ namespace App.Pages
             ComposerBox.Document.Selection.SetRange(selectionStart + insertion.Length, selectionStart + insertion.Length);
             _messageAttachments.AddRange(attachments);
             FormatAttachmentTokens(selectionStart + prefix.Length, attachments);
-            ResetComposerTextFormat(selectionStart + insertion.Length, selectionStart + insertion.Length);
+            ResetComposerInsertionFormat(selectionStart + insertion.Length);
             UpdateSendAvailability();
             return Task.CompletedTask;
         }
@@ -1640,7 +1743,7 @@ namespace App.Pages
             var start = selection.StartPosition;
             selection.Text = text;
             ResetComposerTextFormat(start, start + text.Length);
-            ComposerBox.Document.Selection.SetRange(start + text.Length, start + text.Length);
+            ResetComposerInsertionFormat(start + text.Length);
         }
 
         private void ResetComposerTextFormat(int startPosition, int endPosition)
@@ -1648,6 +1751,14 @@ namespace App.Pages
             var range = ComposerBox.Document.GetRange(startPosition, endPosition);
             range.CharacterFormat.Bold = Microsoft.UI.Text.FormatEffect.Off;
             range.CharacterFormat.BackgroundColor = Microsoft.UI.Colors.Transparent;
+        }
+
+        private void ResetComposerInsertionFormat(int position)
+        {
+            var selection = ComposerBox.Document.Selection;
+            selection.SetRange(position, position);
+            selection.CharacterFormat.Bold = Microsoft.UI.Text.FormatEffect.Off;
+            selection.CharacterFormat.BackgroundColor = Microsoft.UI.Colors.Transparent;
         }
 
         private static string GetClipboardAttachmentDisplayName(StorageFile file)
@@ -1683,12 +1794,16 @@ namespace App.Pages
         private static string CreateAttachmentToken(ChatAttachment attachment) =>
             $"[{(attachment.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? "🖼" : "📎")} {attachment.TokenName}]";
 
-        private string CreateAttachmentTokenName()
+        private string CreateAttachmentTokenName(string mimeType)
         {
             string tokenName;
             do
             {
-                tokenName = $"{AttachmentTokenWords[Random.Shared.Next(AttachmentTokenWords.Length)]}-{Guid.NewGuid().ToString("N")[..4].ToUpperInvariant()}";
+                var suffix = new char[4];
+                for (var index = 0; index < suffix.Length; index++)
+                    suffix[index] = AttachmentTokenCharacters[Random.Shared.Next(AttachmentTokenCharacters.Length)];
+                var type = mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? "image" : "file";
+                tokenName = $"{type}-{new string(suffix)}";
             }
             while (_messageAttachments.Any(attachment => attachment.TokenName.Equals(tokenName, StringComparison.Ordinal)));
             return tokenName;

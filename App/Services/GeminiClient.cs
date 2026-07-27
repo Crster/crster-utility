@@ -366,7 +366,8 @@ namespace App.Services
                         var contentType = content?["type"]?.GetValue<string>();
                         if (contentType == "text")
                         {
-                            result.Text += content?["text"]?.GetValue<string>();
+                            var text = content?["text"]?.GetValue<string>();
+                            if (!IsObjectPlaceholder(text)) result.Text += text;
                             AppendUrlCitations(result, content?["annotations"]?.AsArray());
                         }
                         else if (contentType == "image" && content is JsonObject imageContent)
@@ -383,6 +384,9 @@ namespace App.Services
             }
             return result;
         }
+
+        private static bool IsObjectPlaceholder(string? value) =>
+            string.Equals(value?.Trim(), "[object Object]", StringComparison.Ordinal);
 
         private static void AppendUrlCitations(GeminiTurnResult result, JsonArray? annotations)
         {
