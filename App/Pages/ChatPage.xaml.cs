@@ -236,6 +236,7 @@ namespace App.Pages
             _messageAttachments.Clear();
             Session.History.Clear();
             Session.Messages.Clear();
+            Session.LastTechnicianModelTier = null;
             var context = new TechnicianContextDocument(Session.ContextText);
             context.Clear(TechnicianContextRegion.Session);
             context.Clear(TechnicianContextRegion.Specialist);
@@ -294,6 +295,7 @@ namespace App.Pages
                 var round = 0;
                 var technicianToolCallCount = 0;
                 var technicianTier = startTechnicianEscalated ? TechnicianModelTier.Escalated : TechnicianModelTier.Standard;
+                RecordTechnicianTier(technicianTier, announceInitialEscalation: startTechnicianEscalated);
                 var handledTwentyCallCheckpoint = false;
                 var handledFortyCallCheckpoint = false;
                 var consecutiveFailedToolCalls = 0;
@@ -454,6 +456,7 @@ namespace App.Pages
                         handledTwentyCallCheckpoint = true;
                         if (includeCourseCorrection) handledFortyCallCheckpoint = true;
                         technicianTier = TechnicianModelTier.Escalated;
+                        RecordTechnicianTier(technicianTier);
                         Session.History.Clear();
                         nextSteps =
                         [
@@ -626,7 +629,13 @@ namespace App.Pages
                     }
                     var combinedGuidance = string.Join("\n\n", guidance);
                     if (!string.IsNullOrWhiteSpace(combinedGuidance))
+                    {
                         ReplaceTechnicianContextRegion(TechnicianContextRegion.Specialist, combinedGuidance);
+                        AddMessage(new ChatMessage(
+                            ChatItemKind.Thinking,
+                            "Technician preparation",
+                            $"Prepared {string.Join(", ", specialists.Select(specialist => specialist.ToString().ToLowerInvariant()))} guidance before continuing."));
+                    }
                 }
                 catch (Exception exception)
                 {
@@ -729,6 +738,21 @@ namespace App.Pages
 
         private static bool IsFileMutationTool(string toolName) =>
             toolName is "write_file" or "patch_file" or "delete_file";
+
+        private void RecordTechnicianTier(TechnicianModelTier tier, bool announceInitialEscalation = false)
+        {
+            if (_personality != ChatPersonality.Technician) return;
+            var previousTier = Session.LastTechnicianModelTier;
+            if (previousTier == tier && !announceInitialEscalation) return;
+
+            var message = tier == TechnicianModelTier.Escalated
+                ? previousTier == TechnicianModelTier.Standard
+                    ? "Upgraded to the higher-capability model."
+                    : "Using the higher-capability model."
+                : "Returned to the standard model.";
+            AddMessage(new ChatMessage(ChatItemKind.Thinking, "Technician model", message));
+            Session.LastTechnicianModelTier = tier;
+        }
 
         private static bool IsEmptyResponseRecoveryEcho(string text) =>
             string.Equals(text.Trim(), EmptyResponseRecoveryPrompt, StringComparison.Ordinal);

@@ -52,6 +52,7 @@ namespace App.Models
         public string ContextText { get; set; } = string.Empty;
         public bool ProjectDocumentationScanned { get; set; }
         public string ProjectDocumentationFingerprint { get; set; } = string.Empty;
+        public TechnicianModelTier? LastTechnicianModelTier { get; set; }
     }
 
     internal sealed record ChatMessage(
