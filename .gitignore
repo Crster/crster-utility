@@ -1,6 +1,7 @@
 ## .NET / C#
 bin/
 obj/
+Installer/
 *.user
 *.suo
 *.cache
