@@ -56,6 +56,10 @@ namespace App.Windows
         private bool isCopying;
         private bool isCopyingText;
         private bool isClosed;
+        private bool isToolbarDragging;
+        private Point toolbarDragStart;
+        private double toolbarDragStartX;
+        private double toolbarDragStartY;
 
         // Text editing state
         private bool isTextEditing;
@@ -109,6 +113,72 @@ namespace App.Windows
             ImageSaved = null;
         }
 
+        // Section: Edit Toolbar Dragging
+        private void EditToolbarDragHandle_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (!e.GetCurrentPoint(EditToolbarDragHandle).Properties.IsLeftButtonPressed)
+                return;
+
+            toolbarDragStart = e.GetCurrentPoint(RootGrid).Position;
+            toolbarDragStartX = EditToolbarTransform.X;
+            toolbarDragStartY = EditToolbarTransform.Y;
+            isToolbarDragging = EditToolbarDragHandle.CapturePointer(e.Pointer);
+            e.Handled = isToolbarDragging;
+        }
+
+        private void EditToolbarDragHandle_PointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            if (!isToolbarDragging)
+                return;
+
+            if (!e.GetCurrentPoint(EditToolbarDragHandle).Properties.IsLeftButtonPressed)
+            {
+                EndToolbarDrag(e);
+                return;
+            }
+
+            var currentPosition = e.GetCurrentPoint(RootGrid).Position;
+            var centeredLeft = (RootGrid.ActualWidth - EditToolbar.ActualWidth) / 2;
+            const double initialTop = 10;
+            var requestedX = toolbarDragStartX + currentPosition.X - toolbarDragStart.X;
+            var requestedY = toolbarDragStartY + currentPosition.Y - toolbarDragStart.Y;
+
+            EditToolbarTransform.X = Math.Clamp(
+                requestedX,
+                -centeredLeft,
+                RootGrid.ActualWidth - EditToolbar.ActualWidth - centeredLeft);
+            EditToolbarTransform.Y = Math.Clamp(
+                requestedY,
+                -initialTop,
+                RootGrid.ActualHeight - EditToolbar.ActualHeight - initialTop);
+            e.Handled = true;
+        }
+
+        private void EditToolbarDragHandle_PointerReleased(object sender, PointerRoutedEventArgs e)
+        {
+            EndToolbarDrag(e);
+        }
+
+        private void EditToolbarDragHandle_PointerCanceled(object sender, PointerRoutedEventArgs e)
+        {
+            EndToolbarDrag(e);
+        }
+
+        private void EditToolbarDragHandle_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
+        {
+            isToolbarDragging = false;
+        }
+
+        private void EndToolbarDrag(PointerRoutedEventArgs e)
+        {
+            if (!isToolbarDragging)
+                return;
+
+            EditToolbarDragHandle.ReleasePointerCapture(e.Pointer);
+            isToolbarDragging = false;
+            e.Handled = true;
+        }
+
         private static Rect NormalizeRect(Point a, Point b)
         {
             double x = Math.Min(a.X, b.X);
@@ -116,6 +186,40 @@ namespace App.Windows
             double w = Math.Abs(b.X - a.X);
             double h = Math.Abs(b.Y - a.Y);
             return new Rect(x, y, w, h);
+        }
+
+        private static void DrawCropSelection(CanvasDrawingSession ds, Rect selection)
+        {
+            var blackDots = new CanvasStrokeStyle
+            {
+                DashCap = CanvasCapStyle.Round,
+                CustomDashStyle = new float[] { 0, 2 }
+            };
+            var whiteDots = new CanvasStrokeStyle
+            {
+                DashCap = CanvasCapStyle.Round,
+                DashOffset = 1,
+                CustomDashStyle = new float[] { 0, 2 }
+            };
+
+            ds.DrawRectangle(selection, Colors.Black, 2, blackDots);
+            ds.DrawRectangle(selection, Colors.White, 2, whiteDots);
+        }
+
+        private static void DrawBlurSelection(CanvasDrawingSession ds, Rect selection)
+        {
+            var grayDashes = new CanvasStrokeStyle
+            {
+                DashOffset = 4,
+                CustomDashStyle = new float[] { 4, 4 }
+            };
+            var whiteDashes = new CanvasStrokeStyle
+            {
+                CustomDashStyle = new float[] { 4, 4 }
+            };
+
+            ds.DrawRectangle(selection, Colors.Gray, 2, grayDashes);
+            ds.DrawRectangle(selection, Colors.White, 2, whiteDashes);
         }
 
         private void MyCanvas_Draw(CanvasControl sender, CanvasDrawEventArgs args)
@@ -152,12 +256,7 @@ namespace App.Windows
                 ds.FillRectangle(new Rect(0, top, left, bottom - top), tintColor);
                 ds.FillRectangle(new Rect(right, top, sender.ActualWidth - right, bottom - top), tintColor);
 
-                var style = new CanvasStrokeStyle
-                {
-                    DashStyle = CanvasDashStyle.Dash,
-                    CustomDashStyle = new float[] { 4, 4 }
-                };
-                ds.DrawRectangle(cropRect.Value, Colors.White, 2, style);
+                DrawCropSelection(ds, cropRect.Value);
             }
             else if (action == ActiveActions.Crop)
             {
@@ -168,7 +267,7 @@ namespace App.Windows
 
             if (blurPreview.HasValue)
             {
-                ds.DrawRectangle(blurPreview.Value, Colors.White, 2);
+                DrawBlurSelection(ds, blurPreview.Value);
             }
 
             foreach (var shape in shapes)

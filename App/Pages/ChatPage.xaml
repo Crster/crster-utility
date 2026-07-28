@@ -34,6 +34,14 @@
                             </Border>
                         </StackPanel>
                     </ToggleButton>
+                    <Button x:Name="CopyChatButton" Width="36" Height="36" Padding="0"
+                            Click="CopyChatButton_Click" ToolTipService.ToolTip="Copy">
+                        <FontIcon Glyph="&#xE8C8;" />
+                    </Button>
+                    <Button x:Name="CopyChatSummaryButton" Width="36" Height="36" Padding="0"
+                            Click="CopyChatSummaryButton_Click" ToolTipService.ToolTip="Copy summary">
+                        <FontIcon Glyph="&#xE9CE;" />
+                    </Button>
                     <Button x:Name="ClearChatButton" Width="36" Height="36" Padding="0"
                             Click="ClearChatButton_Click" ToolTipService.ToolTip="Clear chat history"
                             AutomationProperties.Name="Clear chat history">

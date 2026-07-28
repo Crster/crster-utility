@@ -24,7 +24,7 @@ namespace App.Services
         public static JsonArray CreateDeclarations() => new()
         {
             Function("find_notes", "Find notes containing the supplied text.", Props(("query", String())), "query"),
-            Function("find_memos", "Find saved memos in a topic, ranked by meaning.", Props(("topic", MemoTopic()), ("query", String())), "topic", "query"),
+            Function("find_memos", "Find saved memos. topic and query are optional: omit both to retrieve all saved memos, for example when summarizing what is known about the user.", Props(("topic", MemoTopic()), ("query", String()))),
             Function("write_memo", "Save a clearly stated detail that may make future help more personal, accurate, or useful. Never save secrets, credentials, guesses, or invented claims.", Props(("topic", MemoTopic()), ("value", String())), "topic", "value"),
             Function("delete_memo", "Delete an incorrect, outdated, conflicting, or explicitly forgotten memo by key. Find the memo first unless its key is already known.", Props(("key", String())), "key"),
             Function("find_todos", "Find todos in a category whose text contains the query.", Props(("category", String()), ("query", String())), "category", "query"),
@@ -41,7 +41,7 @@ namespace App.Services
                 return name switch
                 {
                     "find_notes" => FindNotes(RequiredString(arguments, "query")),
-                    "find_memos" => await FindMemosAsync(RequiredString(arguments, "topic"), RequiredString(arguments, "query"), token),
+                    "find_memos" => await FindMemosAsync(OptionalString(arguments, "topic"), OptionalString(arguments, "query"), token),
                     "write_memo" => await WriteMemoAsync(RequiredString(arguments, "topic"), RequiredString(arguments, "value"), token),
                     "delete_memo" => DeleteMemo(RequiredString(arguments, "key")),
                     "find_todos" => FindTodos(RequiredString(arguments, "category"), RequiredString(arguments, "query")),

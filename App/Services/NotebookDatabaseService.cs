@@ -74,6 +74,25 @@ namespace App.Services
             return Task.FromResult(document is null ? null : ToEntry(document));
         }
 
+        public async Task<NotebookEntry> CreateAsync(string content, CancellationToken cancellationToken = default)
+        {
+            content = content.Trim();
+            if (content.Length == 0) throw new ArgumentException("Note content is required.", nameof(content));
+
+            var embeddingText = NotebookFormat.CreateEmbeddingText(content);
+            using var gemini = new GeminiClient(App.Settings.Current.GeminiApiKey);
+            var document = new NoteDocument
+            {
+                Value = content,
+                Embedding = string.IsNullOrWhiteSpace(embeddingText)
+                    ? []
+                    : FloatsToBytes(await gemini.EmbedNoteAsync(embeddingText, cancellationToken)),
+                Timestamp = DateTime.UtcNow
+            };
+            Database.Notes.Insert(document);
+            return ToEntry(document);
+        }
+
         public async Task SaveAsync(IEnumerable<NotebookEntry> entries)
         {
             var incoming = entries.ToList();

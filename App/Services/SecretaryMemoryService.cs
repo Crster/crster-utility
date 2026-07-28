@@ -29,11 +29,17 @@ namespace App.Services
 
         public async Task<IReadOnlyList<MemoDocument>> FindMemosAsync(string topic, string query, int maximum, CancellationToken token)
         {
-            topic = NormalizeTopic(topic);
-            query = Required(query, nameof(query));
+            topic = string.IsNullOrWhiteSpace(topic) ? string.Empty : NormalizeTopic(topic);
+            query = query.Trim();
+            var memos = App.Settings.Database.Memos.FindAll()
+                .Where(item => topic.Length == 0 || string.Equals(item.Topic, topic, StringComparison.OrdinalIgnoreCase));
+
+            if (query.Length == 0)
+                return memos.OrderByDescending(item => item.Timestamp).Take(maximum).ToList();
+
             var embedding = await _client.EmbedRetrievalQueryAsync(query, token);
-            return App.Settings.Database.Memos.FindAll()
-                .Where(item => string.Equals(item.Topic, topic, StringComparison.OrdinalIgnoreCase) && item.Embedding.Length > 0)
+            return memos
+                .Where(item => item.Embedding.Length > 0)
                 .Select(item => (Item: item, Score: NotebookDatabaseService.Cosine(embedding, NotebookDatabaseService.BytesToFloats(item.Embedding))))
                 .OrderByDescending(item => item.Score)
                 .ThenByDescending(item => item.Item.Timestamp)

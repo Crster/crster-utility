@@ -4,8 +4,8 @@ namespace App.Models
 {
     internal enum TechnicianScope { Project, Coding, Troubleshooting, OutOfScope }
     internal enum TechnicianRelationship { None, Related, New }
-    internal enum TechnicianWorkType { Advice, Implementation, Diagnosis, Design, Research, Planning }
-    internal enum TechnicianSpecialist { None, Plan, Design, Research }
+    internal enum TechnicianWorkType { Advice, Implementation, Diagnosis }
+    internal enum TechnicianSpecialist { None, Research }
     internal enum TechnicianModelTier { Standard, Escalated }
     internal enum TechnicianCheckpoint { None, CompactAndUpgrade, CourseCorrect, Stop }
     internal enum TechnicianContextRegion { Workspace, Session, Specialist }

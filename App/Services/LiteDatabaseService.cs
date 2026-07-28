@@ -25,6 +25,7 @@ namespace App.Services
         public ILiteCollection<MemoDocument> Memos => _database.GetCollection<MemoDocument>("Memos");
         public ILiteCollection<TodoDocument> Todos => _database.GetCollection<TodoDocument>("Todos");
         public ILiteCollection<TodoCategoryDocument> TodoCategories => _database.GetCollection<TodoCategoryDocument>("TodoCategories");
+        public ILiteCollection<ChatSessionDocument> ChatSessions => _database.GetCollection<ChatSessionDocument>("ChatSessions");
 
         private void Configure()
         {

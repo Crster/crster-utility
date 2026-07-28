@@ -38,7 +38,6 @@ namespace App.Services
         private const int MaximumFuzzyCompareCharacters = 4_000;
         private const int MaximumFuzzyEditDistance = 400;
         private const double MinimumFuzzyPatchSimilarity = 0.80;
-        private const double MinimumFuzzyLineOverlap = 0.5;
         private const double MinimumPatchCandidateSimilarity = 0.60;
         private const string ExactMatchMode = "exact";
         private const string LineEndingMatchMode = "line_endings";
@@ -48,20 +47,18 @@ namespace App.Services
         private readonly SecretaryToolService _secretaryTools;
         private readonly Func<string, Task<bool>> _confirmAsync;
         private readonly Func<Task<ToolResult>> _compactAsync;
-        private readonly Func<Task<ToolResult>> _cleanupAsync;
         public TechnicianToolService(GeminiClient client, SecretaryToolService secretaryTools,
-            Func<string, Task<bool>> confirmAsync, Func<Task<ToolResult>> compactAsync, Func<Task<ToolResult>> cleanupAsync)
+            Func<string, Task<bool>> confirmAsync, Func<Task<ToolResult>> compactAsync)
         {
             _client = client;
             _secretaryTools = secretaryTools;
             _confirmAsync = confirmAsync;
             _compactAsync = compactAsync;
-            _cleanupAsync = cleanupAsync;
         }
 
         public string WorkspacePath { get; set; } = string.Empty;
 
-        public static JsonArray CreateDeclarations() =>
+        public static JsonArray CreateExecutionDeclarations() =>
         [
             Function("read_file", "Read a text file inside the selected workspace. startIndex and endIndex use slice semantics: negative values count from the end and an omitted endIndex means EOF.", Props(("file", String()), ("startIndex", Integer()), ("endIndex", Integer())), "file"),
             Function("write_file", "Write text to a file inside the workspace. Creates parent folders when needed. Optionally provide zero-based, end-exclusive start and end offsets to replace a character range in an existing file; provide neither offset to replace the whole file. After corrected patch_file attempts fail, write_file remains available to complete the requested source change.", Props(("path", String()), ("content", String()), ("start", Integer()), ("end", Integer())), "path", "content"),
@@ -74,22 +71,10 @@ namespace App.Services
             Function("list_process", "List running processes.", new JsonObject()),
             Function("kill_process", "Terminate a process by process ID after confirmation.", Props(("process_id", Integer())), "process_id"),
             Function("compact", "Build rich continuation context from the Technician chat, workspace, and memos, then clear chat and memos.", new JsonObject()),
-            Function("clean_up", "Clear Technician chat and Context-panel text while retaining Technician memory.", new JsonObject()),
-            Function("research", "Create private knowledge-based research context from the supplied request and context only. It cannot search the web or inspect files.", Props(("topic", String())), "topic"),
-            Function("plan", "Create private implementation-planning context from the supplied request and context only. It cannot inspect or edit workspace files.", Props(("request", String())), "request"),
-            Function("design", "Create a private UI/UX design brief from the supplied request and context only. It cannot inspect or edit workspace files.", Props(("request", String())), "request"),
+            Function("plan", "Ask the configured high-cost model to create private implementation-planning guidance. Include the user's exact request, verified workspace evidence, constraints, and unresolved assumptions because the consultant cannot inspect or edit files.", Props(("request", String())), "request"),
+            Function("design", "Ask the configured high-cost model to create a private UI/UX design brief. Include the user's exact request, verified workspace evidence, constraints, and unresolved assumptions because the consultant cannot inspect or edit files.", Props(("request", String())), "request"),
             Function("get_data", "Return only one of these local data values: local date/time, configured location, weather, clipboard text, language, or battery percentage. It cannot obtain any other data.", Props(("kind", SecretaryToolService.DataKindSchema())), "kind")
         ];
-
-        public static JsonArray CreateExecutionDeclarations()
-        {
-            var declarations = CreateDeclarations();
-            return new JsonArray(declarations
-                .OfType<JsonObject>()
-                .Where(declaration => declaration["name"]?.GetValue<string>() is not ("plan" or "design" or "research" or "clean_up"))
-                .Select(declaration => (JsonNode)declaration.DeepClone())
-                .ToArray());
-        }
 
         public async Task<ToolResult> ExecuteAsync(string name, JsonObject arguments, CancellationToken token)
         {
@@ -111,7 +96,6 @@ namespace App.Services
                     "list_process" => ListProcesses(),
                     "kill_process" => await KillProcessAsync(OptionalInt(arguments, "process_id", 0)),
                     "compact" => await CompactAsync(),
-                    "clean_up" => await CleanUpAsync(),
                     "research" => await ResearchAsync(Required(arguments, "topic"), token),
                     "plan" => await PlanAsync(Required(arguments, "request"), token),
                     "design" => await DesignAsync(Required(arguments, "request"), token),
@@ -194,7 +178,7 @@ namespace App.Services
                 {
                     return PatchNotFound(source, edit, editIndex, edits.Count);
                 }
-                if (matches.Count > 1 && !(edit.ReplaceAll && SupportsReplaceAll(matches[0].MatchMode)))
+                if (matches.Count > 1)
                 {
                     return PatchAmbiguous(source, matches, editIndex);
                 }
@@ -228,8 +212,6 @@ namespace App.Services
             File.WriteAllText(fullPath, patched, new UTF8Encoding(false));
             return PatchApplied(fullPath, patched, resolved);
         }
-
-        private static bool SupportsReplaceAll(string matchMode) => true;
 
         private static ToolResult PatchApplied(string fullPath, string patched, List<ResolvedPatch> resolved)
         {
@@ -297,137 +279,11 @@ namespace App.Services
                 var oldText = normalized[searchStart..separatorStart].Trim('\n');
                 var newText = normalized[replacementStart..replaceStart].Trim('\n');
                 if (oldText.Length == 0) throw new FormatException("SEARCH content cannot be empty.");
-                edits.Add(new PatchEdit(oldText, newText, false));
+                edits.Add(new PatchEdit(oldText, newText));
                 position = replaceStart + 1 + replaceMarker.Length;
             }
             if (edits.Count == 0) throw new FormatException("diff must contain at least one Diff-Fenced section.");
             return edits;
-        }
-
-        private static List<PatchEdit> ParseUnifiedDiff(string path, string diff)
-        {
-            if (diff.StartsWith("```", StringComparison.Ordinal) || diff.EndsWith("```", StringComparison.Ordinal))
-                throw new FormatException("diff must be raw unified-diff text without Markdown fences.");
-
-            var lines = diff.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-            var index = 0;
-            string? oldPath = null;
-            string? newPath = null;
-
-            if (lines.ElementAtOrDefault(index)?.StartsWith("diff --git ", StringComparison.Ordinal) == true)
-            {
-                var header = lines[index++].Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (header.Length != 4)
-                    throw new FormatException("The Git diff header is malformed.");
-                oldPath = NormalizeDiffPath(header[2]);
-                newPath = NormalizeDiffPath(header[3]);
-                while (index < lines.Length
-                       && !lines[index].StartsWith("--- ", StringComparison.Ordinal)
-                       && !lines[index].StartsWith("@@ ", StringComparison.Ordinal))
-                {
-                    if (lines[index].StartsWith("diff --git ", StringComparison.Ordinal))
-                        throw new FormatException("patch_file accepts a diff for one file only.");
-                    if (!GitDiffMetadataPattern.IsMatch(lines[index]))
-                        throw new FormatException($"Unexpected text in the Git diff header at line {index + 1}.");
-                    index++;
-                }
-            }
-
-            if (lines.ElementAtOrDefault(index)?.StartsWith("--- ", StringComparison.Ordinal) == true)
-            {
-                oldPath = NormalizeDiffPath(lines[index++][4..].Split('\t')[0]);
-                if (lines.ElementAtOrDefault(index)?.StartsWith("+++ ", StringComparison.Ordinal) != true)
-                    throw new FormatException("The unified diff is missing its +++ file header.");
-                newPath = NormalizeDiffPath(lines[index++][4..].Split('\t')[0]);
-            }
-
-            ValidateDiffPath(path, oldPath, newPath);
-            var edits = new List<PatchEdit>();
-            while (index < lines.Length)
-            {
-                if (lines[index].Length == 0 && index == lines.Length - 1) break;
-                if (lines[index].StartsWith("diff --git ", StringComparison.Ordinal))
-                    throw new FormatException("patch_file accepts a diff for one file only.");
-
-                var match = UnifiedDiffHunkHeader.Match(lines[index]);
-                if (!match.Success)
-                    throw new FormatException($"Unexpected text outside a unified-diff hunk at line {index + 1}.");
-                index++;
-
-                var expectedOldLines = ParseHunkCount(match, "oldCount");
-                var expectedNewLines = ParseHunkCount(match, "newCount");
-                var oldLines = new List<string>();
-                var newLines = new List<string>();
-                while (index < lines.Length && !lines[index].StartsWith("@@ ", StringComparison.Ordinal))
-                {
-                    var line = lines[index];
-                    if (line.StartsWith(@"\ No newline at end of file", StringComparison.Ordinal))
-                    {
-                        index++;
-                        continue;
-                    }
-                    if (line.StartsWith("diff --git ", StringComparison.Ordinal)
-                        || line.StartsWith("--- ", StringComparison.Ordinal)
-                        || line.Length == 0)
-                        break;
-
-                    switch (line[0])
-                    {
-                        case ' ':
-                            oldLines.Add(line[1..]);
-                            newLines.Add(line[1..]);
-                            break;
-                        case '-':
-                            oldLines.Add(line[1..]);
-                            break;
-                        case '+':
-                            newLines.Add(line[1..]);
-                            break;
-                        default:
-                            throw new FormatException($"Invalid unified-diff line prefix at line {index + 1}.");
-                    }
-                    index++;
-                }
-
-                if (oldLines.Count != expectedOldLines || newLines.Count != expectedNewLines)
-                    throw new FormatException($"Unified-diff hunk line counts do not match its header at line {index + 1}.");
-                if (oldLines.Count == 0)
-                    throw new FormatException("patch_file cannot apply an insertion-only diff without literal source context.");
-                edits.Add(new PatchEdit(string.Join("\n", oldLines), string.Join("\n", newLines), false));
-            }
-
-            if (edits.Count == 0)
-                throw new FormatException("diff must contain at least one unified-diff hunk.");
-            return edits;
-        }
-
-        private static readonly Regex UnifiedDiffHunkHeader = new(
-            @"^@@ -\d+(?:,(?<oldCount>\d+))? \+\d+(?:,(?<newCount>\d+))? @@(?: .*)?$",
-            RegexOptions.Compiled,
-            TimeSpan.FromSeconds(1));
-        private static readonly Regex GitDiffMetadataPattern = new(
-            @"^(?:index [0-9a-f]+\.\.[0-9a-f]+(?: \d+)?|(?:old|new|deleted file|new file) mode \d+|similarity index \d+%|dissimilarity index \d+%|rename (?:from|to) .+|copy (?:from|to) .+)$",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase,
-            TimeSpan.FromSeconds(1));
-
-        private static int ParseHunkCount(Match match, string groupName) =>
-            match.Groups[groupName].Success ? int.Parse(match.Groups[groupName].Value) : 1;
-
-        private static string NormalizeDiffPath(string path)
-        {
-            var normalized = path.Trim().Replace('\\', '/');
-            if (normalized is "/dev/null") return normalized;
-            if (normalized.StartsWith("a/", StringComparison.Ordinal) || normalized.StartsWith("b/", StringComparison.Ordinal))
-                normalized = normalized[2..];
-            return normalized;
-        }
-
-        private static void ValidateDiffPath(string requestedPath, string? oldPath, string? newPath)
-        {
-            var expected = requestedPath.Replace('\\', '/').TrimStart('.', '/');
-            foreach (var diffPath in new[] { oldPath, newPath }.Where(value => value is not null and not "/dev/null"))
-                if (!string.Equals(diffPath, expected, StringComparison.OrdinalIgnoreCase))
-                    throw new FormatException($"The diff targets '{diffPath}', but patch_file path is '{requestedPath}'.");
         }
 
         private static readonly Regex ElisionMarkerPattern = new(@"^(?:(?://|#|<!--|/\*|--)\s*)?(?:\.\.\.|…)", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
@@ -476,8 +332,7 @@ namespace App.Services
 
         private static PatchEdit NormalizeModelLiteralPatchText(PatchEdit edit) => new(
             NormalizeModelLiteralPatchText(edit.OldText),
-            NormalizeModelLiteralPatchText(edit.NewText),
-            edit.ReplaceAll);
+            NormalizeModelLiteralPatchText(edit.NewText));
 
         private static string NormalizeModelLiteralPatchText(string value) => value
             .Replace("\\r\\n", "\n", StringComparison.Ordinal)
@@ -597,16 +452,6 @@ namespace App.Services
             return builder.ToString();
         }
 
-        private static string TrimBlankEdges(string text)
-        {
-            var lines = SplitLines(text);
-            var first = 0;
-            var last = lines.Length - 1;
-            while (first <= last && lines[first].Text.Trim().Length == 0) first++;
-            while (last >= first && lines[last].Text.Trim().Length == 0) last--;
-            return first > last ? text : text[lines[first].Start..lines[last].End];
-        }
-
         private static List<int> FindOccurrences(string content, string value)
         {
             var results = new List<int>();
@@ -671,44 +516,6 @@ namespace App.Services
                 if (matched) matches.Add(new PatchCandidate(start, start + expected.Length - 1, 1));
             }
             return matches;
-        }
-
-        // Compares only non-blank lines so added or removed blank lines no longer break an otherwise exact block.
-        private static List<PatchCandidate> FindBlankInsensitiveMatches(PatchIndex source, PatchLine[] expected, Func<string, string> key)
-        {
-            var expectedKeys = expected.Where(line => line.Text.Trim().Length > 0).Select(line => key(line.Text)).ToArray();
-            if (expectedKeys.Length == 0) return [];
-            if (expectedKeys.Length == 1 && StripWhitespace(expectedKeys[0]).Length < 8) return [];
-            if (!source.Postings.TryGetValue(HashKey(StripWhitespace(expectedKeys[0])), out var postings)) return [];
-
-            var maximumSpan = expected.Length * 2 + 8;
-            var matches = new List<PatchCandidate>();
-            foreach (var start in postings)
-            {
-                var line = start;
-                var matchedCount = 0;
-                var lastMatched = -1;
-                while (line < source.Lines.Length && matchedCount < expectedKeys.Length)
-                {
-                    if (source.Keys[line].Length == 0) { line++; continue; }
-                    if (!string.Equals(key(source.Lines[line].Text), expectedKeys[matchedCount], StringComparison.Ordinal)) break;
-                    lastMatched = line;
-                    matchedCount++;
-                    line++;
-                }
-                if (matchedCount == expectedKeys.Length && lastMatched - start + 1 <= maximumSpan)
-                    matches.Add(new PatchCandidate(start, lastMatched, 1));
-            }
-            return matches;
-        }
-
-        // Adjacent windows over a repetitive block describe the same region, so keep only the first of each cluster.
-        private static List<PatchCandidate> DedupeOverlapping(List<PatchCandidate> candidates)
-        {
-            var kept = new List<PatchCandidate>();
-            foreach (var candidate in candidates.OrderBy(match => match.FirstLine))
-                if (kept.Count == 0 || candidate.FirstLine > kept[^1].LastLine) kept.Add(candidate);
-            return kept;
         }
 
         private static List<PatchCandidate> FindFuzzyMatches(PatchIndex source, PatchLine[] expected)
@@ -1552,11 +1359,6 @@ namespace App.Services
             return NormalizeResult(await _compactAsync());
         }
 
-        private async Task<ToolResult> CleanUpAsync()
-        {
-            return NormalizeResult(await _cleanupAsync());
-        }
-
         private async Task<ToolResult> ResearchAsync(string topic, CancellationToken token)
         {
             try
@@ -1739,7 +1541,7 @@ namespace App.Services
             }
         }
 
-        private sealed record PatchEdit(string OldText, string NewText, bool ReplaceAll);
+        private sealed record PatchEdit(string OldText, string NewText);
         private sealed record ResolvedPatch(int Start, int Length, string NewText, int EditIndex, string MatchMode, bool Reindented);
         private sealed record SearchLine(int Start, string Text, string Terminator);
         private sealed record SearchMatch(string Filename, int MatchStart, int SnippetStart, string Match, string Snippet);

@@ -64,4 +64,11 @@ namespace App.Models
         [BsonId] public string Id { get; set; } = string.Empty;
         [BsonField("description")] public string Description { get; set; } = string.Empty;
     }
+
+    internal sealed class ChatSessionDocument
+    {
+        [BsonId] public string Agent { get; set; } = string.Empty;
+        [BsonField("context")] public string Context { get; set; } = string.Empty;
+        [BsonField("histories")] public string Histories { get; set; } = string.Empty;
+    }
 }
