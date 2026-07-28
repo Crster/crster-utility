@@ -42,7 +42,7 @@ namespace App.Services
         private const string ExactMatchMode = "exact";
         private const string LineEndingMatchMode = "line_endings";
         private const string WhitespaceMatchMode = "whitespace";
-        private const string PatchFormatGuidance = "Call patch_file with file and one raw diff string containing one or more <<<<<<< SEARCH, =======, and >>>>>>> REPLACE sections. The shorter <<< SEARCH and >>> REPLACE markers are also accepted for compatibility. Do not wrap the diff in Markdown fences.";
+        private const string PatchFormatGuidance = "Call patch_file with file and one raw diff string containing one or more SEARCH, separator, and REPLACE sections. Prefix SEARCH with one or more < characters and REPLACE with one or more > characters. Use a separator line containing two or more = characters, with optional surrounding whitespace. Do not wrap the diff in Markdown fences.";
         private readonly GeminiClient _client;
         private readonly SecretaryToolService _secretaryTools;
         private readonly Func<string, Task<bool>> _confirmAsync;
@@ -62,9 +62,9 @@ namespace App.Services
         [
             Function("read_file", "Read a discovered text file inside the selected workspace before editing it. Pass the relative filename returned by search_file or list_file_and_directory. startIndex and endIndex use slice semantics: negative values count from the end and an omitted endIndex means EOF.", Props(("file", String()), ("startIndex", Integer()), ("endIndex", Integer())), "file"),
             Function("write_file", "Write text to a file inside the workspace. Creates parent folders when needed. Optionally provide zero-based, end-exclusive start and end offsets to replace a character range in an existing file; provide neither offset to replace the whole file. After corrected patch_file attempts fail, write_file remains available to complete the requested source change.", Props(("path", String()), ("content", String()), ("start", Integer()), ("end", Integer())), "path", "content"),
-            Function("patch_file", "Atomically patch one existing file using raw Diff-Fenced text. Use <<<<<<< SEARCH, =======, and >>>>>>> REPLACE for each section. The shorter <<< SEARCH and >>> REPLACE markers are also accepted for compatibility. Multiple sections are supported. Matching normalizes whitespace and permits a unique best fuzzy match of at least 80%.", Props(("file", String()), ("diff", String()), ("syntax_check", Boolean())), "file", "diff"),
+            Function("patch_file", "Atomically patch one existing file using raw Diff-Fenced text. Prefix SEARCH with one or more < characters and REPLACE with one or more > characters; separate them with a line containing two or more = characters and optional surrounding whitespace. Multiple sections are supported. Matching normalizes whitespace and permits a unique best fuzzy match of at least 80%.", Props(("file", String()), ("diff", String()), ("syntax_check", Boolean())), "file", "diff"),
             Function("delete_file", "Delete a file or empty directory inside the workspace after user confirmation.", Props(("path", String())), "path"),
-            Function("search_file", "Find the relevant source file yourself instead of asking the user for its path. Recursively search text content under path with a line-based .NET regular expression. Start at path \".\" when the file is unknown. If no useful match is found, call this tool again with different keywords from the issue, error text, UI label, feature, or likely implementation. Do not stop after one failed search.", Props(("path", String()), ("pattern", String())), "path", "pattern"),
+            Function("search_file", "Find the relevant source file yourself instead of asking the user for its path. Recursively search text content under path with a line-based .NET regular expression, excluding hidden, dot-prefixed, and generated paths by default. Start at path \".\" when the file is unknown. If no useful match is found, call this tool again with different keywords from the issue, error text, UI label, feature, or likely implementation. Do not stop after one failed search.", Props(("path", String()), ("pattern", String())), "path", "pattern"),
             Function("list_file_and_directory", "Discover the workspace structure yourself instead of asking the user. List direct children matching a .NET regular expression; use path \".\" and pattern \".*\" for the workspace root, then inspect likely subdirectories. Use this when content searches do not reveal the target. hidden includes hidden, dot-prefixed, ignored, and generated entries after user confirmation.", Props(("path", String()), ("pattern", String()), ("hidden", Boolean())), "path", "pattern"),
             Function("execute", "Run an executable with an argument string in the selected workspace. Output is head/tail truncated unless full is approved.", Props(("exe", String()), ("args", String()), ("full", Boolean())), "exe"),
             Function("execute_sudo", "Run an executable elevated through UAC and capture its output after confirmation.", Props(("exe", String()), ("args", String()), ("full", Boolean())), "exe"),
@@ -250,6 +250,10 @@ namespace App.Services
             });
         }
 
+        private static readonly Regex DiffSearchMarkerPattern = new(@"<+\s*SEARCH\b", RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromSeconds(1));
+        private static readonly Regex DiffSeparatorMarkerPattern = new(@"\n[\t ]*={2,}[\t ]*(?=\n|$)", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
+        private static readonly Regex DiffReplaceMarkerPattern = new(@"\n>+(?:[\t ]+REPLACE\b)?[\t ]*(?=\n|$)", RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromSeconds(1));
+
         private static List<PatchEdit> ParseDiffFencedEdits(string diff)
         {
             if (diff.StartsWith("```", StringComparison.Ordinal) || diff.EndsWith("```", StringComparison.Ordinal))
@@ -261,28 +265,24 @@ namespace App.Services
             {
                 while (position < normalized.Length && char.IsWhiteSpace(normalized[position])) position++;
                 if (position == normalized.Length) break;
-                var searchMarker = normalized.AsSpan(position).StartsWith("<<<<<<< SEARCH", StringComparison.Ordinal)
-                    ? "<<<<<<< SEARCH"
-                    : "<<< SEARCH";
-                const string separatorWithoutSpace = "=======";
-                var replaceMarker = searchMarker.Length == "<<<<<<< SEARCH".Length
-                    ? ">>>>>>> REPLACE"
-                    : ">>> REPLACE";
-                if (!normalized.AsSpan(position).StartsWith(searchMarker, StringComparison.Ordinal))
-                    throw new FormatException($"Expected {searchMarker} at character {position}.");
-                var searchStart = position + searchMarker.Length;
+                var searchMarker = DiffSearchMarkerPattern.Match(normalized, position);
+                if (!searchMarker.Success || searchMarker.Index != position)
+                    throw new FormatException($"Expected a SEARCH marker at character {position}.");
+                var searchStart = searchMarker.Index + searchMarker.Length;
                 if (searchStart < normalized.Length && normalized[searchStart] == '\n') searchStart++;
-                var separatorStart = normalized.IndexOf("\n" + separatorWithoutSpace, searchStart, StringComparison.Ordinal);
-                if (separatorStart < 0) throw new FormatException($"Missing {separatorWithoutSpace} marker.");
-                var replacementStart = separatorStart + 1 + separatorWithoutSpace.Length;
+                var separatorMarker = DiffSeparatorMarkerPattern.Match(normalized, searchStart);
+                if (!separatorMarker.Success) throw new FormatException("Missing separator marker.");
+                var separatorStart = separatorMarker.Index;
+                var replacementStart = separatorMarker.Index + separatorMarker.Length;
                 if (replacementStart < normalized.Length && normalized[replacementStart] == '\n') replacementStart++;
-                var replaceStart = normalized.IndexOf("\n" + replaceMarker, replacementStart, StringComparison.Ordinal);
-                if (replaceStart < 0) throw new FormatException($"Missing {replaceMarker} marker.");
+                var replaceMarker = DiffReplaceMarkerPattern.Match(normalized, replacementStart);
+                if (!replaceMarker.Success) throw new FormatException("Missing replacement closing marker.");
+                var replaceStart = replaceMarker.Index;
                 var oldText = normalized[searchStart..separatorStart].Trim('\n');
                 var newText = normalized[replacementStart..replaceStart].Trim('\n');
                 if (oldText.Length == 0) throw new FormatException("SEARCH content cannot be empty.");
                 edits.Add(new PatchEdit(oldText, newText));
-                position = replaceStart + 1 + replaceMarker.Length;
+                position = replaceMarker.Index + replaceMarker.Length;
             }
             if (edits.Count == 0) throw new FormatException("diff must contain at least one Diff-Fenced section.");
             return edits;
@@ -1127,14 +1127,26 @@ namespace App.Services
 
         private static IEnumerable<string> EnumerateSearchFiles(string root)
         {
-            var options = new EnumerationOptions
+            var pendingDirectories = new Stack<string>();
+            pendingDirectories.Push(root);
+            while (pendingDirectories.Count > 0)
             {
-                RecurseSubdirectories = true,
-                IgnoreInaccessible = true,
-                AttributesToSkip = FileAttributes.ReparsePoint,
-                ReturnSpecialDirectories = false
-            };
-            return Directory.EnumerateFiles(root, "*", options);
+                var directory = pendingDirectories.Pop();
+                IEnumerable<string> files;
+                IEnumerable<string> directories;
+                try
+                {
+                    files = Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly).ToArray();
+                    directories = Directory.EnumerateDirectories(directory, "*", SearchOption.TopDirectoryOnly).ToArray();
+                }
+                catch (IOException) { continue; }
+                catch (UnauthorizedAccessException) { continue; }
+
+                foreach (var file in files)
+                    if (!IsHiddenOrIgnored(file)) yield return file;
+                foreach (var child in directories)
+                    if (!IsHiddenOrIgnored(child)) pendingDirectories.Push(child);
+            }
         }
 
         private static async Task ScanSearchFileAsync(string path, Regex pattern, ConcurrentBag<SearchMatch> results, CancellationToken token)
@@ -1292,7 +1304,7 @@ namespace App.Services
             var name = Path.GetFileName(path);
             if (name.StartsWith(".", StringComparison.Ordinal)) return true;
             var attributes = File.GetAttributes(path);
-            if (attributes.HasFlag(FileAttributes.Hidden) || attributes.HasFlag(FileAttributes.System)) return true;
+            if (attributes.HasFlag(FileAttributes.Hidden) || attributes.HasFlag(FileAttributes.System) || attributes.HasFlag(FileAttributes.ReparsePoint)) return true;
             return name.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("bin", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("obj", StringComparison.OrdinalIgnoreCase)

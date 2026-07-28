@@ -17,44 +17,44 @@
             <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Spacing="4">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="Personality" FontSize="11" FontWeight="SemiBold"/>
-                        <TextBlock x:Name="ModelStatusText" FontSize="11"
-                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                   ToolTipService.ToolTip="Active model and thinking effort"/>
-                    </StackPanel>
+                    <TextBlock Text="Personality" FontSize="11" FontWeight="SemiBold"/>
                     <ComboBox x:Name="PersonalityBox" MinWidth="180" Height="36" SelectionChanged="PersonalityBox_SelectionChanged"/>
                 </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,15,0,0">
-                    <Button x:Name="WorkspaceButton" Height="36" Padding="11,0" Click="WorkspaceButton_Click" Visibility="Collapsed"
-                            ToolTipService.ToolTip="Choose Technician workspace">
-                        <StackPanel Orientation="Horizontal" Spacing="7">
-                            <FontIcon Glyph="&#xE8B7;" FontSize="14"/>
-                            <TextBlock x:Name="WorkspaceButtonText" Text="Workspace"/>
-                        </StackPanel>
-                    </Button>
-                    <ToggleButton x:Name="ContextButton" Height="36" Padding="11,0" Click="ContextButton_Click" ToolTipService.ToolTip="Show conversation context">
-                        <StackPanel Orientation="Horizontal" Spacing="7">
-                            <FontIcon Glyph="&#xF133;" FontSize="14"/>
-                            <TextBlock Text="Context"/>
-                            <Border x:Name="ContextCountBadge" MinWidth="18" Height="18" Padding="5,0" CornerRadius="9" Background="{ThemeResource AccentFillColorSecondaryBrush}" Visibility="Collapsed">
-                                <TextBlock x:Name="ContextCountText" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Border>
-                        </StackPanel>
-                    </ToggleButton>
-                    <Button x:Name="CopyChatButton" Width="36" Height="36" Padding="0"
-                            Click="CopyChatButton_Click" ToolTipService.ToolTip="Copy">
-                        <FontIcon Glyph="&#xE8C8;" />
-                    </Button>
-                    <Button x:Name="CopyChatSummaryButton" Width="36" Height="36" Padding="0"
-                            Click="CopyChatSummaryButton_Click" ToolTipService.ToolTip="Copy summary">
-                        <FontIcon Glyph="&#xE9CE;" />
-                    </Button>
-                    <Button x:Name="ClearChatButton" Width="36" Height="36" Padding="0"
-                            Click="ClearChatButton_Click" ToolTipService.ToolTip="Clear chat history"
-                            AutomationProperties.Name="Clear chat history">
-                        <FontIcon Glyph="&#xEA99;" />
-                    </Button>
+                <StackPanel Grid.Column="1" Spacing="4">
+                    <TextBlock x:Name="ModelStatusText" HorizontalAlignment="Right" FontSize="11"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               ToolTipService.ToolTip="Active model and thinking effort"/>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="WorkspaceButton" Height="36" Padding="11,0" Click="WorkspaceButton_Click" Visibility="Collapsed"
+                                ToolTipService.ToolTip="Choose Technician workspace">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xE8B7;" FontSize="14"/>
+                                <TextBlock x:Name="WorkspaceButtonText" Text="Workspace"/>
+                            </StackPanel>
+                        </Button>
+                        <ToggleButton x:Name="ContextButton" Height="36" Padding="11,0" Click="ContextButton_Click" ToolTipService.ToolTip="Show conversation context">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xF133;" FontSize="14"/>
+                                <TextBlock Text="Context"/>
+                                <Border x:Name="ContextCountBadge" MinWidth="18" Height="18" Padding="5,0" CornerRadius="9" Background="{ThemeResource AccentFillColorSecondaryBrush}" Visibility="Collapsed">
+                                    <TextBlock x:Name="ContextCountText" FontSize="10" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                            </StackPanel>
+                        </ToggleButton>
+                        <Button x:Name="CopyChatButton" Width="36" Height="36" Padding="0"
+                                Click="CopyChatButton_Click" ToolTipService.ToolTip="Copy">
+                            <FontIcon Glyph="&#xE8C8;" />
+                        </Button>
+                        <Button x:Name="CopyChatSummaryButton" Width="36" Height="36" Padding="0"
+                                Click="CopyChatSummaryButton_Click" ToolTipService.ToolTip="Copy summary">
+                            <FontIcon Glyph="&#xE9CE;" />
+                        </Button>
+                        <Button x:Name="ClearChatButton" Width="36" Height="36" Padding="0"
+                                Click="ClearChatButton_Click" ToolTipService.ToolTip="Clear chat history"
+                                AutomationProperties.Name="Clear chat history">
+                            <FontIcon Glyph="&#xEA99;" />
+                        </Button>
+                    </StackPanel>
                 </StackPanel>
             </Grid>
         </Border>
