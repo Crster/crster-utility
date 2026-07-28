@@ -42,7 +42,7 @@ namespace App.Services
         private const string ExactMatchMode = "exact";
         private const string LineEndingMatchMode = "line_endings";
         private const string WhitespaceMatchMode = "whitespace";
-        private const string PatchFormatGuidance = "Call patch_file with file and one raw diff string containing one or more <<< SEARCH, =======, and >>> REPLACE sections. Do not wrap the diff in Markdown fences.";
+        private const string PatchFormatGuidance = "Call patch_file with file and one raw diff string containing one or more <<<<<<< SEARCH, =======, and >>>>>>> REPLACE sections. The shorter <<< SEARCH and >>> REPLACE markers are also accepted for compatibility. Do not wrap the diff in Markdown fences.";
         private readonly GeminiClient _client;
         private readonly SecretaryToolService _secretaryTools;
         private readonly Func<string, Task<bool>> _confirmAsync;
@@ -60,19 +60,17 @@ namespace App.Services
 
         public static JsonArray CreateExecutionDeclarations() =>
         [
-            Function("read_file", "Read a text file inside the selected workspace. startIndex and endIndex use slice semantics: negative values count from the end and an omitted endIndex means EOF.", Props(("file", String()), ("startIndex", Integer()), ("endIndex", Integer())), "file"),
+            Function("read_file", "Read a discovered text file inside the selected workspace before editing it. Pass the relative filename returned by search_file or list_file_and_directory. startIndex and endIndex use slice semantics: negative values count from the end and an omitted endIndex means EOF.", Props(("file", String()), ("startIndex", Integer()), ("endIndex", Integer())), "file"),
             Function("write_file", "Write text to a file inside the workspace. Creates parent folders when needed. Optionally provide zero-based, end-exclusive start and end offsets to replace a character range in an existing file; provide neither offset to replace the whole file. After corrected patch_file attempts fail, write_file remains available to complete the requested source change.", Props(("path", String()), ("content", String()), ("start", Integer()), ("end", Integer())), "path", "content"),
-            Function("patch_file", "Atomically patch one existing file using raw Diff-Fenced text. Each section must use <<< SEARCH, =======, and >>> REPLACE. Multiple sections are supported. Matching normalizes whitespace and permits a unique best fuzzy match of at least 80%.", Props(("file", String()), ("diff", String()), ("syntax_check", Boolean())), "file", "diff"),
+            Function("patch_file", "Atomically patch one existing file using raw Diff-Fenced text. Use <<<<<<< SEARCH, =======, and >>>>>>> REPLACE for each section. The shorter <<< SEARCH and >>> REPLACE markers are also accepted for compatibility. Multiple sections are supported. Matching normalizes whitespace and permits a unique best fuzzy match of at least 80%.", Props(("file", String()), ("diff", String()), ("syntax_check", Boolean())), "file", "diff"),
             Function("delete_file", "Delete a file or empty directory inside the workspace after user confirmation.", Props(("path", String())), "path"),
-            Function("search_file", "Recursively and exhaustively search text files under path with a line-based .NET regular expression. Files are streamed and scanned concurrently.", Props(("path", String()), ("pattern", String())), "path", "pattern"),
-            Function("list_file_and_directory", "List direct children matching a required .NET regular expression. hidden includes hidden, dot-prefixed, ignored, and generated entries after user confirmation.", Props(("path", String()), ("pattern", String()), ("hidden", Boolean())), "path", "pattern"),
+            Function("search_file", "Find the relevant source file yourself instead of asking the user for its path. Recursively search text content under path with a line-based .NET regular expression. Start at path \".\" when the file is unknown. If no useful match is found, call this tool again with different keywords from the issue, error text, UI label, feature, or likely implementation. Do not stop after one failed search.", Props(("path", String()), ("pattern", String())), "path", "pattern"),
+            Function("list_file_and_directory", "Discover the workspace structure yourself instead of asking the user. List direct children matching a .NET regular expression; use path \".\" and pattern \".*\" for the workspace root, then inspect likely subdirectories. Use this when content searches do not reveal the target. hidden includes hidden, dot-prefixed, ignored, and generated entries after user confirmation.", Props(("path", String()), ("pattern", String()), ("hidden", Boolean())), "path", "pattern"),
             Function("execute", "Run an executable with an argument string in the selected workspace. Output is head/tail truncated unless full is approved.", Props(("exe", String()), ("args", String()), ("full", Boolean())), "exe"),
             Function("execute_sudo", "Run an executable elevated through UAC and capture its output after confirmation.", Props(("exe", String()), ("args", String()), ("full", Boolean())), "exe"),
             Function("list_process", "List running processes.", new JsonObject()),
             Function("kill_process", "Terminate a process by process ID after confirmation.", Props(("process_id", Integer())), "process_id"),
             Function("compact", "Build rich continuation context from the Technician chat, workspace, and memos, then clear chat and memos.", new JsonObject()),
-            Function("plan", "Ask the configured high-cost model to create private implementation-planning guidance. Include the user's exact request, verified workspace evidence, constraints, and unresolved assumptions because the consultant cannot inspect or edit files.", Props(("request", String())), "request"),
-            Function("design", "Ask the configured high-cost model to create a private UI/UX design brief. Include the user's exact request, verified workspace evidence, constraints, and unresolved assumptions because the consultant cannot inspect or edit files.", Props(("request", String())), "request"),
             Function("get_data", "Return only one of these local data values: local date/time, configured location, weather, clipboard text, language, or battery percentage. It cannot obtain any other data.", Props(("kind", SecretaryToolService.DataKindSchema())), "kind")
         ];
 
@@ -263,9 +261,13 @@ namespace App.Services
             {
                 while (position < normalized.Length && char.IsWhiteSpace(normalized[position])) position++;
                 if (position == normalized.Length) break;
-                const string searchMarker = "<<< SEARCH";
+                var searchMarker = normalized.AsSpan(position).StartsWith("<<<<<<< SEARCH", StringComparison.Ordinal)
+                    ? "<<<<<<< SEARCH"
+                    : "<<< SEARCH";
                 const string separatorWithoutSpace = "=======";
-                const string replaceMarker = ">>> REPLACE";
+                var replaceMarker = searchMarker.Length == "<<<<<<< SEARCH".Length
+                    ? ">>>>>>> REPLACE"
+                    : ">>> REPLACE";
                 if (!normalized.AsSpan(position).StartsWith(searchMarker, StringComparison.Ordinal))
                     throw new FormatException($"Expected {searchMarker} at character {position}.");
                 var searchStart = position + searchMarker.Length;

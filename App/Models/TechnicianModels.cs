@@ -20,7 +20,7 @@ namespace App.Models
         public static TechnicianTurnClassification SafeContinuation { get; } = new(
             TechnicianScope.Coding,
             TechnicianRelationship.Related,
-            TechnicianWorkType.Advice,
+            TechnicianWorkType.Implementation,
             TechnicianSpecialist.None,
             "Classification was unavailable; existing context was preserved.");
     }

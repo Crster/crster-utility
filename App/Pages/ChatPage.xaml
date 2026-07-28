@@ -16,7 +16,15 @@
         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="14" Padding="14,12">
             <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <StackPanel Spacing="4"><TextBlock Text="Personality" FontSize="11" FontWeight="SemiBold"/><ComboBox x:Name="PersonalityBox" MinWidth="180" Height="36" SelectionChanged="PersonalityBox_SelectionChanged"/></StackPanel>
+                <StackPanel Spacing="4">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Personality" FontSize="11" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="ModelStatusText" FontSize="11"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   ToolTipService.ToolTip="Active model and thinking effort"/>
+                    </StackPanel>
+                    <ComboBox x:Name="PersonalityBox" MinWidth="180" Height="36" SelectionChanged="PersonalityBox_SelectionChanged"/>
+                </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" Margin="0,15,0,0">
                     <Button x:Name="WorkspaceButton" Height="36" Padding="11,0" Click="WorkspaceButton_Click" Visibility="Collapsed"
                             ToolTipService.ToolTip="Choose Technician workspace">
@@ -112,12 +120,12 @@
             <Grid ColumnSpacing="6">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel>
-                    <RichEditBox x:Name="ComposerBox" MinHeight="38" MaxHeight="144" Padding="10,7,6,7"
+                    <TextBox x:Name="ComposerBox" MinHeight="38" MaxHeight="144" Padding="10,7,6,7"
                              AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto"
                              FontSize="13" PlaceholderText="Message..."
                              BorderThickness="0" Background="Transparent" PreviewKeyDown="ComposerBox_PreviewKeyDown"
                              Paste="ComposerBox_Paste" TextChanged="ComposerBox_TextChanged">
-                        <RichEditBox.Resources>
+                        <TextBox.Resources>
                         <SolidColorBrush x:Key="TextControlBackground" Color="Transparent"/>
                         <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent"/>
                         <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent"/>
@@ -130,8 +138,8 @@
                         <SolidColorBrush x:Key="FocusVisualSecondaryBrush" Color="Transparent"/>
                         <Thickness x:Key="TextControlBorderThemeThickness">0</Thickness>
                         <Thickness x:Key="TextControlBorderThemeThicknessFocused">0</Thickness>
-                        </RichEditBox.Resources>
-                    </RichEditBox>
+                        </TextBox.Resources>
+                    </TextBox>
                 </StackPanel>
                 <TextBlock x:Name="StatusText" Visibility="Collapsed"/>
                 <Button x:Name="SendButton" Grid.Column="1" Width="34" Height="34" Padding="0"

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using App.Models;
 using Windows.Storage;
 
 namespace App.Services
@@ -11,15 +12,15 @@ namespace App.Services
     internal sealed class ChatLogService
     {
         private static readonly SemaphoreSlim WriteLock = new(1, 1);
-        private readonly string _path = ResolvePath();
+        private readonly string _directory = ResolveDirectory();
 
-        public string Path => _path;
+        public string Path => ResolvePath(ChatPersonality.Technician);
 
-        private static string ResolvePath()
+        private static string ResolveDirectory()
         {
             try
             {
-                return System.IO.Path.Combine(ApplicationData.Current.LocalFolder.Path, "logs", "chat.log");
+                return System.IO.Path.Combine(ApplicationData.Current.LocalFolder.Path, "logs");
             }
             catch
             {
@@ -27,8 +28,7 @@ namespace App.Services
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "crster",
                     "utility",
-                    "logs",
-                    "chat.log");
+                    "logs");
             }
         }
 
@@ -36,22 +36,31 @@ namespace App.Services
         {
             var details = string.Join(" ", properties.Select(property => $"{property.Name}={Normalize(property.Value)}"));
             var line = $"{DateTimeOffset.UtcNow:O} {eventName}{(details.Length == 0 ? string.Empty : $" {details}")}{Environment.NewLine}";
-            await AppendAsync(line);
+            await AppendAsync(ResolvePersonality(eventName, properties), line);
         }
 
         public async Task WriteJsonAsync(string eventName, JsonObject payload)
         {
             var line = $"{DateTimeOffset.UtcNow:O} {eventName} {payload.ToJsonString()}{Environment.NewLine}";
-            await AppendAsync(line);
+            await AppendAsync(ResolvePersonality(eventName, []), line);
         }
 
-        private async Task AppendAsync(string line)
+        public async Task WriteJsonAsync(ChatPersonality personality, string eventName, JsonObject payload)
+        {
+            var line = $"{DateTimeOffset.UtcNow:O} {eventName} {payload.ToJsonString()}{Environment.NewLine}";
+            await AppendAsync(personality, line);
+        }
+
+        private string ResolvePath(ChatPersonality? personality) =>
+            System.IO.Path.Combine(_directory, $"{personality?.ToString().ToLowerInvariant() ?? "system"}.log");
+
+        private async Task AppendAsync(ChatPersonality? personality, string line)
         {
             await WriteLock.WaitAsync();
             try
             {
-                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
-                await File.AppendAllTextAsync(_path, line);
+                Directory.CreateDirectory(_directory);
+                await File.AppendAllTextAsync(ResolvePath(personality), line);
             }
             catch
             {
@@ -61,6 +70,21 @@ namespace App.Services
             {
                 WriteLock.Release();
             }
+        }
+
+        private static ChatPersonality? ResolvePersonality(
+            string eventName,
+            (string Name, object? Value)[] properties)
+        {
+            var supplied = properties.FirstOrDefault(property =>
+                property.Name.Equals("personality", StringComparison.OrdinalIgnoreCase)).Value;
+            if (supplied is ChatPersonality personality) return personality;
+            if (Enum.TryParse<ChatPersonality>(supplied?.ToString(), true, out var parsed)) return parsed;
+            if (eventName.StartsWith("technician.", StringComparison.OrdinalIgnoreCase)
+                || eventName.StartsWith("project_context.", StringComparison.OrdinalIgnoreCase)
+                || eventName.StartsWith("tool_budget.", StringComparison.OrdinalIgnoreCase))
+                return ChatPersonality.Technician;
+            return null;
         }
 
         private static string Normalize(object? value)
