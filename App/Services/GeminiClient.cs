@@ -290,7 +290,9 @@ namespace App.Services
             {
                 // Gemini 2.x treats a content-block array as a multimodal function response,
                 // even when that array contains only text. Use the standard text result shape.
-                content = JsonValue.Create(TruncateFunctionResult(result.Output))!;
+                var allowFullCommandOutput = call.Name is "execute" or "execute_sudo"
+                    && call.Arguments["full"]?.GetValue<bool>() == true;
+                content = JsonValue.Create(allowFullCommandOutput ? result.Output : TruncateFunctionResult(result.Output))!;
             }
             else
             {

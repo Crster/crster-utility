@@ -30,6 +30,7 @@ namespace App.Controls
         private bool _isPointerOver;
         private bool _isEditorFocused;
         private bool _isInitialEditorFocus;
+        private bool _isSelectionOperationActive;
         private bool _isCommitting;
         private bool _isSearchHighlighted;
         private readonly DispatcherTimer _initialFocusTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
@@ -97,9 +98,15 @@ namespace App.Controls
             start = 0;
             selectedText = string.Empty;
             if (_editor is null || string.IsNullOrWhiteSpace(_editor.SelectedText)) return false;
+            _isSelectionOperationActive = true;
             start = _editor.SelectionStart;
             selectedText = _editor.SelectedText;
             return true;
+        }
+
+        internal void EndSelectionOperation()
+        {
+            _isSelectionOperationActive = false;
         }
 
         internal bool TryReplaceSelection(int start, string originalText, string replacement)
@@ -207,6 +214,7 @@ namespace App.Controls
             var editor = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(10), BorderThickness = new Thickness(0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), Text = _entry.Content };
             ScrollViewer.SetVerticalScrollBarVisibility(editor, ScrollBarVisibility.Disabled);
             editor.TextChanged += Editor_TextChanged;
+            editor.SizeChanged += Editor_SizeChanged;
             editor.KeyDown += Editor_KeyDown;
             editor.GotFocus += Editor_GotFocus;
             editor.Paste += Editor_Paste;
@@ -221,6 +229,12 @@ namespace App.Controls
             if (_entry is null || sender is not TextBox editor) return;
             _entry.Content = editor.Text;
             ResizeEditor(editor);
+        }
+
+        private static void Editor_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (sender is TextBox editor && e.NewSize.Width != e.PreviousSize.Width)
+                ResizeEditor(editor);
         }
 
         private async void Editor_Paste(object sender, TextControlPasteEventArgs e)
@@ -264,6 +278,8 @@ namespace App.Controls
             if (!ReferenceEquals(sender, _editor) || _isCommitting) return;
             _isEditorFocused = false;
             InteractionStateChanged?.Invoke(this, EventArgs.Empty);
+            await Task.Yield();
+            if (_isSelectionOperationActive) return;
             if (_isInitialEditorFocus) { _ = DispatcherQueue.TryEnqueue(() => _editor?.Focus(FocusState.Keyboard)); return; }
             if (RemoveIfEmpty()) return;
             if (string.Equals(_entry?.Content, _editorOriginalContent, StringComparison.Ordinal))
@@ -378,8 +394,20 @@ namespace App.Controls
 
         private static void ResizeEditor(TextBox editor)
         {
-            var lines = NotebookFormat.Normalize(editor.Text).Count(character => character == '\n') + 1;
-            editor.Height = Math.Max(40, lines * 22 + 20);
+            var contentWidth = editor.ActualWidth - editor.Padding.Left - editor.Padding.Right;
+            if (contentWidth <= 0) return;
+
+            var measurement = new TextBlock
+            {
+                Text = string.IsNullOrEmpty(editor.Text) ? " " : editor.Text,
+                FontFamily = editor.FontFamily,
+                FontSize = editor.FontSize,
+                FontStyle = editor.FontStyle,
+                FontWeight = editor.FontWeight,
+                TextWrapping = TextWrapping.Wrap
+            };
+            measurement.Measure(new global::Windows.Foundation.Size(contentWidth, double.PositiveInfinity));
+            editor.Height = Math.Max(40, Math.Ceiling(measurement.DesiredSize.Height + editor.Padding.Top + editor.Padding.Bottom));
         }
     }
 }

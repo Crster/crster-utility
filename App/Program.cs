@@ -1,3 +1,4 @@
+using App.Services;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
@@ -17,6 +18,12 @@ namespace App
         [STAThread]
         private static void Main(string[] args)
         {
+            if (args.Length == 3 && args[0].Equals(ElevatedCommandService.HelperArgument, StringComparison.Ordinal))
+            {
+                Environment.ExitCode = ElevatedCommandService.RunHelper(args[1], args[2]);
+                return;
+            }
+
             WinRT.ComWrappersSupport.InitializeComWrappers();
 
             var currentInstance = AppInstance.GetCurrent();

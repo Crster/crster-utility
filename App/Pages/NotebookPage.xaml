@@ -19,7 +19,7 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Orientation="Horizontal" Spacing="2">
+                    <StackPanel x:Name="EditingToolbar" Orientation="Horizontal" Spacing="2">
                         <Button Tag="heading" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Heading"><FontIcon Glyph="&#xE8D2;" /></Button>
                         <Button Tag="bold" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Bold"><FontIcon Glyph="&#xE8DD;" /></Button>
                         <Button Tag="italic" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Italic"><FontIcon Glyph="&#xE8DB;" /></Button>

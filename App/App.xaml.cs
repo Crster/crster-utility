@@ -1,5 +1,6 @@
 using App.Services;
 using Microsoft.Windows.AppLifecycle;
+using Microsoft.Windows.AppNotifications;
 using Microsoft.UI.Xaml;
 
 namespace App
@@ -38,6 +39,7 @@ namespace App
 
         private void InitializeMainWindow(bool isStartupActivation)
         {
+            AppNotificationManager.Default.Register();
             App.MainWindow = new Windows.MainWindow();
             if (isStartupActivation)
                 (App.MainWindow as Windows.MainWindow)?.HideToTray();

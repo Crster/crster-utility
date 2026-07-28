@@ -10,7 +10,8 @@
   xmlns:systemai="http://schemas.microsoft.com/appx/manifest/systemai/windows10"
   xmlns:uap6="http://schemas.microsoft.com/appx/manifest/uap/windows10/6"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  IgnorableNamespaces="uap uap3 uap11 rescap systemai uap6 desktop">
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  IgnorableNamespaces="uap uap3 uap11 rescap systemai uap6 desktop com">
 
   <Identity
     Name="76371500-163b-4c74-974d-f79d90df175c"
@@ -59,6 +60,16 @@
         <desktop:Extension Category="windows.startupTask" Executable="CrsterUtility.App.exe" EntryPoint="Windows.FullTrustApplication">
           <desktop:StartupTask TaskId="CrsterUtilityStartup" Enabled="false" DisplayName="Crster Utility" />
         </desktop:Extension>
+        <desktop:Extension Category="windows.toastNotificationActivation">
+          <desktop:ToastNotificationActivation ToastActivatorCLSID="6B994A72-EB6E-40DC-8878-F77E37A935E8" />
+        </desktop:Extension>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="CrsterUtility.App.exe" Arguments="----AppNotificationActivated:" DisplayName="Crster Utility">
+              <com:Class Id="6B994A72-EB6E-40DC-8878-F77E37A935E8" />
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
       </Extensions>
     </Application>
   </Applications>

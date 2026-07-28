@@ -32,6 +32,7 @@ namespace App.Pages
         public NotebookPage()
         {
             InitializeComponent();
+            SetEditingToolbarEnabled(false);
             Loaded += NotebookPage_Loaded;
         }
 
@@ -120,6 +121,7 @@ namespace App.Pages
             }
             finally
             {
+                block.EndSelectionOperation();
                 if (button is not null) button.IsEnabled = true;
             }
         }
@@ -185,6 +187,13 @@ namespace App.Pages
             else if (ReferenceEquals(block, _hoveredBlock)) _hoveredBlock = null;
             if (block.IsEditorFocused) _focusedBlock = block;
             else if (ReferenceEquals(block, _focusedBlock)) _focusedBlock = null;
+            SetEditingToolbarEnabled(_focusedBlock is not null);
+        }
+
+        private void SetEditingToolbarEnabled(bool isEnabled)
+        {
+            foreach (var button in EditingToolbar.Children.OfType<Button>())
+                button.IsEnabled = isEnabled;
         }
 
         private Task<bool> Block_CommitRequested(Noteblock block) => SaveNotebookAsync();

@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -11,6 +13,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Threading.Channels;
 using App.Models;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -21,9 +24,8 @@ namespace App.Services
     {
         private const int MaximumFileBytes = 1_000_000;
         private const int MaximumReadResultCharacters = 60_000;
-        private const int MaximumCommandOutputCharacters = 20_000;
-        private const int MaximumSearchFiles = 10;
-        private const int MaximumMatchSnippetLength = 125;
+        private const int DefaultCommandOutputEdgeCharacters = 1_000;
+        private const int MaximumSearchResultCharacters = 11_000;
         private const int MaximumPatchSnippetLines = 24;
         private const int MaximumPatchSnippetLineLength = 200;
         private const int MaximumPatchSnippetCharacters = 3_000;
@@ -35,13 +37,13 @@ namespace App.Services
         private const int MaximumFuzzyScoredWindows = 8;
         private const int MaximumFuzzyCompareCharacters = 4_000;
         private const int MaximumFuzzyEditDistance = 400;
-        private const double MinimumFuzzyPatchSimilarity = 0.75;
+        private const double MinimumFuzzyPatchSimilarity = 0.80;
         private const double MinimumFuzzyLineOverlap = 0.5;
         private const double MinimumPatchCandidateSimilarity = 0.60;
         private const string ExactMatchMode = "exact";
         private const string LineEndingMatchMode = "line_endings";
         private const string WhitespaceMatchMode = "whitespace";
-        private const string PatchFormatGuidance = "Call patch_file with path and literal old_text/new_text, or an edits array of those pairs. Copy old_text from the source exactly; only line-ending and whitespace differences are tolerated. Put only final source in new_text. Do not include prose, Markdown fences, line numbers, labels, ellipses, or guessed text. After patch_not_found, reuse closest_old_text directly when it is the intended complete block; call read_file only when the candidate is truncated or targets the wrong block.";
+        private const string PatchFormatGuidance = "Call patch_file with file and one raw diff string containing one or more <<< SEARCH, =======, and >>> REPLACE sections. Do not wrap the diff in Markdown fences.";
         private readonly GeminiClient _client;
         private readonly SecretaryToolService _secretaryTools;
         private readonly Func<string, Task<bool>> _confirmAsync;
@@ -61,14 +63,14 @@ namespace App.Services
 
         public static JsonArray CreateDeclarations() =>
         [
-            Function("read_file", "Read a text file inside the selected workspace. Optionally provide zero-based, end-exclusive start and end offsets to read a character range. Re-reading the same file is allowed when fresh source text is needed for a patch.", Props(("path", String()), ("start", Integer()), ("end", Integer())), "path"),
+            Function("read_file", "Read a text file inside the selected workspace. startIndex and endIndex use slice semantics: negative values count from the end and an omitted endIndex means EOF.", Props(("file", String()), ("startIndex", Integer()), ("endIndex", Integer())), "file"),
             Function("write_file", "Write text to a file inside the workspace. Creates parent folders when needed. Optionally provide zero-based, end-exclusive start and end offsets to replace a character range in an existing file; provide neither offset to replace the whole file. After corrected patch_file attempts fail, write_file remains available to complete the requested source change.", Props(("path", String()), ("content", String()), ("start", Integer()), ("end", Integer())), "path", "content"),
-            Function("patch_file", "Atomically patch one existing file. Use path + literal old_text + literal new_text, or path + edits: [{ old_text, new_text, replace_all }]. Copy old_text from source and put only final source in new_text. Matching permits exact text, CRLF/LF normalization, and whitespace-only differences—never fuzzy, approximate, reordered, missing, or invented text. Do not include prose, Markdown fences, line numbers, labels, quotes, or ellipses. On success, the tool returns applied ranges and match modes. On patch_not_found, nothing is written and closest_old_text contains the nearest raw source block; reuse it directly when it is complete and intended, otherwise call read_file.", Props(("path", String()), ("old_text", String()), ("new_text", String()), ("replace_all", Boolean()), ("edits", new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "object", ["properties"] = Props(("old_text", String()), ("new_text", String()), ("replace_all", Boolean())), ["required"] = new JsonArray("old_text", "new_text") } }), ("syntax_check", Boolean())), "path"),
+            Function("patch_file", "Atomically patch one existing file using raw Diff-Fenced text. Each section must use <<< SEARCH, =======, and >>> REPLACE. Multiple sections are supported. Matching normalizes whitespace and permits a unique best fuzzy match of at least 80%.", Props(("file", String()), ("diff", String()), ("syntax_check", Boolean())), "file", "diff"),
             Function("delete_file", "Delete a file or empty directory inside the workspace after user confirmation.", Props(("path", String())), "path"),
-            Function("search_file", "Recursively search workspace files in a directory by regular expression, like grep. Returns matching file paths and contextual line snippets up to 125 characters; start and end are zero-based, end-exclusive offsets of the match in each snippet.", Props(("directory", String()), ("regex_pattern", String())), "directory", "regex_pattern"),
-            Function("list_file_and_directory", "List workspace files and directories. Optionally filter by regex and depth.", Props(("path", String()), ("depth", Integer()), ("regex", String())), "path"),
-            Function("execute", "Run a non-risky command in the selected workspace and return stdout, stderr, and exit code.", Props(("command", String()), ("arguments", String())), "command"),
-            Function("execute_sudo", "Run a command elevated through a Windows UAC prompt after confirmation.", Props(("command", String()), ("arguments", String())), "command"),
+            Function("search_file", "Recursively and exhaustively search text files under path with a line-based .NET regular expression. Files are streamed and scanned concurrently.", Props(("path", String()), ("pattern", String())), "path", "pattern"),
+            Function("list_file_and_directory", "List direct children matching a required .NET regular expression. hidden includes hidden, dot-prefixed, ignored, and generated entries after user confirmation.", Props(("path", String()), ("pattern", String()), ("hidden", Boolean())), "path", "pattern"),
+            Function("execute", "Run an executable with an argument string in the selected workspace. Output is head/tail truncated unless full is approved.", Props(("exe", String()), ("args", String()), ("full", Boolean())), "exe"),
+            Function("execute_sudo", "Run an executable elevated through UAC and capture its output after confirmation.", Props(("exe", String()), ("args", String()), ("full", Boolean())), "exe"),
             Function("list_process", "List running processes.", new JsonObject()),
             Function("kill_process", "Terminate a process by process ID after confirmation.", Props(("process_id", Integer())), "process_id"),
             Function("compact", "Build rich continuation context from the Technician chat, workspace, and memos, then clear chat and memos.", new JsonObject()),
@@ -98,14 +100,14 @@ namespace App.Services
 
                 return name switch
                 {
-                    "read_file" => ReadFile(Required(arguments, "path"), OptionalRange(arguments)),
-                    "write_file" => WriteFile(Required(arguments, "path"), RequiredContent(arguments, "content"), OptionalRange(arguments)),
-                    "patch_file" => PatchFile(Required(arguments, "path"), arguments),
+                    "read_file" => ReadFile(Required(arguments, "file"), OptionalSlice(arguments)),
+                    "write_file" => WriteFile(Required(arguments, "path"), RequiredContent(arguments, "content"), OptionalWriteRange(arguments)),
+                    "patch_file" => PatchFile(Required(arguments, "file"), arguments),
                     "delete_file" => await DeleteFileAsync(Required(arguments, "path")),
-                    "search_file" => SearchFiles(Required(arguments, "directory"), Required(arguments, "regex_pattern")),
-                    "list_file_and_directory" => ListFiles(Optional(arguments, "path"), OptionalInt(arguments, "depth", 3), Optional(arguments, "regex")),
-                    "execute" => await ExecuteCommandAsync(Required(arguments, "command"), Optional(arguments, "arguments"), false, token),
-                    "execute_sudo" => await ExecuteCommandAsync(Required(arguments, "command"), Optional(arguments, "arguments"), true, token),
+                    "search_file" => await SearchFilesAsync(Required(arguments, "path"), RequiredContent(arguments, "pattern"), token),
+                    "list_file_and_directory" => await ListFilesAsync(Required(arguments, "path"), RequiredContent(arguments, "pattern"), OptionalBoolean(arguments, "hidden")),
+                    "execute" => await ExecuteCommandAsync(Required(arguments, "exe"), OptionalRaw(arguments, "args"), false, OptionalBoolean(arguments, "full"), token),
+                    "execute_sudo" => await ExecuteCommandAsync(Required(arguments, "exe"), OptionalRaw(arguments, "args"), true, OptionalBoolean(arguments, "full"), token),
                     "list_process" => ListProcesses(),
                     "kill_process" => await KillProcessAsync(OptionalInt(arguments, "process_id", 0)),
                     "compact" => await CompactAsync(),
@@ -113,7 +115,7 @@ namespace App.Services
                     "research" => await ResearchAsync(Required(arguments, "topic"), token),
                     "plan" => await PlanAsync(Required(arguments, "request"), token),
                     "design" => await DesignAsync(Required(arguments, "request"), token),
-                    "get_data" => await _secretaryTools.ExecuteAsync("get_data", arguments, token),
+                    "get_data" => NormalizeResult(await _secretaryTools.ExecuteAsync("get_data", arguments, token)),
                     _ => Error("unknown_tool", $"Technician cannot use the tool “{name}”.")
                 };
             }
@@ -135,37 +137,29 @@ namespace App.Services
             }
         }
 
-        private ToolResult ReadFile(string path, (int Start, int End)? range)
+        private ToolResult ReadFile(string path, (int? Start, int? End) slice)
         {
             var fullPath = ResolveWorkspacePath(path);
             var info = new FileInfo(fullPath);
             if (!info.Exists) return Error("file_not_found", "The file does not exist.");
             if (info.Length > MaximumFileBytes) return Error("file_too_large", "The file exceeds the 1 MB read limit.");
             var content = File.ReadAllText(fullPath);
-            if (range is null)
-            {
-                var initialContent = content.Length <= MaximumReadResultCharacters ? content : content[..MaximumReadResultCharacters];
-                return Ok(content.Length <= MaximumReadResultCharacters ? "Read the file." : "Read the first portion of the file; use start and end to read additional ranges.", new JsonObject
-                {
-                    ["path"] = fullPath,
-                    ["content"] = initialContent,
-                    ["truncated"] = initialContent.Length < content.Length,
-                    ["total_characters"] = content.Length
-                });
-            }
-
-            ValidateRange(range.Value, content.Length);
-            var selectedContent = content[range.Value.Start..range.Value.End];
+            var start = ResolveSliceIndex(slice.Start ?? 0, content.Length);
+            var end = ResolveSliceIndex(slice.End ?? content.Length, content.Length);
+            if (end < start) throw new FormatException("endIndex resolves before startIndex.");
+            var selectedContent = content[start..end];
             var returnedContent = selectedContent.Length <= MaximumReadResultCharacters ? selectedContent : selectedContent[..MaximumReadResultCharacters];
-            return Ok("Read the selected character range.", new JsonObject
+            return Ok(new JsonObject
             {
-                ["path"] = fullPath,
                 ["content"] = returnedContent,
-                ["start"] = range.Value.Start,
-                ["end"] = range.Value.End,
-                ["truncated"] = returnedContent.Length < selectedContent.Length
+                ["start"] = start,
+                ["end"] = start + returnedContent.Length,
+                ["is_truncated"] = returnedContent.Length < selectedContent.Length
             });
         }
+
+        private static int ResolveSliceIndex(int index, int length) =>
+            index < 0 ? Math.Max(0, length + index) : Math.Min(index, length);
 
         private ToolResult WriteFile(string path, string content, (int Start, int End)? range)
         {
@@ -187,7 +181,7 @@ namespace App.Services
             var fullPath = ResolveWorkspacePath(path);
             if (!File.Exists(fullPath)) return PatchError("file_not_found", "The patch was not applied because the file does not exist.");
             var content = File.ReadAllText(fullPath);
-            var edits = ParsePatchEdits(path, arguments);
+            var edits = ParseDiffFencedEdits(RequiredContent(arguments, "diff"));
             var source = CreatePatchIndex(content);
             var resolved = new List<ResolvedPatch>();
 
@@ -266,41 +260,47 @@ namespace App.Services
             var summary = new StringBuilder($"Applied {resolved.Count} edit(s).");
             if (reindented.Length > 0)
                 summary.Append($" {reindented.Length} edit(s) had new_text re-indented to the file's indentation.");
-            return Ok(summary.ToString(), new JsonObject
+            var firstStart = resolved.Min(patch => TranslatePatchStart(patch.Start, resolved));
+            var lastEnd = resolved.Max(patch => TranslatePatchStart(patch.Start, resolved) + patch.NewText.Length);
+            return Ok(new JsonObject
             {
-                ["path"] = fullPath,
-                ["characters"] = patched.Length,
-                ["edits"] = entries,
-                ["edits_truncated"] = !includeSnippets
+                ["start"] = firstStart,
+                ["end"] = lastEnd,
+                ["edits"] = resolved.Count > 1 ? entries : null
             });
         }
 
-        private static List<PatchEdit> ParsePatchEdits(string path, JsonObject arguments)
+        private static List<PatchEdit> ParseDiffFencedEdits(string diff)
         {
-            var hasDiff = arguments.ContainsKey("diff");
-            var hasLiteralEdits = arguments.ContainsKey("edits")
-                || arguments.ContainsKey("old_text")
-                || arguments.ContainsKey("new_text");
-            if (hasDiff && hasLiteralEdits)
-                throw new FormatException("Choose either diff or literal old_text/new_text edits, not both.");
-            if (hasDiff)
-                return ParseUnifiedDiff(path, RequiredContent(arguments, "diff"));
-
+            if (diff.StartsWith("```", StringComparison.Ordinal) || diff.EndsWith("```", StringComparison.Ordinal))
+                throw new FormatException("diff must not be wrapped in Markdown fences.");
+            var normalized = diff.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
             var edits = new List<PatchEdit>();
-            if (arguments["edits"] is JsonArray editArray)
+            var position = 0;
+            while (position < normalized.Length)
             {
-                foreach (var node in editArray)
-                {
-                    if (node is not JsonObject edit) throw new FormatException("Every edits item must be an object.");
-                    edits.Add(new PatchEdit(RequiredContent(edit, "old_text"), RequiredContent(edit, "new_text"), OptionalBoolean(edit, "replace_all")));
-                }
+                while (position < normalized.Length && char.IsWhiteSpace(normalized[position])) position++;
+                if (position == normalized.Length) break;
+                const string searchMarker = "<<< SEARCH";
+                const string separatorWithoutSpace = "=======";
+                const string replaceMarker = ">>> REPLACE";
+                if (!normalized.AsSpan(position).StartsWith(searchMarker, StringComparison.Ordinal))
+                    throw new FormatException($"Expected {searchMarker} at character {position}.");
+                var searchStart = position + searchMarker.Length;
+                if (searchStart < normalized.Length && normalized[searchStart] == '\n') searchStart++;
+                var separatorStart = normalized.IndexOf("\n" + separatorWithoutSpace, searchStart, StringComparison.Ordinal);
+                if (separatorStart < 0) throw new FormatException($"Missing {separatorWithoutSpace} marker.");
+                var replacementStart = separatorStart + 1 + separatorWithoutSpace.Length;
+                if (replacementStart < normalized.Length && normalized[replacementStart] == '\n') replacementStart++;
+                var replaceStart = normalized.IndexOf("\n" + replaceMarker, replacementStart, StringComparison.Ordinal);
+                if (replaceStart < 0) throw new FormatException($"Missing {replaceMarker} marker.");
+                var oldText = normalized[searchStart..separatorStart].Trim('\n');
+                var newText = normalized[replacementStart..replaceStart].Trim('\n');
+                if (oldText.Length == 0) throw new FormatException("SEARCH content cannot be empty.");
+                edits.Add(new PatchEdit(oldText, newText, false));
+                position = replaceStart + 1 + replaceMarker.Length;
             }
-            else if (arguments.ContainsKey("old_text") || arguments.ContainsKey("new_text"))
-            {
-                edits.Add(new PatchEdit(RequiredContent(arguments, "old_text"), RequiredContent(arguments, "new_text"), OptionalBoolean(arguments, "replace_all")));
-            }
-            if (edits.Count == 0) throw new FormatException("Provide old_text and new_text, or a non-empty edits array.");
-            if (edits.Any(edit => edit.OldText.Length == 0)) throw new FormatException("old_text cannot be empty.");
+            if (edits.Count == 0) throw new FormatException("diff must contain at least one Diff-Fenced section.");
             return edits;
         }
 
@@ -457,7 +457,16 @@ namespace App.Services
                 FindKeyedLineMatches(source, expected, CollapseWhitespace),
                 WhitespaceMatchMode,
                 false);
-            if (matches.Count > 0 || !allowArgumentEscapeFallback) return matches;
+            if (matches.Count > 0) return matches;
+
+            var fuzzyMatches = ResolveCandidates(
+                source,
+                edit,
+                editIndex,
+                FindFuzzyMatches(source, expected),
+                "fuzzy",
+                true);
+            if (fuzzyMatches.Count > 0 || !allowArgumentEscapeFallback) return fuzzyMatches;
 
             var normalizedEdit = NormalizeModelLiteralPatchText(edit);
             return normalizedEdit == edit
@@ -702,33 +711,30 @@ namespace App.Services
             return kept;
         }
 
-        private static PatchCandidate? FindFuzzyMatch(PatchIndex source, PatchLine[] expected)
+        private static List<PatchCandidate> FindFuzzyMatches(PatchIndex source, PatchLine[] expected)
         {
             var expectedKeys = expected.Where(line => line.Text.Trim().Length > 0).Select(line => CollapseWhitespace(line.Text)).ToArray();
-            if (expectedKeys.Length == 0) return null;
-            if (expectedKeys.Length == 1 && StripWhitespace(expectedKeys[0]).Length < 8) return null;
+            if (expectedKeys.Length == 0) return [];
+            if (expectedKeys.Length == 1 && StripWhitespace(expectedKeys[0]).Length < 8) return [];
 
             var expectedHashes = expectedKeys.Select(key => HashKey(StripWhitespace(key))).ToArray();
-            var required = Math.Max(1, (int)Math.Ceiling(expectedKeys.Length * MinimumFuzzyLineOverlap));
-            var drift = Math.Clamp(expected.Length / 4, 1, 10);
-            var maximumSpan = expected.Length * 2 + 4;
-            var windows = new List<(int FirstLine, int LastLine, int Overlap)>();
-            for (var length = Math.Max(1, expected.Length - drift); length <= expected.Length + drift; length++)
-                windows.AddRange(FindOverlappingWindows(source, expectedHashes, length, required));
-            if (windows.Count == 0) return null;
-
             var expectedText = ClampCompare(string.Join("\n", expectedKeys));
-            PatchCandidate? best = null;
-            foreach (var window in windows.OrderByDescending(window => window.Overlap).Take(MaximumFuzzyScoredWindows))
+            var qualifying = new List<PatchCandidate>();
+            for (var firstLine = 0; firstLine + expected.Length <= source.Lines.Length; firstLine++)
             {
-                var bounds = TrimToNonBlank(source, window.FirstLine, window.LastLine);
-                if (bounds is null || bounds.Value.LastLine - bounds.Value.FirstLine + 1 > maximumSpan) continue;
+                var bounds = TrimToNonBlank(source, firstLine, firstLine + expected.Length - 1);
+                if (bounds is null) continue;
                 var similarity = ScoreWindow(source, expectedHashes, expectedText, bounds.Value.FirstLine, bounds.Value.LastLine, MinimumFuzzyPatchSimilarity);
                 if (similarity < MinimumFuzzyPatchSimilarity) continue;
-                if (best is null || similarity > best.Similarity)
-                    best = new PatchCandidate(bounds.Value.FirstLine, bounds.Value.LastLine, similarity);
+                qualifying.Add(new PatchCandidate(bounds.Value.FirstLine, bounds.Value.LastLine, similarity));
             }
-            return best;
+            if (qualifying.Count == 0) return [];
+            var bestSimilarity = qualifying.Max(candidate => candidate.Similarity);
+            return qualifying
+                .Where(candidate => Math.Abs(candidate.Similarity - bestSimilarity) < 0.0001)
+                .GroupBy(candidate => (candidate.FirstLine, candidate.LastLine))
+                .Select(group => group.First())
+                .ToList();
         }
 
         // Scores at line granularity first: in code a whole missing or altered line is one unit of difference,
@@ -736,10 +742,28 @@ namespace App.Services
         // when no line matched exactly, which is the case a line score cannot describe.
         private static double ScoreWindow(PatchIndex source, ulong[] expectedHashes, string expectedText, int firstLine, int lastLine, double minimum)
         {
-            var similarity = LineSimilarity(expectedHashes, NonBlankHashes(source, firstLine, lastLine));
-            if (similarity >= minimum) return similarity;
             var candidateText = ClampCompare(JoinNonBlankKeys(source, firstLine, lastLine));
-            return Math.Max(similarity, SimilarityWithin(expectedText, candidateText, minimum));
+            var tokenSimilarity = TokenSimilarity(expectedText, candidateText);
+            if (tokenSimilarity < minimum) return tokenSimilarity;
+            var lineSimilarity = LineSimilarity(expectedHashes, NonBlankHashes(source, firstLine, lastLine));
+            return Math.Max(tokenSimilarity, lineSimilarity);
+        }
+
+        private static double TokenSimilarity(string expected, string candidate)
+        {
+            var expectedTokens = Regex.Matches(expected, @"[\p{L}\p{N}_]+|[^\s]")
+                .Select(match => match.Value).ToArray();
+            var candidateTokens = Regex.Matches(candidate, @"[\p{L}\p{N}_]+|[^\s]")
+                .Select(match => match.Value).ToArray();
+            if (expectedTokens.Length == 0 || expectedTokens.Length != candidateTokens.Length) return 0;
+            var total = 0d;
+            for (var index = 0; index < expectedTokens.Length; index++)
+            {
+                var similarity = SimilarityWithin(expectedTokens[index], candidateTokens[index], MinimumPatchCandidateSimilarity);
+                if (similarity < MinimumPatchCandidateSimilarity) return 0;
+                total += similarity;
+            }
+            return total / expectedTokens.Length;
         }
 
         private static double LineSimilarity(ulong[] left, ulong[] right)
@@ -854,8 +878,8 @@ namespace App.Services
                 ["next_step"] = CreatePatchNextStep(diagnosis, candidate, expected.Length, source.Lines.Length, candidateTruncated),
                 ["probable_cause"] = diagnosis.Cause,
                 ["edit_index"] = editIndex,
-                ["closest_old_text"] = returnedCandidateText,
-                ["closest_old_text_truncated"] = candidateTruncated
+                ["closest_search"] = returnedCandidateText,
+                ["closest_search_truncated"] = candidateTruncated
             };
             if (diagnosis.Cause == "content_differs") details["first_mismatch"] = CreateMismatchDetail(diagnosis, expected.Length);
             details["candidate"] = new JsonObject
@@ -869,7 +893,7 @@ namespace App.Services
             details["candidate_snippet"] = CreateNumberedSnippet(source.Lines, candidate.FirstLine, candidate.LastLine, focusLine, MaximumPatchSnippetLines);
 
             var editLabel = editCount > 1 ? $" Edit {editIndex + 1} of {editCount}." : string.Empty;
-            var summary = $"old_text did not match; the file was not changed.{editLabel} Closest candidate is lines {candidate.FirstLine + 1}-{candidate.LastLine + 1} ({candidate.Similarity:P0} similar).";
+            var summary = $"SEARCH did not match; the file was not changed.{editLabel} Closest candidate is lines {candidate.FirstLine + 1}-{candidate.LastLine + 1} ({candidate.Similarity:P0} similar).";
             return PatchError("patch_not_found", summary, details);
         }
 
@@ -877,7 +901,7 @@ namespace App.Services
         {
             var detail = new JsonObject
             {
-                ["old_text_line"] = diagnosis.OldTextLine,
+                ["search_line"] = diagnosis.OldTextLine,
                 ["file_line"] = diagnosis.FileLine,
                 ["first_differing_column"] = diagnosis.Column,
                 ["expected"] = CapAroundColumn(diagnosis.Expected, diagnosis.Column, MaximumPatchSnippetLineLength),
@@ -907,20 +931,20 @@ namespace App.Services
             bool candidateTruncated)
         {
             var retry = candidateTruncated
-                ? "The closest_old_text value is truncated; call read_file and copy a smaller unique block before retrying."
-                : "If closest_old_text is the intended block, use that raw value directly as old_text and provide only the final source as new_text. Otherwise call read_file.";
+                ? "The closest_search value is truncated; call read_file and copy a smaller unique SEARCH block before retrying."
+                : "If closest_search is intended, use it as SEARCH and provide final source as REPLACE. Otherwise call read_file.";
             return diagnosis.Cause switch
             {
                 "old_text_longer_than_file" =>
-                    $"Nothing was written. old_text has {expectedLineCount} lines but the file has only {fileLineCount}. {retry}",
+                    $"Nothing was written. SEARCH has {expectedLineCount} lines but the file has only {fileLineCount}. {retry}",
                 "elision_marker" =>
-                    $"Nothing was written. Line {diagnosis.OldTextLine} of old_text is an elision marker. {retry}",
+                    $"Nothing was written. Line {diagnosis.OldTextLine} of SEARCH is an elision marker. {retry}",
                 "line_number_prefix" =>
-                    $"Nothing was written. old_text contains '{diagnosis.Sample}' style line-number prefixes. {retry}",
+                    $"Nothing was written. SEARCH contains '{diagnosis.Sample}' style line-number prefixes. {retry}",
                 "no_similar_text" =>
-                    $"Nothing was written. No block in this file matches old_text; the closest is only {candidate.Similarity:P0} similar. Confirm the path. {retry}",
+                    $"Nothing was written. No block in this file matches SEARCH; the closest is only {candidate.Similarity:P0} similar. Confirm the path. {retry}",
                 _ =>
-                    $"Nothing was written. Line {diagnosis.OldTextLine} of old_text does not match file line {diagnosis.FileLine}. {retry}"
+                    $"Nothing was written. Line {diagnosis.OldTextLine} of SEARCH does not match file line {diagnosis.FileLine}. {retry}"
             };
         }
 
@@ -1019,10 +1043,8 @@ namespace App.Services
                 };
             }).ToArray());
 
-            var nextStep = SupportsReplaceAll(mode)
-                ? $"Nothing was written. Two valid fixes: extend old_text with the distinguishing lines shown in context_before and context_after for the one match you want, or set replace_all true to change all {matches.Count} occurrences. Then call patch_file again."
-                : $"Nothing was written. old_text matched {matches.Count} places only after {mode} matching, so replace_all is not accepted for it. Extend old_text with the distinguishing lines shown in context_before and context_after until it identifies one block, then call patch_file again.";
-            return PatchError("patch_ambiguous", $"old_text matches {matches.Count} places in the file; the file was not changed.", new JsonObject
+            var nextStep = $"Nothing was written. Extend SEARCH with distinguishing surrounding lines so it selects one of the {matches.Count} matches, then retry.";
+            return PatchError("patch_ambiguous", $"SEARCH matches {matches.Count} places in the file; the file was not changed.", new JsonObject
             {
                 ["next_step"] = nextStep,
                 ["edit_index"] = editIndex,
@@ -1042,8 +1064,8 @@ namespace App.Services
                 ? $"Edits {first.EditIndex + 1} and {second.EditIndex + 1} match the same text at lines {firstRange.StartLine}-{firstRange.EndLine}; the file was not changed."
                 : $"Edits {first.EditIndex + 1} and {second.EditIndex + 1} target overlapping text at lines {firstRange.StartLine}-{firstRange.EndLine} and lines {secondRange.StartLine}-{secondRange.EndLine}; the file was not changed.";
             var nextStep = identical
-                ? "Nothing was written. Two edits resolved to the same block, so one is redundant or one old_text is not specific enough. Remove the duplicate, or extend the old_text of each edit with its own surrounding lines so they target different blocks, then call patch_file again."
-                : $"Nothing was written. Merge the two edits into one edit whose old_text is the whole block from line {firstRange.StartLine} to line {secondRange.EndLine} and whose new_text is the final text for that whole block, or shrink each old_text so the two ranges do not touch. Then call patch_file again.";
+                ? "Nothing was written. Two sections target the same block. Remove the duplicate or extend each SEARCH with distinct surrounding lines."
+                : $"Nothing was written. Merge the overlapping sections into one SEARCH/REPLACE block covering lines {firstRange.StartLine}-{secondRange.EndLine}, or make their SEARCH ranges disjoint.";
             return PatchError("patch_overlap", summary, new JsonObject
             {
                 ["next_step"] = nextStep,
@@ -1067,7 +1089,7 @@ namespace App.Services
         private static ToolResult PatchSyntaxError(IReadOnlyList<Diagnostic> errors) =>
             PatchError("patch_syntax_error", $"The patched result has {errors.Count} C# syntax error(s); the file was not changed.", new JsonObject
             {
-                ["next_step"] = "Nothing was written. The line and column numbers below refer to the rejected result, not to the file on disk. Fix new_text so the block is syntactically complete, then call patch_file again. Set syntax_check false only if this file is intentionally not compilable C#.",
+                ["next_step"] = "Nothing was written. Fix REPLACE so the result is syntactically complete, then retry. Set syntax_check false only if this C# file is intentionally incomplete.",
                 ["errors"] = new JsonArray(errors.Select(error => (JsonNode)CapLine(error.ToString(), MaximumPatchSnippetLineLength)).ToArray())
             });
 
@@ -1226,63 +1248,195 @@ namespace App.Services
             return Ok("Deleted the selected path.", new JsonObject { ["path"] = fullPath });
         }
 
-        private ToolResult SearchFiles(string directory, string regexPattern)
+        private async Task<ToolResult> SearchFilesAsync(string directory, string regexPattern, CancellationToken token)
         {
             var root = ResolveWorkspacePath(directory);
             if (!Directory.Exists(root)) return Error("directory_not_found", "The directory does not exist.");
 
-            var pattern = new Regex(regexPattern, RegexOptions.Multiline, TimeSpan.FromSeconds(1));
-            var results = new JsonArray();
-            foreach (var path in EnumerateEntries(root, 12).Where(File.Exists))
+            var pattern = new Regex(regexPattern, RegexOptions.Compiled, TimeSpan.FromSeconds(1));
+            var matches = new ConcurrentBag<SearchMatch>();
+            var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleWriter = true,
+                SingleReader = false
+            });
+            var producer = Task.Run(async () =>
             {
                 try
                 {
-                    if (new FileInfo(path).Length > MaximumFileBytes) continue;
-                    var content = File.ReadAllText(path);
-                    var matches = pattern.Matches(content);
-                    if (matches.Count == 0) continue;
-
-                    var snippets = new JsonArray();
-                    foreach (Match match in matches)
+                    foreach (var path in EnumerateSearchFiles(root))
                     {
-                        var (snippet, start) = CreateMatchSnippet(content, match.Index, match.Length);
-                        snippets.Add(new JsonObject
-                        {
-                            ["match"] = snippet,
-                            ["start"] = start,
-                            ["end"] = start + match.Length
-                        });
+                        token.ThrowIfCancellationRequested();
+                        await channel.Writer.WriteAsync(path, token);
                     }
-                    results.Add(new JsonObject { ["file"] = path, ["matches"] = snippets });
-                    if (results.Count >= MaximumSearchFiles) break;
+                    channel.Writer.TryComplete();
                 }
-                catch (IOException) { }
-                catch (UnauthorizedAccessException) { }
+                catch (Exception exception) { channel.Writer.TryComplete(exception); }
+            }, token);
+            var workerCount = Math.Clamp(Environment.ProcessorCount, 2, 8);
+            var workers = Enumerable.Range(0, workerCount).Select(_ => Task.Run(async () =>
+            {
+                await foreach (var path in channel.Reader.ReadAllAsync(token))
+                {
+                    try { await ScanSearchFileAsync(path, pattern, matches, token); }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                    catch (DecoderFallbackException) { }
+                }
+            }, token)).ToArray();
+            await producer;
+            await Task.WhenAll(workers);
+
+            var ordered = matches.OrderBy(item => item.Filename, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.MatchStart).ToArray();
+            if (ordered.Length == 0)
+                return Error("no_match", "no match found", solution: "Broaden or simplify the regular expression, then search the same path again.");
+            var returned = new JsonArray();
+            var remainingCharacters = MaximumSearchResultCharacters;
+            foreach (var item in ordered)
+            {
+                var node = new JsonObject
+                {
+                    ["filename"] = item.Filename,
+                    ["match_start"] = item.MatchStart,
+                    ["snippet_start"] = item.SnippetStart,
+                    ["match"] = item.Match,
+                    ["snippet"] = item.Snippet
+                };
+                var nodeLength = node.ToJsonString(ToolResultJson).Length + (returned.Count > 0 ? 1 : 0);
+                if (nodeLength > remainingCharacters) break;
+                returned.Add(node);
+                remainingCharacters -= nodeLength;
             }
-
-            return Ok($"Found matches in {results.Count} file(s).", new JsonObject { ["files"] = results });
+            return Ok(new JsonObject
+            {
+                ["matches"] = returned,
+                ["total_matches"] = ordered.Length,
+                ["is_truncated"] = returned.Count < ordered.Length
+            });
         }
 
-        private static (string Snippet, int MatchStart) CreateMatchSnippet(string content, int matchIndex, int matchLength)
+        private static IEnumerable<string> EnumerateSearchFiles(string root)
         {
-            var lineStart = content.LastIndexOf('\n', Math.Max(0, matchIndex - 1)) + 1;
-            var lineEnd = content.IndexOf('\n', matchIndex + matchLength);
-            if (lineEnd < 0) lineEnd = content.Length;
-            var line = content[lineStart..lineEnd].TrimEnd('\r');
-            var matchStart = matchIndex - lineStart;
-            if (line.Length <= MaximumMatchSnippetLength) return (line, matchStart);
-
-            var snippetStart = Math.Clamp(matchStart - (MaximumMatchSnippetLength - matchLength) / 2, 0, line.Length - MaximumMatchSnippetLength);
-            return (line.Substring(snippetStart, MaximumMatchSnippetLength), matchStart - snippetStart);
+            var options = new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.ReparsePoint,
+                ReturnSpecialDirectories = false
+            };
+            return Directory.EnumerateFiles(root, "*", options);
         }
 
-        private ToolResult ListFiles(string path, int depth, string regex)
+        private static async Task ScanSearchFileAsync(string path, Regex pattern, ConcurrentBag<SearchMatch> results, CancellationToken token)
+        {
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 65_536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            var sample = new byte[Math.Min(4_096, (int)Math.Min(stream.Length, 4_096))];
+            var sampleLength = await stream.ReadAsync(sample, token);
+            if (sample.AsSpan(0, sampleLength).Contains((byte)0)) return;
+            stream.Position = 0;
+            using var reader = new StreamReader(stream, Encoding.UTF8, true, 65_536, leaveOpen: false);
+            var before = new Queue<SearchLine>();
+            var pending = new List<PendingSearchMatch>();
+            await foreach (var sourceLine in ReadSearchLinesAsync(reader, token))
+            {
+                token.ThrowIfCancellationRequested();
+                foreach (var item in pending) item.After.Add(sourceLine);
+                for (var index = pending.Count - 1; index >= 0; index--)
+                    if (pending[index].After.Count >= 4)
+                    {
+                        results.Add(MaterializeSearchMatch(path, pending[index]));
+                        pending.RemoveAt(index);
+                    }
+                foreach (Match match in pattern.Matches(sourceLine.Text))
+                    pending.Add(new PendingSearchMatch(sourceLine, before.ToArray(), match.Index, match.Value));
+                before.Enqueue(sourceLine);
+                while (before.Count > 4) before.Dequeue();
+            }
+            foreach (var item in pending) results.Add(MaterializeSearchMatch(path, item));
+        }
+
+        private static async IAsyncEnumerable<SearchLine> ReadSearchLinesAsync(
+            StreamReader reader,
+            [EnumeratorCancellation] CancellationToken token)
+        {
+            var buffer = new char[16_384];
+            var line = new StringBuilder();
+            var lineStart = 0;
+            var absolute = 0;
+            var pendingCarriageReturn = false;
+            while (await reader.ReadAsync(buffer, token) is var read && read > 0)
+            {
+                for (var index = 0; index < read; index++)
+                {
+                    var character = buffer[index];
+                    if (pendingCarriageReturn)
+                    {
+                        if (character == '\n')
+                        {
+                            absolute++;
+                            yield return new SearchLine(lineStart, line.ToString(), "\r\n");
+                            line.Clear();
+                            lineStart = absolute;
+                            pendingCarriageReturn = false;
+                            continue;
+                        }
+                        yield return new SearchLine(lineStart, line.ToString(), "\r");
+                        line.Clear();
+                        lineStart = absolute;
+                        pendingCarriageReturn = false;
+                    }
+                    absolute++;
+                    if (character == '\r') pendingCarriageReturn = true;
+                    else if (character == '\n')
+                    {
+                        yield return new SearchLine(lineStart, line.ToString(), "\n");
+                        line.Clear();
+                        lineStart = absolute;
+                    }
+                    else line.Append(character);
+                }
+            }
+            if (pendingCarriageReturn || line.Length > 0)
+                yield return new SearchLine(lineStart, line.ToString(), pendingCarriageReturn ? "\r" : string.Empty);
+        }
+
+        private static SearchMatch MaterializeSearchMatch(string path, PendingSearchMatch item)
+        {
+            var lines = item.Before.Append(item.Line).Concat(item.After).ToArray();
+            var combinedStart = lines[0].Start;
+            var combined = string.Concat(lines.Select(line => line.Text + line.Terminator));
+            var matchStart = item.Line.Start + item.Column;
+            var relativeMatch = matchStart - combinedStart;
+            var windowStart = Math.Clamp(relativeMatch - Math.Max(0, (256 - item.Match.Length) / 2), 0, Math.Max(0, combined.Length - 256));
+            var length = Math.Min(combined.Length - windowStart, Math.Max(256, item.Match.Length));
+            var snippet = combined.Substring(windowStart, length);
+            var words = Regex.Matches(snippet, @"\S+");
+            if (words.Count > 42)
+            {
+                var matchInSnippet = relativeMatch - windowStart;
+                var firstWord = Math.Max(0, words.Cast<Match>().TakeWhile(word => word.Index < matchInSnippet).Count() - 21);
+                var lastWord = Math.Min(words.Count - 1, firstWord + 41);
+                var wordStart = words[firstWord].Index;
+                var wordEnd = words[lastWord].Index + words[lastWord].Length;
+                snippet = snippet[wordStart..wordEnd];
+                windowStart += wordStart;
+            }
+            return new SearchMatch(path, matchStart, combinedStart + windowStart, item.Match, snippet);
+        }
+
+        private async Task<ToolResult> ListFilesAsync(string path, string regex, bool hidden)
         {
             var root = ResolveWorkspacePath(string.IsNullOrWhiteSpace(path) ? "." : path);
             if (!Directory.Exists(root)) return Error("directory_not_found", "The path is not a directory.");
-            Regex? filter = string.IsNullOrWhiteSpace(regex) ? null : new Regex(regex, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
-            var items = EnumerateEntries(root, Math.Clamp(depth, 0, 12))
-                .Where(item => filter is null || filter.IsMatch(item))
+            if (hidden && !await _confirmAsync($"Include hidden, dot-prefixed, ignored, and generated entries in '{root}'?"))
+                return Error("confirmation_declined", "Hidden listing was not approved.", solution: "Call list_file_and_directory with hidden false, or ask the user to approve hidden access.");
+            var filter = new Regex(regex, RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromSeconds(1));
+            var entries = Directory.EnumerateFileSystemEntries(root).ToArray();
+            var ignored = hidden ? [] : await GetGitIgnoredEntriesAsync(root, entries);
+            var items = entries
+                .Where(item => hidden || (!IsHiddenOrIgnored(item) && !ignored.Contains(item)))
+                .Where(item => filter.IsMatch(Path.GetRelativePath(root, item)))
                 .Take(500)
                 .Select(item => (JsonNode)new JsonObject
                 {
@@ -1292,22 +1446,65 @@ namespace App.Services
                     ["attribute"] = File.GetAttributes(item).ToString(),
                     ["size"] = File.Exists(item) ? new FileInfo(item).Length : 0
                 }).ToArray();
-            return Ok($"Listed {items.Length} item(s).", new JsonObject { ["items"] = new JsonArray(items) });
+            return Ok(new JsonObject { ["items"] = new JsonArray(items), ["is_truncated"] = items.Length == 500 });
         }
 
-        private async Task<ToolResult> ExecuteCommandAsync(string command, string arguments, bool elevated, CancellationToken token)
+        private static async Task<HashSet<string>> GetGitIgnoredEntriesAsync(string root, string[] entries)
+        {
+            var ignored = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo("git", $"-C \"{root}\" check-ignore --no-index --stdin")
+                    {
+                        UseShellExecute = false,
+                        RedirectStandardInput = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
+                    }
+                };
+                process.Start();
+                foreach (var entry in entries)
+                    await process.StandardInput.WriteLineAsync(Path.GetRelativePath(root, entry));
+                process.StandardInput.Close();
+                while (await process.StandardOutput.ReadLineAsync() is { } relative)
+                    ignored.Add(Path.GetFullPath(Path.Combine(root, relative)));
+                await process.WaitForExitAsync();
+            }
+            catch (Win32Exception) { }
+            catch (IOException) { }
+            return ignored;
+        }
+
+        private static bool IsHiddenOrIgnored(string path)
+        {
+            var name = Path.GetFileName(path);
+            if (name.StartsWith(".", StringComparison.Ordinal)) return true;
+            var attributes = File.GetAttributes(path);
+            if (attributes.HasFlag(FileAttributes.Hidden) || attributes.HasFlag(FileAttributes.System)) return true;
+            return name.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("bin", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("obj", StringComparison.OrdinalIgnoreCase)
+                || name.Equals(".next", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("dist", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("build", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private async Task<ToolResult> ExecuteCommandAsync(string command, string arguments, bool elevated, bool full, CancellationToken token)
         {
             EnsureWorkspace();
-            if (elevated || IsRiskyCommand(command, arguments))
+            if (elevated || full || IsRiskyCommand(command, arguments))
             {
-                if (!await _confirmAsync($"Run {(elevated ? "elevated " : string.Empty)}command '{command} {arguments}' in '{WorkspacePath}'?"))
-                    return Error("confirmation_declined", "The user did not approve the command.");
+                var qualifier = elevated ? "elevated " : full ? "with unbounded output " : string.Empty;
+                if (!await _confirmAsync($"Run {qualifier}command '{command} {arguments}' in '{WorkspacePath}'?"))
+                    return Error("confirmation_declined", "The user did not approve the command.", solution: "Run a safe bounded command instead, or ask the user to approve this operation.");
             }
             if (elevated)
             {
-                var start = new ProcessStartInfo(command, arguments) { WorkingDirectory = WorkspacePath, UseShellExecute = true, Verb = "runas" };
-                Process.Start(start);
-                return Ok("Started the elevated command. Windows does not return its output to this app.");
+                var result = await ElevatedCommandService.RunAsync(command, arguments, WorkspacePath, token);
+                return CommandResult(result.Stdout, result.Stderr, result.ExitCode, full);
             }
 
             using var process = new Process { StartInfo = new ProcessStartInfo(command, arguments) { WorkingDirectory = WorkspacePath, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true } };
@@ -1317,12 +1514,18 @@ namespace App.Services
             await process.WaitForExitAsync(token);
             var stdout = await outputTask;
             var stderr = await errorTask;
-            return Ok("Command completed.", new JsonObject
+            return CommandResult(stdout, stderr, process.ExitCode, full);
+        }
+
+        private static ToolResult CommandResult(string stdout, string stderr, int exitCode, bool full)
+        {
+            var truncated = !full && (stdout.Length > DefaultCommandOutputEdgeCharacters * 2 || stderr.Length > DefaultCommandOutputEdgeCharacters * 2);
+            return Ok(new JsonObject
             {
-                ["exit_code"] = process.ExitCode,
-                ["stdout"] = TruncateOutput(stdout),
-                ["stderr"] = TruncateOutput(stderr),
-                ["output_truncated"] = stdout.Length > MaximumCommandOutputCharacters || stderr.Length > MaximumCommandOutputCharacters
+                ["stdio"] = full ? stdout : TruncateOutput(stdout),
+                ["stderr"] = full ? stderr : TruncateOutput(stderr),
+                ["return_code"] = exitCode,
+                ["truncated"] = truncated
             });
         }
 
@@ -1346,12 +1549,12 @@ namespace App.Services
 
         private async Task<ToolResult> CompactAsync()
         {
-            return await _compactAsync();
+            return NormalizeResult(await _compactAsync());
         }
 
         private async Task<ToolResult> CleanUpAsync()
         {
-            return await _cleanupAsync();
+            return NormalizeResult(await _cleanupAsync());
         }
 
         private async Task<ToolResult> ResearchAsync(string topic, CancellationToken token)
@@ -1446,7 +1649,9 @@ namespace App.Services
                        RegexOptions.IgnoreCase)
                    || Regex.IsMatch(commandLine, @"\bgit(?:\.exe)?\s+(clean\b|reset\s+--hard\b)", RegexOptions.IgnoreCase);
         }
-        private static string TruncateOutput(string value) => value.Length <= MaximumCommandOutputCharacters ? value : value[..MaximumCommandOutputCharacters] + "\n[Output truncated]";
+        private static string TruncateOutput(string value) => value.Length <= DefaultCommandOutputEdgeCharacters * 2
+            ? value
+            : value[..DefaultCommandOutputEdgeCharacters] + "\n...[output truncated]...\n" + value[^DefaultCommandOutputEdgeCharacters..];
         private static void ValidateRange((int Start, int End) range, int length)
         {
             if (range.Start < 0 || range.End < range.Start || range.End > length)
@@ -1455,9 +1660,14 @@ namespace App.Services
         private static string Required(JsonObject arguments, string name) => Optional(arguments, name) is { Length: > 0 } value ? value : throw new FormatException($"{name} is required.");
         private static string RequiredContent(JsonObject arguments, string name) => arguments[name]?.GetValue<string>() ?? throw new FormatException($"{name} is required.");
         private static string Optional(JsonObject arguments, string name) => arguments[name]?.GetValue<string>()?.Trim() ?? string.Empty;
+        private static string OptionalRaw(JsonObject arguments, string name) => arguments[name]?.GetValue<string>() ?? string.Empty;
         private static int OptionalInt(JsonObject arguments, string name, int fallback) => arguments[name]?.GetValue<int>() ?? fallback;
         private static bool OptionalBoolean(JsonObject arguments, string name) => arguments[name]?.GetValue<bool>() ?? false;
-        private static (int Start, int End)? OptionalRange(JsonObject arguments)
+        private static (int? Start, int? End) OptionalSlice(JsonObject arguments)
+        {
+            return (arguments["startIndex"]?.GetValue<int>(), arguments["endIndex"]?.GetValue<int>());
+        }
+        private static (int Start, int End)? OptionalWriteRange(JsonObject arguments)
         {
             var start = arguments["start"]?.GetValue<int>();
             var end = arguments["end"]?.GetValue<int>();
@@ -1474,10 +1684,26 @@ namespace App.Services
         // sequences to copy back into old_text. Relaxed escaping is still valid JSON.
         private static readonly JsonSerializerOptions ToolResultJson = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
-        private static ToolResult Ok(string summary, JsonObject? details = null) { var root = details ?? new JsonObject(); root.Insert(0, "summary", summary); root.Insert(0, "status", "completed"); return new ToolResult(true, root.ToJsonString(ToolResultJson)); }
-        // Keys are serialized in insertion order and GeminiClient truncates function results from the tail,
-        // so callers place the recovery instructions first and any bulky snippet last.
-        private static ToolResult Error(string category, string summary, JsonObject? details = null) { var root = details ?? new JsonObject(); root.Insert(0, "summary", summary); root.Insert(0, "error_category", category); root.Insert(0, "status", "failed"); return new ToolResult(false, root.ToJsonString(ToolResultJson)); }
+        private static ToolResult Ok(JsonObject? details = null) { var root = details ?? new JsonObject(); root.Insert(0, "success", true); return new ToolResult(true, root.ToJsonString(ToolResultJson)); }
+        private static ToolResult Ok(string summary, JsonObject? details = null) => Ok(details);
+        private static ToolResult Error(string category, string summary, JsonObject? details = null, string? solution = null)
+        {
+            var root = details ?? new JsonObject();
+            root.Insert(0, "solution", solution ?? SolutionFor(category));
+            root.Insert(0, "error", summary);
+            root.Insert(0, "success", false);
+            return new ToolResult(false, root.ToJsonString(ToolResultJson));
+        }
+        private static string SolutionFor(string category) => category switch
+        {
+            "workspace_required" => "Select an existing Technician workspace, then retry the tool.",
+            "file_not_found" or "path_not_found" or "directory_not_found" => "Check the path with list_file_and_directory, then retry with an existing path.",
+            "patch_not_found" => "Read the target file and retry with a more distinctive SEARCH block copied from the current content.",
+            "patch_ambiguous" => "Add more surrounding source text to the SEARCH block so one location is the unique best match.",
+            "confirmation_declined" => "Continue without the risky action or ask the user to approve it explicitly.",
+            "no_match" => "Broaden or simplify the pattern and search again.",
+            _ => "Inspect the error, correct the tool arguments, and retry with the narrowest safe operation."
+        };
         private static ToolResult PatchError(string category, string summary, JsonObject? details = null)
         {
             details ??= new JsonObject();
@@ -1485,8 +1711,46 @@ namespace App.Services
             return Error(category, summary, details);
         }
 
+        private static ToolResult NormalizeResult(ToolResult result)
+        {
+            try
+            {
+                var source = JsonNode.Parse(result.Output) as JsonObject;
+                var details = source is null ? new JsonObject() : (JsonObject)source.DeepClone();
+                details.Remove("success");
+                details.Remove("status");
+                details.Remove("summary");
+                details.Remove("error");
+                details.Remove("error_category");
+                details.Remove("solution");
+                if (result.Success) return Ok(details);
+                var error = source?["error"]?.GetValue<string>()
+                    ?? source?["summary"]?.GetValue<string>()
+                    ?? "The delegated tool failed.";
+                var solution = source?["solution"]?.GetValue<string>()
+                    ?? "Inspect the error and retry with corrected arguments.";
+                return Error("delegated_tool_failed", error, details, solution);
+            }
+            catch (JsonException)
+            {
+                return result.Success
+                    ? Ok(new JsonObject { ["content"] = result.Output })
+                    : Error("delegated_tool_failed", result.Output, solution: "Inspect the error and retry with corrected arguments.");
+            }
+        }
+
         private sealed record PatchEdit(string OldText, string NewText, bool ReplaceAll);
         private sealed record ResolvedPatch(int Start, int Length, string NewText, int EditIndex, string MatchMode, bool Reindented);
+        private sealed record SearchLine(int Start, string Text, string Terminator);
+        private sealed record SearchMatch(string Filename, int MatchStart, int SnippetStart, string Match, string Snippet);
+        private sealed class PendingSearchMatch(SearchLine line, SearchLine[] before, int column, string match)
+        {
+            public SearchLine Line { get; } = line;
+            public SearchLine[] Before { get; } = before;
+            public int Column { get; } = column;
+            public string Match { get; } = match;
+            public List<SearchLine> After { get; } = [];
+        }
 
         /// <summary>A source line where <c>Start..TextEnd</c> is the text and <c>TextEnd..End</c> is the terminator.</summary>
         private sealed record PatchLine(int Start, int TextEnd, int End, string Text);

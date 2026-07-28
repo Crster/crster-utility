@@ -174,6 +174,9 @@ namespace App.Pages
                 _hasGeneratedPreview = true;
                 PromptBox.Text = string.Empty;
                 UpdateControls();
+                CompletionNotificationService.ShowWhenMainWindowIsInactive(
+                    "Artist generation complete",
+                    "Your image is ready to review.");
             }
             catch (Exception exception)
             {
