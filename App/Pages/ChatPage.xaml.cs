@@ -1571,7 +1571,8 @@ namespace App.Pages
 
         private static JsonNode? ToolDisplayArgument(JsonObject arguments)
         {
-            var preferredArgument = arguments["path"] ?? arguments["regex_pattern"] ?? arguments["command"]
+            var preferredArgument = arguments["file"] ?? arguments["path"] ?? arguments["exe"]
+                ?? arguments["regex_pattern"] ?? arguments["command"]
                 ?? arguments["query"] ?? arguments["value"] ?? arguments["topic"] ?? arguments["request"]
                 ?? arguments["kind"] ?? arguments["process_id"] ?? arguments["key"] ?? arguments.First().Value;
             return preferredArgument;

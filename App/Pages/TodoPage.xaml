@@ -5,6 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     IsTabStop="True"
+    FontSize="13"
     KeyDown="Page_KeyDown"
     mc:Ignorable="d">
 
@@ -19,15 +20,17 @@
                 <!-- Section: Empty State -->
                 <StackPanel x:Name="EmptyState" Visibility="Collapsed" HorizontalAlignment="Center" Margin="0,48,0,0">
                     <FontIcon Glyph="&#xE73A;"
-                              FontSize="64"
+                              FontSize="56"
                               Foreground="{ThemeResource TextFillColorDisabledBrush}"
                               HorizontalAlignment="Center" />
                     <TextBlock Text="No todos yet"
                                Style="{StaticResource SubtitleTextBlockStyle}"
+                               FontSize="16"
                                HorizontalAlignment="Center"
                                Margin="0,16,0,4" />
                     <TextBlock Text="Create a group to add your first todo"
                                Style="{StaticResource CaptionTextBlockStyle}"
+                               FontSize="11"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                HorizontalAlignment="Center" />
                 </StackPanel>
@@ -44,7 +47,7 @@
                 VerticalAlignment="Bottom"
                 Margin="0,0,28,28"
                 Click="CreateGroupButton_Click">
-            <FontIcon Glyph="&#xE710;" FontSize="20" />
+            <FontIcon Glyph="&#xE710;" FontSize="18" />
         </Button>
     </Grid>
 </Page>

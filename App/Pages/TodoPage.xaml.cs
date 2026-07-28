@@ -134,6 +134,7 @@ namespace App.Pages
             {
                 Text = "Due within an hour",
                 Style = (Style)Application.Current.Resources["SubtitleTextBlockStyle"],
+                FontSize = 16,
                 Foreground = new SolidColorBrush(Colors.Red)
             });
             panel.Children.Add(CreateList(todos, true));
@@ -259,6 +260,7 @@ namespace App.Pages
             {
                 Text = category,
                 Style = (Style)Application.Current.Resources["SubtitleTextBlockStyle"],
+                FontSize = 16,
                 VerticalAlignment = VerticalAlignment.Center
             });
             if (!string.IsNullOrWhiteSpace(description))
@@ -267,6 +269,7 @@ namespace App.Pages
                 {
                     Text = description,
                     Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+                    FontSize = 11,
                     Foreground = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
                     TextWrapping = TextWrapping.Wrap,
                     Margin = new Thickness(0, 0, 0, 4)
@@ -294,7 +297,7 @@ namespace App.Pages
                 {
                     Text = description,
                     PlaceholderText = "Description",
-                    FontSize = 12,
+                    FontSize = 11,
                     MinHeight = 0,
                     Margin = new Thickness(0, 4, 0, 0)
                 };
@@ -414,8 +417,9 @@ namespace App.Pages
             var title = new TextBlock
             {
                 Text = todo.Value,
-                FontSize = 16,
+                FontSize = 14,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                IsTextSelectionEnabled = true,
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = urgent
                     ? new SolidColorBrush(Colors.Red)
@@ -426,12 +430,19 @@ namespace App.Pages
             text.Children.Add(new TextBlock
             {
                 Text = TodoDetails(todo),
+                FontSize = 11,
                 Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
                 TextWrapping = TextWrapping.Wrap
             });
             root.Children.Add(text);
 
-            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, Visibility = Visibility.Collapsed };
+            var actions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 2,
+                Opacity = 0,
+                IsHitTestVisible = false
+            };
             Grid.SetColumn(actions, 2);
             var notify = IconButton("\uEE93", "Set notification");
             var edit = IconButton("\uE70F", "Edit todo");
@@ -440,8 +451,13 @@ namespace App.Pages
             actions.Children.Add(edit);
             actions.Children.Add(delete);
             root.Children.Add(actions);
-            root.PointerEntered += (_, _) => actions.Visibility = Visibility.Visible;
-            root.PointerExited += (_, _) => { if (_cancelOperation is null) actions.Visibility = Visibility.Collapsed; };
+            void SetActionsVisible(bool visible)
+            {
+                actions.Opacity = visible ? 1 : 0;
+                actions.IsHitTestVisible = visible;
+            }
+            root.PointerEntered += (_, _) => SetActionsVisible(true);
+            root.PointerExited += (_, _) => { if (_cancelOperation is null) SetActionsVisible(false); };
 
             notify.Click += async (_, _) => await ConfigureNotificationAsync(todo);
             edit.Click += (_, _) => BeginTodoEdit(root, todo);
@@ -549,7 +565,14 @@ namespace App.Pages
                     return;
                 }
 
-                todo.Value = input.Text.Trim();
+                var value = input.Text.Trim();
+                if (string.Equals(todo.Value, value, StringComparison.Ordinal))
+                {
+                    Render();
+                    return;
+                }
+
+                todo.Value = value;
                 todo.Embedding = [];
                 _repository.Update(todo);
                 Render();
