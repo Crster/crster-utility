@@ -1958,9 +1958,17 @@ namespace App.Pages
             UpdateSendAvailability();
             StatusText.Text = status;
         }
-        private async void ChatPage_Unloaded(object sender, RoutedEventArgs e)
+        private void ChatPage_Unloaded(object sender, RoutedEventArgs e)
         {
             _operationCancellation?.Cancel();
+            ConversationHost.Children.Clear();
+            _messageAttachments.Clear();
+            foreach (var session in _sessions.Values)
+            {
+                session.History.Clear();
+                session.Messages.Clear();
+                session.ContextText = string.Empty;
+            }
             _secretaryTools?.Dispose();
             _secretaryTools = null;
             _secretaryMemory = null;

@@ -55,6 +55,7 @@ namespace App.Windows
         private DateTime? lastClickTime;
         private bool isCopying;
         private bool isCopyingText;
+        private bool isClosed;
 
         // Text editing state
         private bool isTextEditing;
@@ -86,7 +87,26 @@ namespace App.Windows
 
             cursorTimer = new DispatcherTimer();
             cursorTimer.Interval = TimeSpan.FromMilliseconds(530);
-            cursorTimer.Tick += (s, e) => { showCursor = !showCursor; MyCanvas.Invalidate(); };
+            cursorTimer.Tick += CursorTimer_Tick;
+            Closed += EditSnapshotWindow_Closed;
+        }
+
+        // Section: Resource Cleanup
+        private void CursorTimer_Tick(object? sender, object e)
+        {
+            showCursor = !showCursor;
+            MyCanvas.Invalidate();
+        }
+
+        private void EditSnapshotWindow_Closed(object sender, WindowEventArgs args)
+        {
+            if (isClosed) return;
+            isClosed = true;
+            cursorTimer.Stop();
+            cursorTimer.Tick -= CursorTimer_Tick;
+            Closed -= EditSnapshotWindow_Closed;
+            MyCanvas.RemoveFromVisualTree();
+            ImageSaved = null;
         }
 
         private static Rect NormalizeRect(Point a, Point b)

@@ -30,6 +30,7 @@ namespace App.Pages
         private bool _isSaving;
         private bool _saveQueued;
         private string? _searchResultKey;
+        private readonly CancellationTokenSource _pageCancellation = new();
 
         public NotebookPage()
         {
@@ -41,17 +42,36 @@ namespace App.Pages
         private async void NotebookPage_Loaded(object sender, RoutedEventArgs e)
         {
             _isLoading = true;
-            _attachmentStorage = new NotebookAttachmentStorageService(_database.RootPath);
-            foreach (var entry in (await _database.LoadAsync()).OrderByDescending(entry => entry.Timestamp)) _entries.Add(entry);
-            _isLoading = false;
-            BlocksHost.ItemsSource = _entries;
-            UpdateEmptyState();
+            try
+            {
+                _attachmentStorage = new NotebookAttachmentStorageService(_database.RootPath);
+                var entries = await _database.LoadAsync();
+                if (_pageCancellation.IsCancellationRequested) return;
+                foreach (var entry in entries.OrderByDescending(entry => entry.Timestamp)) _entries.Add(entry);
+                BlocksHost.ItemsSource = _entries;
+                UpdateEmptyState();
+            }
+            finally
+            {
+                _isLoading = false;
+            }
         }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
         {
             base.OnNavigatedTo(e);
             _searchResultKey = e.Parameter as string;
+        }
+
+        protected override void OnNavigatedFrom(NavigationEventArgs e)
+        {
+            _pageCancellation.Cancel();
+            BlocksHost.ItemsSource = null;
+            _entries.Clear();
+            _hoveredBlock = null;
+            _focusedBlock = null;
+            _editingEntry = null;
+            base.OnNavigatedFrom(e);
         }
 
         private async void ToolButton_Click(object sender, RoutedEventArgs e)
@@ -117,7 +137,8 @@ namespace App.Pages
                 var selectionStart = NoteEditor.SelectionStart;
                 var selectedText = NoteEditor.SelectedText;
                 using var client = new GeminiClient(App.Settings.Current.GeminiApiKey);
-                var improved = await client.ImproveWritingAsync(selectedText, CancellationToken.None);
+                var improved = await client.ImproveWritingAsync(selectedText, _pageCancellation.Token);
+                _pageCancellation.Token.ThrowIfCancellationRequested();
                 if (NoteEditor.SelectionStart != selectionStart || !string.Equals(NoteEditor.SelectedText, selectedText, StringComparison.Ordinal))
                     SaveStatusText.Text = "The selection changed before the improvement completed; nothing was replaced.";
                 else
@@ -126,13 +147,16 @@ namespace App.Pages
                     SaveStatusText.Text = string.Empty;
                 }
             }
+            catch (OperationCanceledException) when (_pageCancellation.IsCancellationRequested)
+            {
+            }
             catch (Exception exception)
             {
                 SaveStatusText.Text = $"Improve failed: {exception.Message}";
             }
             finally
             {
-                if (button is not null) button.IsEnabled = true;
+                if (button is not null && !_pageCancellation.IsCancellationRequested) button.IsEnabled = true;
             }
         }
 

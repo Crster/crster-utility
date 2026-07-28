@@ -9,6 +9,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Microsoft.UI.Xaml.Navigation;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
 using Windows.Graphics.Imaging;
@@ -32,12 +33,22 @@ namespace App.Pages
         private bool _isBusy;
         private bool _includePreviewOnNextSend;
         private bool _hasGeneratedPreview;
+        private readonly CancellationTokenSource _pageCancellation = new();
 
         public ArtistPage()
         {
             InitializeComponent();
             SizeChanged += (_, _) => UpdateSelectionOverlay();
             UpdateControls();
+        }
+
+        protected override void OnNavigatedFrom(NavigationEventArgs e)
+        {
+            _pageCancellation.Cancel();
+            PreviewImage.Source = null;
+            _image = null;
+            _pendingAttachment = null;
+            base.OnNavigatedFrom(e);
         }
 
         private async void PreviewSurface_PointerPressed(object sender, PointerRoutedEventArgs e)
@@ -167,7 +178,8 @@ namespace App.Pages
 
                 SetBusy(true);
                 using var client = new GeminiClient(App.Settings.Current.GeminiApiKey);
-                var generated = await client.GenerateImageAsync(prompt, contextImages, CancellationToken.None);
+                var generated = await client.GenerateImageAsync(prompt, contextImages, _pageCancellation.Token);
+                _pageCancellation.Token.ThrowIfCancellationRequested();
                 await SetImageAsync(generated);
                 _pendingAttachment = null;
                 _includePreviewOnNextSend = false;
@@ -178,13 +190,16 @@ namespace App.Pages
                     "Artist generation complete",
                     "Your image is ready to review.");
             }
+            catch (OperationCanceledException) when (_pageCancellation.IsCancellationRequested)
+            {
+            }
             catch (Exception exception)
             {
                 await ShowErrorAsync("Artist could not generate the image", exception.Message);
             }
             finally
             {
-                SetBusy(false);
+                if (!_pageCancellation.IsCancellationRequested) SetBusy(false);
             }
         }
 

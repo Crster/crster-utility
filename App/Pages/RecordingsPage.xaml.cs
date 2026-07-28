@@ -54,6 +54,31 @@ namespace App.Pages
             this.InitializeComponent();
             _device = Direct3D11Helper.CreateDevice();
             _finalizingTimer.Tick += FinalizingTimer_Tick;
+            Unloaded += RecordingsPage_Unloaded;
+        }
+
+        // Section: Resource Cleanup
+        private void RecordingsPage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            Unloaded -= RecordingsPage_Unloaded;
+            _finalizingTimer.Stop();
+            _finalizingTimer.Tick -= FinalizingTimer_Tick;
+            CloseRecordingToolbar();
+            if (_isRecordingActive) _recorder?.Stop();
+            DetachRecorderEvents();
+            _recorder?.Dispose();
+            _recorder = null;
+            _recordingSessionController = null;
+            LatestRecordingImage.Source = null;
+            (_device as IDisposable)?.Dispose();
+        }
+
+        private void DetachRecorderEvents()
+        {
+            if (_recorder is null) return;
+            _recorder.RecordingStarted -= Recorder_RecordingStarted;
+            _recorder.RecordingStopped -= Recorder_RecordingStopped;
+            _recorder.RecordingFailed -= Recorder_RecordingFailed;
         }
 
         private async void RecordingButton_Click(object sender, RoutedEventArgs e)
@@ -197,6 +222,7 @@ namespace App.Pages
             FinalizingPanel.Visibility = Visibility.Collapsed;
             _finalizingTimer.Stop();
             StopRecordingWave();
+            DetachRecorderEvents();
             _recorder?.Dispose();
             _recorder = null;
             _recordingSessionController = null;
