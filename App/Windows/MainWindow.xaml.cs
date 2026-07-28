@@ -72,12 +72,15 @@ namespace App.Windows
 
         internal void ShowFromTray()
         {
-            IsHiddenToTray = false;
-            AppWindow.Show();
-            Activate();
+            ShowAndActivate();
         }
 
         internal void ShowFromActivation()
+        {
+            ShowAndActivate();
+        }
+
+        private void ShowAndActivate()
         {
             IsHiddenToTray = false;
             AppWindow.Show();
