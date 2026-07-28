@@ -29,7 +29,7 @@ namespace App.Pages
     {
         private static readonly Regex AttachmentTokenRegex = new(@"§(?<name>(?:image|file)-[A-Z0-9]{4})\b", RegexOptions.Compiled);
         private const string AttachmentTokenCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        private const int MaximumTechnicianToolCalls = 80;
+        private const int MaximumTechnicianToolCalls = 15;
         private const int MaximumRepeatedContextCharacters = 24_000;
         private const int MaximumHistoryCharacters = 100_000;
         private const int MaximumProjectDocumentationSourceCharacters = 24_000;
@@ -165,7 +165,7 @@ namespace App.Pages
                 else if (isTechnicianConfirmation)
                     await _chatLog.WriteAsync("technician.confirmation", ("promptLength", prompt.Length));
                 var shouldContinue = isTechnicianRetry || isTechnicianConfirmation || _personality != ChatPersonality.Technician
-                    || await PrepareTechnicianTurnAsync(prompt, _operationCancellation.Token);
+                    || await PrepareTechnicianTurnAsync(prompt, stagedAttachments.Count > 0, _operationCancellation.Token);
                 await _chatLog.WriteAsync("send.started",
                     ("personality", _personality),
                     ("model", Model()),
@@ -292,8 +292,8 @@ namespace App.Pages
                     ? TechnicianModelTier.Escalated
                     : TechnicianModelTier.Standard;
                 RecordTechnicianTier(technicianTier);
-                var handledTwentyCallCheckpoint = false;
-                var handledFortyCallCheckpoint = false;
+                var handledFiveCallCheckpoint = false;
+                var handledEightCallCheckpoint = false;
                 var consecutiveFailedToolCalls = 0;
                 var troubleGuidanceGenerated = false;
                 var emptyCompletionRecoveryAttempted = false;
@@ -482,14 +482,14 @@ namespace App.Pages
                                 pendingCheckpoint = TechnicianCheckpoint.Stop;
                                 break;
                             }
-                            if (technicianToolCallCount >= 40 && !handledFortyCallCheckpoint)
-                            {
-                                pendingCheckpoint = TechnicianCheckpoint.CourseCorrect;
-                                break;
-                            }
-                            if (technicianToolCallCount >= 20 && !handledTwentyCallCheckpoint)
+                            if (technicianToolCallCount >= 8 && !handledEightCallCheckpoint)
                             {
                                 pendingCheckpoint = TechnicianCheckpoint.CompactAndUpgrade;
+                                break;
+                            }
+                            if (technicianToolCallCount >= 5 && !handledFiveCallCheckpoint)
+                            {
+                                pendingCheckpoint = TechnicianCheckpoint.CompactAndRaiseThinking;
                                 break;
                             }
                         }
@@ -514,20 +514,20 @@ namespace App.Pages
 
                     if (pendingCheckpoint == TechnicianCheckpoint.Stop)
                     {
-                        await PreserveTechnicianCheckpointAsync(userPrompt, includeCourseCorrection: false, operationCancellation.Token);
-                        const string message = "Technician stopped after 80 tool calls without completing the request.";
+                        await PreserveTechnicianCheckpointAsync(userPrompt, operationCancellation.Token);
+                        const string message = "Technician stopped after 15 tool calls without completing the request.";
                         await _chatLog.WriteAsync("tool_budget.exhausted", ("toolCallCount", technicianToolCallCount));
                         AddMessage(new ChatMessage(ChatItemKind.Error, "Technician", message));
                         return;
                     }
 
-                    if (pendingCheckpoint is TechnicianCheckpoint.CompactAndUpgrade or TechnicianCheckpoint.CourseCorrect)
+                    if (pendingCheckpoint is TechnicianCheckpoint.CompactAndRaiseThinking or TechnicianCheckpoint.CompactAndUpgrade)
                     {
-                        var includeCourseCorrection = pendingCheckpoint == TechnicianCheckpoint.CourseCorrect;
-                        await PreserveTechnicianCheckpointAsync(userPrompt, includeCourseCorrection, operationCancellation.Token);
-                        handledTwentyCallCheckpoint = true;
-                        if (includeCourseCorrection) handledFortyCallCheckpoint = true;
-                        technicianTier = TechnicianModelTier.Escalated;
+                        await PreserveTechnicianCheckpointAsync(userPrompt, operationCancellation.Token);
+                        var upgradeModel = pendingCheckpoint == TechnicianCheckpoint.CompactAndUpgrade;
+                        handledFiveCallCheckpoint = true;
+                        if (upgradeModel) handledEightCallCheckpoint = true;
+                        technicianTier = upgradeModel ? TechnicianModelTier.Escalated : TechnicianModelTier.HighThinking;
                         RecordTechnicianTier(technicianTier);
                         Session.History.Clear();
                         nextSteps =
@@ -538,7 +538,7 @@ namespace App.Pages
                         ];
                         await _chatLog.WriteAsync("technician.checkpoint",
                             ("toolCallCount", technicianToolCallCount),
-                            ("checkpoint", includeCourseCorrection ? "course_correct" : "compact_upgrade"),
+                            ("checkpoint", upgradeModel ? "compact_upgrade" : "compact_raise_thinking"),
                             ("modelTier", technicianTier));
                         continue;
                     }
@@ -608,7 +608,7 @@ namespace App.Pages
             }
         }
 
-        private async Task<bool> PrepareTechnicianTurnAsync(string prompt, CancellationToken token)
+        private async Task<bool> PrepareTechnicianTurnAsync(string prompt, bool hasAttachments, CancellationToken token)
         {
             if (_technicianOrchestrator is null) throw new InvalidOperationException("Technician orchestration is unavailable.");
 
@@ -622,7 +622,7 @@ namespace App.Pages
                 string.Join("\n\n", priorMessages.TakeLast(4).Select(FormatTechnicianMessage)),
                 MaximumRelationshipContextCharacters);
             var hasPreviousSession = priorMessages.Any(message => message.Kind is ChatItemKind.User or ChatItemKind.Assistant);
-            var classification = await _technicianOrchestrator.ClassifyAsync(prompt, recentConversation, hasPreviousSession, token);
+            var classification = await _technicianOrchestrator.ClassifyAsync(prompt, recentConversation, hasPreviousSession, hasAttachments, token);
             _technicianTurnClassification = classification;
             var preservesSession = classification.Related || classification.RequestRetry;
 
@@ -687,18 +687,14 @@ namespace App.Pages
 
         private async Task PreserveTechnicianCheckpointAsync(
             string originalRequest,
-            bool includeCourseCorrection,
             CancellationToken token)
         {
             if (_technicianOrchestrator is null) throw new InvalidOperationException("Technician orchestration is unavailable.");
             var transcript = Truncate(
                 string.Join("\n\n", Session.Messages.Select(FormatTechnicianMessage)),
                 MaximumCompactionTranscriptCharacters);
-            var courseCorrection = includeCourseCorrection
-                ? await _technicianOrchestrator.CourseCorrectAsync(originalRequest, transcript, token)
-                : null;
             var compacted = await _technicianOrchestrator.CompactAsync(
-                new TechnicianCompactionInput(originalRequest, Session.ContextText, transcript, courseCorrection),
+                new TechnicianCompactionInput(originalRequest, Session.ContextText, transcript),
                 token);
             ReplaceTechnicianContextRegion(TechnicianContextRegion.Session, compacted);
             ClearTechnicianContextRegion(TechnicianContextRegion.Specialist);
@@ -824,8 +820,7 @@ namespace App.Pages
             TechnicianTurnClassification classification,
             bool appliedFileChange)
         {
-            return !classification.RequestPlan
-                && !classification.RequestResearch
+            return classification.RequiresExecution
                 && !appliedFileChange;
         }
 
@@ -840,9 +835,12 @@ namespace App.Pages
                 return;
             }
 
-            var message = tier == TechnicianModelTier.Escalated
-                ? "Switching to the high-cost model."
-                : "Switching to the low-cost model.";
+            var message = tier switch
+            {
+                TechnicianModelTier.Escalated => "Switching to the high-cost model.",
+                TechnicianModelTier.HighThinking => "Switching to high thinking.",
+                _ => "Switching to the low-cost model."
+            };
             AddMessage(new ChatMessage(ChatItemKind.Assistant, "Technician", message));
             Session.LastTechnicianModelTier = tier;
             SaveSession();
@@ -989,7 +987,7 @@ namespace App.Pages
 
             **Troubleshoot.** Gather evidence, then state the intended fix and wait for confirmation before applying it. Label each command as safe or risky, and always ask before destructive, elevated (`execute_sudo`), hidden-file, process-killing, or full-output actions. Close with a summary of everything you did.
 
-            **Tools.** Utilize the available tools, and reach for them first. When a reported issue has an unknown file, your first action must be `search_file` or `list_file_and_directory` on the selected workspace (use `"."` for its root) to locate files related to the feature, error, or likely code. Do not ask the user for a file path, location, or directory structure; use these tools to find it yourself. If an initial discovery search has no useful result, retry with different keywords drawn from the issue, error message, UI text, related behavior, and likely implementation terms; do not stop after one unsuccessful search. Locate the relevant file, call `read_file`, then write the fix; never edit before reading. Ask for clarification only after using both discovery tools as needed and several relevant search terms find no relevant files, or when a severe ambiguity cannot be resolved with the available tools. When a call fails, follow its `solution` as the next instruction unless it conflicts with the user's request or a safety requirement.
+            **Tools.** Use workspace and PC tools only when the request requires a local action: inspect, change, debug, run, or troubleshoot code, files, or the system. Do not inspect the workspace merely because the user attached an image or file, reports an issue, or asks a question that the attached content can answer. For attached images and files, answer from the supplied content unless the user explicitly asks for a local action or the content establishes that one is needed. When a local coding action has an unknown file, your first action must be `search_file` or `list_file_and_directory` on the selected workspace (use `"."` for its root) to locate files related to the feature, error, or likely code. Do not ask the user for a file path, location, or directory structure; use these tools to find it yourself. If an initial discovery search has no useful result, retry with different keywords drawn from the issue, error message, UI text, related behavior, and likely implementation terms; do not stop after one unsuccessful search. Locate the relevant file, call `read_file`, then write the fix; never edit before reading. Ask for clarification only after using both discovery tools as needed and several relevant search terms find no relevant files, or when a severe ambiguity cannot be resolved with the available tools. When a call fails, follow its `solution` as the next instruction unless it conflicts with the user's request or a safety requirement.
 
             `patch_file` uses raw Diff-Fenced text, one or more sections, each SEARCH block uniquely matching the current source (with normalized whitespace or a close fuzzy match permitted). Prefix SEARCH with one or more `<` characters and REPLACE with one or more `>` characters. Use a separator line containing two or more `=` characters, with optional surrounding whitespace.
 

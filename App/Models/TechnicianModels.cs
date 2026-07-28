@@ -2,8 +2,8 @@ using System;
 
 namespace App.Models
 {
-    internal enum TechnicianModelTier { Standard, Escalated }
-    internal enum TechnicianCheckpoint { None, CompactAndUpgrade, CourseCorrect, Stop }
+    internal enum TechnicianModelTier { Standard, HighThinking, Escalated }
+    internal enum TechnicianCheckpoint { None, CompactAndRaiseThinking, CompactAndUpgrade, Stop }
     internal enum TechnicianContextRegion { Workspace, Session, Specialist }
 
     internal sealed record TechnicianTurnClassification(
@@ -11,11 +11,13 @@ namespace App.Models
         string NewContext,
         bool RequestPlan,
         bool RequestRetry,
-        bool RequestResearch)
+        bool RequestResearch,
+        bool RequiresExecution)
     {
         public static TechnicianTurnClassification SafeContinuation { get; } = new(
             true,
             string.Empty,
+            false,
             false,
             false,
             false);
