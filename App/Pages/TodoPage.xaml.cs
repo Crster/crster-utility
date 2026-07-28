@@ -392,7 +392,12 @@ namespace App.Pages
 
         private UIElement CreateTodoItem(TodoDocument todo, bool urgent)
         {
-            var root = new Grid { Padding = new Thickness(4, 8, 4, 8), MinHeight = 58 };
+            var root = new Grid
+            {
+                Padding = new Thickness(4, 8, 4, 8),
+                MinHeight = 58,
+                Background = new SolidColorBrush(Colors.Transparent)
+            };
             root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             root.ColumnDefinitions.Add(new ColumnDefinition());
             root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -609,7 +614,7 @@ namespace App.Pages
 
         private static Button IconButton(string glyph, string toolTip)
         {
-            var button = new Button { Content = new FontIcon { Glyph = glyph }, Padding = new Thickness(8) };
+            var button = new Button { Content = new FontIcon { Glyph = glyph, FontSize = 14 }, Padding = new Thickness(8) };
             ToolTipService.SetToolTip(button, toolTip);
             return button;
         }
