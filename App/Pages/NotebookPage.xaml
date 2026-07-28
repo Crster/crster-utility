@@ -36,7 +36,7 @@
                         <Button Tag="random" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Random"><FontIcon Glyph="&#xE8B1;" /></Button>
                         <Button Tag="improve" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Improve"><FontIcon Glyph="&#xF4A5;" /></Button>
                     </StackPanel>
-                <Button Grid.Column="1" Tag="new" Click="ToolButton_Click" Content="New note" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False">
+                <Button x:Name="NewNoteButton" Grid.Column="1" Tag="new" Click="ToolButton_Click" Content="New note" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False">
                     <Button.ContentTemplate>
                         <DataTemplate>
                             <StackPanel Orientation="Horizontal" Spacing="6">
@@ -46,12 +46,13 @@
                         </DataTemplate>
                     </Button.ContentTemplate>
                 </Button>
+                <Button x:Name="SaveNoteButton" Grid.Column="1" Tag="save" Click="ToolButton_Click" Content="Save note" Visibility="Collapsed" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False" />
                 </Grid>
             </Border>
 
         <Grid Grid.Row="2">
             <ListView x:Name="BlocksHost"
-                      Padding="0"
+                      Padding="0,0,16,0"
                       HorizontalContentAlignment="Stretch"
                       SelectionMode="None"
                       IsItemClickEnabled="False"
@@ -93,6 +94,20 @@
                 </ItemsPanelTemplate>
             </ListView.ItemsPanel>
             </ListView>
+            <Grid x:Name="NoteEditorView" Visibility="Collapsed">
+                <TextBox x:Name="NoteEditor"
+                         KeyDown="NoteEditor_KeyDown"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         VerticalAlignment="Stretch"
+                         VerticalContentAlignment="Top"
+                         Padding="12"
+                         Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                         BorderThickness="1"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+            </Grid>
             <!-- Section: Empty State -->
             <StackPanel x:Name="EmptyState"
                         Visibility="Collapsed"

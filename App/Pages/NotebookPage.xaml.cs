@@ -11,6 +11,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Navigation;
+using Windows.System;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
 
@@ -21,7 +22,8 @@ namespace App.Pages
         private readonly NotebookDatabaseService _database = new();
         private readonly ObservableCollection<NotebookEntry> _entries = [];
         private NotebookAttachmentStorageService? _attachmentStorage;
-        private NotebookEntry? _entryToEdit;
+        private NotebookEntry? _editingEntry;
+        private bool _isCreatingNote;
         private Noteblock? _hoveredBlock;
         private Noteblock? _focusedBlock;
         private bool _isLoading;
@@ -62,14 +64,18 @@ namespace App.Pages
             }
             if (type == "new")
             {
-                AddEntry(string.Empty, true);
-                UpdateEmptyState();
+                OpenEditor(new NotebookEntry { Type = "note", Timestamp = DateTime.UtcNow }, true);
+                return;
+            }
+            if (type == "save")
+            {
+                await SaveEditingAsync();
                 return;
             }
             if (type is "image" or "file") { await AddAttachmentAsync(type); return; }
             if (type is "date" or "generated_password" or "random")
             {
-                EnsureEditableBlock()?.InsertValue(type switch
+                InsertEditorText(type switch
                 {
                     "date" => DateTime.Now.ToString("g"),
                     "generated_password" => $"@password{{{NotebookShortcutService.CreateReadablePassword()}}}",
@@ -78,7 +84,7 @@ namespace App.Pages
                 return;
             }
 
-            EnsureEditableBlock()?.InsertSyntax(type switch
+            InsertEditorSyntax(type switch
             {
                 "heading" => ("# ", string.Empty),
                 "bold" => ("**", "**"),
@@ -93,10 +99,9 @@ namespace App.Pages
 
         private async Task ImproveSelectionAsync(Button? button)
         {
-            var block = _focusedBlock ?? _hoveredBlock;
-            if (block is null || !block.TryCaptureSelection(out var selectionStart, out var selectedText))
+            if (_editingEntry is null || string.IsNullOrWhiteSpace(NoteEditor.SelectedText))
             {
-                SaveStatusText.Text = "Select text in an editable note to improve it.";
+                SaveStatusText.Text = "Select text in the note editor to improve it.";
                 return;
             }
             if (string.IsNullOrWhiteSpace(App.Settings.Current.GeminiApiKey))
@@ -109,11 +114,17 @@ namespace App.Pages
             SaveStatusText.Text = "Improving selection…";
             try
             {
+                var selectionStart = NoteEditor.SelectionStart;
+                var selectedText = NoteEditor.SelectedText;
                 using var client = new GeminiClient(App.Settings.Current.GeminiApiKey);
                 var improved = await client.ImproveWritingAsync(selectedText, CancellationToken.None);
-                SaveStatusText.Text = block.TryReplaceSelection(selectionStart, selectedText, improved)
-                    ? string.Empty
-                    : "The selection changed before the improvement completed; nothing was replaced.";
+                if (NoteEditor.SelectionStart != selectionStart || !string.Equals(NoteEditor.SelectedText, selectedText, StringComparison.Ordinal))
+                    SaveStatusText.Text = "The selection changed before the improvement completed; nothing was replaced.";
+                else
+                {
+                    NoteEditor.SelectedText = improved;
+                    SaveStatusText.Text = string.Empty;
+                }
             }
             catch (Exception exception)
             {
@@ -121,7 +132,6 @@ namespace App.Pages
             }
             finally
             {
-                block.EndSelectionOperation();
                 if (button is not null) button.IsEnabled = true;
             }
         }
@@ -139,37 +149,28 @@ namespace App.Pages
             if (file is null) return;
             var attachmentId = await _attachmentStorage.CopyFromPathAsync(file.Path);
             var target = $"local://{attachmentId}{file.FileType}";
-            EnsureEditableBlock()?.InsertText(type == "image"
+            InsertEditorText(type == "image"
                 ? $"![{System.IO.Path.GetFileNameWithoutExtension(file.Name)}]({target})"
                 : $"[{file.Name}]({target})");
-        }
-
-        private NotebookEntry AddEntry(string content, bool startEditing)
-        {
-            var entry = new NotebookEntry { Type = "note", Content = content, Timestamp = DateTime.UtcNow };
-            _entryToEdit = startEditing ? entry : null;
-            _entries.Insert(0, entry);
-            UpdateEmptyState();
-            return entry;
         }
 
         private void BlocksHost_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
         {
             if (e.OriginalSource is DependencyObject source && FindParent<Noteblock>(source) is not null) return;
             e.Handled = true;
-            AddEntry(string.Empty, true);
+            OpenEditor(new NotebookEntry { Type = "note", Timestamp = DateTime.UtcNow }, true);
         }
 
         private void Block_Loaded(object sender, RoutedEventArgs e)
         {
             if (sender is not Noteblock { DataContext: NotebookEntry entry } block || _attachmentStorage is null) return;
-            var startInEditMode = ReferenceEquals(entry, _entryToEdit);
-            if (startInEditMode) _entryToEdit = null;
-            block.Configure(entry, _attachmentStorage, startInEditMode);
+            block.Configure(entry, _attachmentStorage);
             block.RemoveRequested -= Block_RemoveRequested;
+            block.EditRequested -= Block_EditRequested;
             block.InteractionStateChanged -= Block_InteractionStateChanged;
             block.CommitRequested -= Block_CommitRequested;
             block.RemoveRequested += Block_RemoveRequested;
+            block.EditRequested += Block_EditRequested;
             block.InteractionStateChanged += Block_InteractionStateChanged;
             block.CommitRequested += Block_CommitRequested;
 
@@ -187,7 +188,7 @@ namespace App.Pages
             else if (ReferenceEquals(block, _hoveredBlock)) _hoveredBlock = null;
             if (block.IsEditorFocused) _focusedBlock = block;
             else if (ReferenceEquals(block, _focusedBlock)) _focusedBlock = null;
-            SetEditingToolbarEnabled(_focusedBlock is not null);
+            SetEditingToolbarEnabled(_editingEntry is not null || _focusedBlock is not null);
         }
 
         private void SetEditingToolbarEnabled(bool isEnabled)
@@ -197,6 +198,11 @@ namespace App.Pages
         }
 
         private Task<bool> Block_CommitRequested(Noteblock block) => SaveNotebookAsync();
+
+        private void Block_EditRequested(object? sender, EventArgs e)
+        {
+            if (sender is Noteblock block) OpenEditor(block.Entry, false);
+        }
 
         private void Block_RemoveRequested(object? sender, EventArgs e)
         {
@@ -208,13 +214,80 @@ namespace App.Pages
             _ = SaveNotebookAsync();
         }
 
-        private Noteblock? EnsureEditableBlock()
+        private void OpenEditor(NotebookEntry entry, bool isCreatingNote)
         {
-            var block = _focusedBlock ?? _hoveredBlock;
-            if (block is not null) { block.ShowEditor(); return block; }
-            var entry = AddEntry(string.Empty, true);
-            BlocksHost.UpdateLayout();
-            return (BlocksHost.ContainerFromItem(entry) as ListViewItem)?.ContentTemplateRoot as Noteblock;
+            _editingEntry = entry;
+            _isCreatingNote = isCreatingNote;
+            NoteEditor.Text = string.Empty;
+            BlocksHost.Visibility = Visibility.Collapsed;
+            EmptyState.Visibility = Visibility.Collapsed;
+            NoteEditorView.Visibility = Visibility.Visible;
+            NewNoteButton.Visibility = Visibility.Collapsed;
+            SaveNoteButton.Visibility = Visibility.Visible;
+            SetEditingToolbarEnabled(true);
+            _ = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (!ReferenceEquals(entry, _editingEntry)) return;
+                NoteEditor.Text = entry.Content;
+                NoteEditor.Focus(FocusState.Keyboard);
+                NoteEditor.SelectionStart = NoteEditor.Text.Length;
+                var scrollViewer = FindDescendant<ScrollViewer>(NoteEditor);
+                if (scrollViewer is not null) scrollViewer.ChangeView(null, scrollViewer.ScrollableHeight, null, true);
+            });
+        }
+
+        private async Task SaveEditingAsync()
+        {
+            if (_editingEntry is null) return;
+            _editingEntry.Content = NoteEditor.Text;
+            if (string.IsNullOrWhiteSpace(_editingEntry.Content))
+            {
+                if (_isCreatingNote) { CloseEditor(); return; }
+                _entries.Remove(_editingEntry);
+            }
+            else if (_isCreatingNote && !_entries.Contains(_editingEntry)) _entries.Insert(0, _editingEntry);
+
+            if (await SaveNotebookAsync()) CloseEditor();
+        }
+
+        private void CloseEditor()
+        {
+            _editingEntry = null;
+            _isCreatingNote = false;
+            NoteEditor.Text = string.Empty;
+            NoteEditorView.Visibility = Visibility.Collapsed;
+            BlocksHost.Visibility = Visibility.Visible;
+            NewNoteButton.Visibility = Visibility.Visible;
+            SaveNoteButton.Visibility = Visibility.Collapsed;
+            SetEditingToolbarEnabled(false);
+            UpdateEmptyState();
+        }
+
+        private void NoteEditor_KeyDown(object sender, KeyRoutedEventArgs e)
+        {
+            if (e.Key != VirtualKey.Escape) return;
+            e.Handled = true;
+            CloseEditor();
+        }
+
+        private void InsertEditorSyntax((string Prefix, string Suffix) syntax)
+        {
+            if (_editingEntry is null) return;
+            var selected = NoteEditor.SelectedText;
+            NoteEditor.SelectedText = syntax.Prefix + selected + syntax.Suffix;
+            NoteEditor.SelectionStart -= syntax.Suffix.Length;
+            NoteEditor.SelectionLength = selected.Length;
+            NoteEditor.Focus(FocusState.Keyboard);
+        }
+
+        private void InsertEditorText(string text)
+        {
+            if (_editingEntry is null) return;
+            var separator = NoteEditor.SelectionStart > 0 && NoteEditor.Text[NoteEditor.SelectionStart - 1] is not ('\r' or '\n') ? Environment.NewLine : string.Empty;
+            NoteEditor.SelectedText = separator + text;
+            NoteEditor.SelectionStart += (separator + text).Length;
+            NoteEditor.SelectionLength = 0;
+            NoteEditor.Focus(FocusState.Keyboard);
         }
 
         private static T? FindParent<T>(DependencyObject? source) where T : DependencyObject
@@ -223,6 +296,17 @@ namespace App.Pages
             {
                 if (source is T match) return match;
                 source = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(source);
+            }
+            return null;
+        }
+
+        private static T? FindDescendant<T>(DependencyObject source) where T : DependencyObject
+        {
+            for (var index = 0; index < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(source); index++)
+            {
+                var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(source, index);
+                if (child is T match) return match;
+                if (FindDescendant<T>(child) is { } descendant) return descendant;
             }
             return null;
         }

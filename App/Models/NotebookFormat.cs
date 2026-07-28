@@ -11,6 +11,13 @@ namespace App.Models
 {
     internal static partial class NotebookFormat
     {
+        private const int FullNoteEmbeddingCharacterLimit = 1_000;
+        private const int LargeNoteEmbeddingCharacterLimit = 3_000;
+        private const int LargeNoteEmbeddingSourceCharacterLimit = 1_000;
+        private const int HeadingEmbeddingCharacterLimit = 100;
+        private const int FallbackEmbeddingLineLimit = 4;
+        private const int FallbackEmbeddingWordLimit = 45;
+        private const int FallbackEmbeddingCharacterLimit = 256;
         private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
 
         public static string PrepareMarkdown(string content, bool includePasswords = true)
@@ -35,6 +42,25 @@ namespace App.Models
                 .Select(block => InlineText(block.Inline))
                 .Where(value => !string.IsNullOrWhiteSpace(value));
             return string.Join(' ', parts).Trim();
+        }
+
+        public static string CreateEmbeddingText(string content)
+        {
+            if (content.Length <= FullNoteEmbeddingCharacterLimit) return content;
+
+            var source = content.Length > LargeNoteEmbeddingCharacterLimit
+                ? content[^LargeNoteEmbeddingSourceCharacterLimit..]
+                : content;
+            var lines = Normalize(source).Split('\n');
+            var headings = string.Join('\n', lines
+                .Where(line => line.StartsWith('#'))
+                .Select(line => line.Length <= HeadingEmbeddingCharacterLimit ? line : line[..HeadingEmbeddingCharacterLimit]));
+            if (!string.IsNullOrWhiteSpace(headings)) return headings;
+
+            var fallback = string.Join('\n', lines.TakeLast(FallbackEmbeddingLineLimit));
+            var words = Regex.Matches(fallback, @"\S+").TakeLast(FallbackEmbeddingWordLimit).Select(match => match.Value);
+            var text = string.Join(' ', words);
+            return text.Length <= FallbackEmbeddingCharacterLimit ? text : text[..FallbackEmbeddingCharacterLimit];
         }
 
         public static List<string> ExtractAttachmentIds(string content)

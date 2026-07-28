@@ -1,3 +1,4 @@
+using App.Models;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,7 +26,10 @@ namespace App.Services
                 var database = App.Settings.Database;
                 foreach (var note in database.Notes.FindAll())
                 {
-                    note.Embedding = NotebookDatabaseService.FloatsToBytes(await client.EmbedNoteAsync(note.Value, CancellationToken.None));
+                    var embeddingText = NotebookFormat.CreateEmbeddingText(note.Value);
+                    note.Embedding = string.IsNullOrWhiteSpace(embeddingText)
+                        ? []
+                        : NotebookDatabaseService.FloatsToBytes(await client.EmbedNoteAsync(embeddingText, CancellationToken.None));
                     database.Notes.Update(note);
                 }
                 foreach (var memo in database.Memos.FindAll())

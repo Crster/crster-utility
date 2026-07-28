@@ -93,7 +93,10 @@ namespace App.Services
                         continue;
                     }
 
-                    var embedding = await gemini.EmbedNoteAsync(entry.Content, CancellationToken.None);
+                    var embeddingText = NotebookFormat.CreateEmbeddingText(entry.Content);
+                    var embedding = string.IsNullOrWhiteSpace(embeddingText)
+                        ? []
+                        : await gemini.EmbedNoteAsync(embeddingText, CancellationToken.None);
                     prepared.Add(new NoteDocument
                     {
                         Id = entry.Key,

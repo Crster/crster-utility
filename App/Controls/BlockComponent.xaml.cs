@@ -34,8 +34,10 @@ namespace App.Controls
         private bool _isCommitting;
         private bool _isSearchHighlighted;
         private readonly DispatcherTimer _initialFocusTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
+        private readonly DispatcherTimer _resizeTimer = new() { Interval = TimeSpan.FromMilliseconds(75) };
 
         public event EventHandler? RemoveRequested;
+        public event EventHandler? EditRequested;
         public event EventHandler? InteractionStateChanged;
         public event Func<Noteblock, Task<bool>>? CommitRequested;
 
@@ -49,6 +51,11 @@ namespace App.Controls
             HorizontalAlignment = HorizontalAlignment.Stretch;
             AddHandler(DoubleTappedEvent, new DoubleTappedEventHandler(Noteblock_DoubleTapped), true);
             _initialFocusTimer.Tick += (_, _) => { _initialFocusTimer.Stop(); _isInitialEditorFocus = false; };
+            _resizeTimer.Tick += (_, _) =>
+            {
+                _resizeTimer.Stop();
+                if (_editor is not null) ResizeEditor(_editor);
+            };
         }
 
         internal void Configure(NotebookEntry entry, NotebookAttachmentStorageService attachmentStorage, bool startInEditMode = false)
@@ -135,7 +142,7 @@ namespace App.Controls
         private void Noteblock_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
         {
             e.Handled = true;
-            ShowEditor();
+            EditRequested?.Invoke(this, EventArgs.Empty);
         }
 
         private void Root_PointerEntered(object sender, PointerRoutedEventArgs e)
@@ -190,6 +197,7 @@ namespace App.Controls
         private void ShowPreview()
         {
             _initialFocusTimer.Stop();
+            _resizeTimer.Stop();
             _isInitialEditorFocus = false;
             _editor = null;
             _editorOriginalContent = null;
@@ -201,6 +209,7 @@ namespace App.Controls
             var preview = new MarkdownView { Markdown = _entry.Content };
             preview.ConfigureNotebook(id => _attachmentStorage?.GetFullPath(id));
             ContentHost.Children.Add(preview);
+            ScrollToBottom();
         }
 
         private void ShowEditorContent()
@@ -209,9 +218,9 @@ namespace App.Controls
             _editorOriginalContent = _entry.Content;
             _isInitialEditorFocus = true;
             ContentHost.Children.Clear();
-            Root.Padding = new Thickness(0);
+            Root.Padding = new Thickness(10);
             Root.Background = (Brush)Application.Current.Resources["LayerOnMicaBaseAltFillColorDefaultBrush"];
-            var editor = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(10), BorderThickness = new Thickness(0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), Text = _entry.Content };
+            var editor = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(0), BorderThickness = new Thickness(0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), Text = _entry.Content };
             ScrollViewer.SetVerticalScrollBarVisibility(editor, ScrollBarVisibility.Disabled);
             editor.TextChanged += Editor_TextChanged;
             editor.SizeChanged += Editor_SizeChanged;
@@ -222,13 +231,21 @@ namespace App.Controls
             _editor = editor;
             ContentHost.Children.Add(editor);
             _ = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { editor.Focus(FocusState.Keyboard); editor.SelectionStart = editor.Text.Length; });
+            ScrollToBottom();
+        }
+
+        private void ScrollToBottom()
+        {
+            _ = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+                BlockScrollViewer.ChangeView(null, BlockScrollViewer.ScrollableHeight, null, true));
         }
 
         private void Editor_TextChanged(object sender, TextChangedEventArgs e)
         {
             if (_entry is null || sender is not TextBox editor) return;
             _entry.Content = editor.Text;
-            ResizeEditor(editor);
+            _resizeTimer.Stop();
+            _resizeTimer.Start();
         }
 
         private static void Editor_SizeChanged(object sender, SizeChangedEventArgs e)
