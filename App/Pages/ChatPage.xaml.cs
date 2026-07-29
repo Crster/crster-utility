@@ -301,6 +301,15 @@ namespace App.Pages
                             Session.History.Add(step);
                         }
                     }
+                    else
+                    {
+                        // Gemini 3+ requires every model-generated step, including signed thought
+                        // steps, to be replayed exactly before returning function results.
+                        foreach (var step in result.Steps)
+                        {
+                            Session.History.Add((JsonObject)step.DeepClone());
+                        }
+                    }
                     PruneHistory();
                     SaveSession();
                     if (!string.IsNullOrWhiteSpace(result.Thinking))
@@ -375,11 +384,6 @@ namespace App.Pages
                             Image: toolResult.Image,
                             ToolArguments: (JsonObject)call.Arguments.DeepClone(),
                             ToolSucceeded: toolResult.Success));
-                        var functionCallStep = result.Steps.FirstOrDefault(step =>
-                            string.Equals(step["type"]?.GetValue<string>(), "function_call", StringComparison.Ordinal)
-                            && string.Equals(step["id"]?.GetValue<string>(), call.Id, StringComparison.Ordinal))
-                            ?? throw new InvalidOperationException($"Gemini omitted the function-call step for call “{call.Id}”.");
-                        Session.History.Add((JsonObject)functionCallStep.DeepClone());
                         Session.History.Add(GeminiClient.CreateFunctionResult(call, toolResult));
                     }
                     PruneHistory();
@@ -1070,7 +1074,7 @@ namespace App.Pages
         {
             if (_personality == ChatPersonality.Technician)
             {
-                var result = await CompactTechnicianAsync(showContextPanel: true);
+                var result = await CompactTechnicianAsync();
                 StatusText.Text = result.Success ? "Conversation compacted into context." : result.Output;
                 return;
             }
@@ -1106,9 +1110,6 @@ namespace App.Pages
                 SaveSession();
                 SetComposerText(string.Empty);
                 RenderSession();
-                ContextPanel.Visibility = Visibility.Visible;
-                ContextButton.IsChecked = true;
-                ToolTipService.SetToolTip(ContextButton, "Hide conversation context");
                 StatusText.Text = "Conversation compacted into context.";
             }
             catch (OperationCanceledException) { StatusText.Text = "Compaction stopped."; }
@@ -1147,9 +1148,7 @@ namespace App.Pages
             _sessionStorage.Delete(personality);
         }
 
-        private Task<ToolResult> CompactTechnicianAsync() => CompactTechnicianAsync(showContextPanel: false);
-
-        private async Task<ToolResult> CompactTechnicianAsync(bool showContextPanel)
+        private async Task<ToolResult> CompactTechnicianAsync()
         {
             if (_technicianOrchestrator is null) return new ToolResult(false, "{\"status\":\"failed\",\"summary\":\"Technician is not connected.\"}");
             if (Session.Messages.Count == 0)
@@ -1169,14 +1168,8 @@ namespace App.Pages
             Session.Messages.Clear();
             SaveSession();
             SetComposerText(string.Empty);
-            if (showContextPanel)
-            {
-                ContextPanel.Visibility = Visibility.Visible;
-                ContextButton.IsChecked = true;
-                ToolTipService.SetToolTip(ContextButton, "Hide conversation context");
-            }
             RenderSession();
-            return new ToolResult(true, new JsonObject { ["status"] = "completed", ["summary"] = "Compacted chat into the Context panel." }.ToJsonString());
+            return new ToolResult(true, new JsonObject { ["status"] = "completed", ["summary"] = "Compacted chat into context." }.ToJsonString());
         }
 
         private async Task<bool> ConfirmTechnicianActionAsync(string message)
@@ -1469,7 +1462,7 @@ namespace App.Pages
             SetBusy(true, "Compacting conversation...");
             try
             {
-                var result = await CompactTechnicianAsync(showContextPanel: true);
+                var result = await CompactTechnicianAsync();
                 if (!result.Success)
                 {
                     StatusText.Text = result.Output;
@@ -1691,6 +1684,9 @@ namespace App.Pages
 
         private static FrameworkElement CreateToolResultView(string content)
         {
+            if (!LooksLikeJsonContainer(content))
+                return CreateToolResultContainer(CreateToolTextBlock(content));
+
             try
             {
                 var root = JsonNode.Parse(content);
@@ -1737,6 +1733,8 @@ namespace App.Pages
 
         private static bool IsCompletedToolResult(string content)
         {
+            if (!LooksLikeJsonContainer(content)) return false;
+
             try
             {
                 if (JsonNode.Parse(content) is not JsonObject root) return false;
@@ -1746,6 +1744,12 @@ namespace App.Pages
             {
                 return false;
             }
+        }
+
+        private static bool LooksLikeJsonContainer(string content)
+        {
+            var trimmed = content.AsSpan().TrimStart();
+            return !trimmed.IsEmpty && trimmed[0] is '{' or '[';
         }
 
         private static string HumanizeToolName(string name) => name switch
