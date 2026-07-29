@@ -11,8 +11,13 @@ namespace App.Services
 {
     internal sealed class ChatLogService
     {
+#if DEBUG
+        private const bool IsEnabled = true;
+#else
+        private const bool IsEnabled = false;
+#endif
         private static readonly SemaphoreSlim WriteLock = new(1, 1);
-        private readonly string _directory = ResolveDirectory();
+        private readonly string _directory = IsEnabled ? ResolveDirectory() : string.Empty;
 
         public string Path => ResolvePath(ChatPersonality.Technician);
 
@@ -34,6 +39,7 @@ namespace App.Services
 
         public async Task WriteAsync(string eventName, params (string Name, object? Value)[] properties)
         {
+            if (!IsEnabled) return;
             var details = string.Join(" ", properties.Select(property => $"{property.Name}={Normalize(property.Value)}"));
             var line = $"{DateTimeOffset.UtcNow:O} {eventName}{(details.Length == 0 ? string.Empty : $" {details}")}{Environment.NewLine}";
             await AppendAsync(ResolvePersonality(eventName, properties), line);
@@ -41,12 +47,14 @@ namespace App.Services
 
         public async Task WriteJsonAsync(string eventName, JsonObject payload)
         {
+            if (!IsEnabled) return;
             var line = $"{DateTimeOffset.UtcNow:O} {eventName} {payload.ToJsonString()}{Environment.NewLine}";
             await AppendAsync(ResolvePersonality(eventName, []), line);
         }
 
         public async Task WriteJsonAsync(ChatPersonality personality, string eventName, JsonObject payload)
         {
+            if (!IsEnabled) return;
             var line = $"{DateTimeOffset.UtcNow:O} {eventName} {payload.ToJsonString()}{Environment.NewLine}";
             await AppendAsync(personality, line);
         }

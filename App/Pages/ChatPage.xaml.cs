@@ -38,10 +38,6 @@ namespace App.Pages
         private const long MaximumProjectDocumentationFileBytes = 1_000_000;
         private const int MaximumProjectContextFileCount = 64;
         private const string EmptyResponseRecoveryPrompt = "Using the available tool results, give the user a concise direct answer now. Do not call another tool unless more information is required.";
-        private static readonly string[] RetryCommandForms = ["try", "retry", "retryagain", "tryagain", "repeat", "redo", "resend", "doitagain"];
-        private static readonly string[] RetryPolitePrefixes = ["please", "canyou", "couldyou", "wouldyou"];
-        private static readonly string[] ConfirmationCommandForms = ["yes", "yescontinue", "yesplease", "implementnow", "proceed", "goahead", "continue", "no", "dontcontinue", "donotcontinue", "stop", "cancel", "notnow", "nothanks"];
-        private static readonly string[] PartialPurgeCommandForms = ["clean", "cleanup", "clear", "newsession", "freshsession", "freshstart", "startover", "resetsession"];
         private static readonly HashSet<string> ProjectDocumentationFileNames = new(StringComparer.OrdinalIgnoreCase)
         {
             "README.md", "AGENTS.md", "CLAUDE.md"
@@ -75,7 +71,7 @@ namespace App.Pages
         private bool _renderingContext;
         private bool _changingPersonality;
         private bool _suppressAttachmentCleanup;
-        private TechnicianTurnClassification _technicianTurnClassification = TechnicianTurnClassification.SafeContinuation;
+        private TechnicianRequestMode _technicianRequestMode;
 
         public ChatPage()
         {
@@ -132,16 +128,18 @@ namespace App.Pages
         {
             if (_operationCancellation is not null) return;
             var composerPrompt = GetComposerText().Trim();
-            if (IsTechnicianPartialPurgeCommand(composerPrompt))
+            if (_client is null) throw new InvalidOperationException("Chat is not connected. Add a Gemini API key and reopen the Chat page.");
+            var prompt = composerPrompt;
+            var technicianMode = _personality != ChatPersonality.Technician
+                ? TechnicianRequestMode.Default
+                : ExtractTechnicianRequestMode(ref prompt);
+            if (technicianMode == TechnicianRequestMode.Clear)
             {
-                await PartiallyPurgeTechnicianSessionAsync();
+                var result = await CompactTechnicianAsync(showContextPanel: true);
+                StatusText.Text = result.Success ? "Conversation compacted into context." : result.Output;
                 return;
             }
-            if (_client is null) throw new InvalidOperationException("Chat is not connected. Add a Gemini API key and reopen the Chat page.");
-            var isTechnicianRetry = TryGetTechnicianRetryPrompt(composerPrompt, out var prompt);
-            if (!isTechnicianRetry) prompt = composerPrompt;
-            var isTechnicianConfirmation = !isTechnicianRetry && IsTechnicianConfirmationPrompt(composerPrompt);
-            var stagedAttachments = isTechnicianRetry ? [] : GetReferencedAttachments(prompt);
+            var stagedAttachments = GetReferencedAttachments(prompt);
             if (prompt.Length == 0 && stagedAttachments.Count == 0) return;
 
             _suppressAttachmentCleanup = true;
@@ -160,12 +158,8 @@ namespace App.Pages
             var uploadedAttachments = new List<ChatAttachment>();
             try
             {
-                if (isTechnicianRetry)
-                    await _chatLog.WriteAsync("technician.retry", ("promptLength", prompt.Length));
-                else if (isTechnicianConfirmation)
-                    await _chatLog.WriteAsync("technician.confirmation", ("promptLength", prompt.Length));
-                var shouldContinue = isTechnicianRetry || isTechnicianConfirmation || _personality != ChatPersonality.Technician
-                    || await PrepareTechnicianTurnAsync(prompt, stagedAttachments.Count > 0, _operationCancellation.Token);
+                var shouldContinue = _personality != ChatPersonality.Technician
+                    || await PrepareTechnicianTurnAsync(prompt, technicianMode, _operationCancellation.Token);
                 await _chatLog.WriteAsync("send.started",
                     ("personality", _personality),
                     ("model", Model()),
@@ -202,81 +196,21 @@ namespace App.Pages
             }
         }
 
-        private bool TryGetTechnicianRetryPrompt(string value, out string prompt)
+        private static TechnicianRequestMode ExtractTechnicianRequestMode(ref string prompt)
         {
-            prompt = string.Empty;
-            if (_personality != ChatPersonality.Technician || _messageAttachments.Count > 0 || !IsRetryCommand(value)) return false;
-
-            prompt = Session.Messages
-                .LastOrDefault(message => message.Kind == ChatItemKind.User && !string.IsNullOrWhiteSpace(message.Content))
-                ?.Content
-                ?? string.Empty;
-            return !string.IsNullOrWhiteSpace(prompt);
-        }
-
-        private static bool IsRetryCommand(string value)
-        {
-            var normalized = NormalizeShortCommand(value, RetryPolitePrefixes);
-            return IsFuzzyCommandMatch(normalized, RetryCommandForms);
-        }
-
-        private bool IsTechnicianConfirmationPrompt(string value) =>
-            _personality == ChatPersonality.Technician
-            && _messageAttachments.Count == 0
-            && Session.Messages.Any(message => message.Kind is ChatItemKind.User or ChatItemKind.Assistant)
-            && IsFuzzyCommandMatch(NormalizeShortCommand(value, RetryPolitePrefixes), ConfirmationCommandForms);
-
-        private bool IsTechnicianPartialPurgeCommand(string value) =>
-            _personality == ChatPersonality.Technician
-            && _messageAttachments.Count == 0
-            && IsFuzzyCommandMatch(NormalizeShortCommand(value, RetryPolitePrefixes), PartialPurgeCommandForms);
-
-        private async Task PartiallyPurgeTechnicianSessionAsync()
-        {
-            await DeleteRemoteAttachmentsAsync(_messageAttachments);
-            await DeleteTemporaryAttachmentFilesAsync(_messageAttachments);
-            _messageAttachments.Clear();
-            Session.History.Clear();
-            Session.Messages.Clear();
-            Session.LastTechnicianModelTier = null;
-            var context = new TechnicianContextDocument(Session.ContextText);
-            context.Clear(TechnicianContextRegion.Session);
-            context.Clear(TechnicianContextRegion.Specialist);
-            Session.ContextText = context.Text;
-            SaveSession();
-            SetComposerText(string.Empty);
-            RenderSession();
-            StatusText.Text = "Started a fresh Technician session; workspace and user context were retained.";
-            await _chatLog.WriteAsync("technician.partial_purge");
-        }
-
-        private static string NormalizeShortCommand(string value, IEnumerable<string> prefixes)
-        {
-            var normalized = new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
-            foreach (var prefix in prefixes)
-                if (normalized.StartsWith(prefix, StringComparison.Ordinal))
-                    normalized = normalized[prefix.Length..];
-            return normalized;
-        }
-
-        private static bool IsFuzzyCommandMatch(string value, IEnumerable<string> commands) =>
-            value.Length > 0 && commands.Any(command => value.Equals(command, StringComparison.Ordinal)
-                || (value.Length >= 3 && EditDistance(value, command) <= 1));
-
-        private static int EditDistance(string left, string right)
-        {
-            var previous = Enumerable.Range(0, right.Length + 1).ToArray();
-            for (var leftIndex = 1; leftIndex <= left.Length; leftIndex++)
+            var match = Regex.Match(prompt, @"^\s*(plan|think|smart|research|design|clear)\b\s*:?[\s-]*", RegexOptions.IgnoreCase);
+            if (!match.Success) return TechnicianRequestMode.Default;
+            prompt = prompt[match.Length..].Trim();
+            return match.Groups[1].Value.ToLowerInvariant() switch
             {
-                var current = new int[right.Length + 1];
-                current[0] = leftIndex;
-                for (var rightIndex = 1; rightIndex <= right.Length; rightIndex++)
-                    current[rightIndex] = Math.Min(
-                        Math.Min(previous[rightIndex] + 1, current[rightIndex - 1] + 1),
-                        previous[rightIndex - 1] + (left[leftIndex - 1] == right[rightIndex - 1] ? 0 : 1));
-                previous = current;
-            }
-            return previous[right.Length];
+                "plan" => TechnicianRequestMode.Plan,
+                "think" => TechnicianRequestMode.Think,
+                "smart" => TechnicianRequestMode.Smart,
+                "research" => TechnicianRequestMode.Research,
+                "design" => TechnicianRequestMode.Design,
+                "clear" => TechnicianRequestMode.Clear,
+                _ => TechnicianRequestMode.Default
+            };
         }
 
         private async Task RunInteractionAsync(JsonObject initialStep, string userPrompt)
@@ -288,17 +222,18 @@ namespace App.Pages
                 IReadOnlyList<JsonObject> nextSteps = [initialStep];
                 var round = 0;
                 var technicianToolCallCount = 0;
-                var technicianTier = (_technicianTurnClassification.RequestPlan || UserRequestedHighCostModel(userPrompt))
-                    ? TechnicianModelTier.Escalated
-                    : TechnicianModelTier.Standard;
+                var technicianTier = _technicianRequestMode switch
+                {
+                    TechnicianRequestMode.Smart => TechnicianModelTier.Escalated,
+                    TechnicianRequestMode.Think => TechnicianModelTier.HighThinking,
+                    _ => TechnicianModelTier.Standard
+                };
                 RecordTechnicianTier(technicianTier);
                 var handledFiveCallCheckpoint = false;
                 var handledEightCallCheckpoint = false;
                 var consecutiveFailedToolCalls = 0;
                 var troubleGuidanceGenerated = false;
                 var emptyCompletionRecoveryAttempted = false;
-                var technicianAppliedFileChange = false;
-                var technicianExecutionRecoveryCount = 0;
                 while (true)
                 {
                     round++;
@@ -390,13 +325,7 @@ namespace App.Pages
                     var isTechnicianToolRound = _personality == ChatPersonality.Technician
                         && result.FunctionCalls.Count > 0;
                     var responseText = IsEmptyResponseRecoveryEcho(result.Text) ? string.Empty : result.Text;
-                    var isPrematureTechnicianCompletion = _personality == ChatPersonality.Technician
-                        && result.FunctionCalls.Count == 0
-                        && TechnicianTurnStillRequiresExecution(
-                            _technicianTurnClassification,
-                            technicianAppliedFileChange)
-                        && technicianExecutionRecoveryCount < 2;
-                    if (!string.IsNullOrWhiteSpace(responseText) && !isTechnicianToolRound && !isPrematureTechnicianCompletion)
+                    if (!string.IsNullOrWhiteSpace(responseText) && !isTechnicianToolRound)
                     {
                         AddMessage(new ChatMessage(ChatItemKind.Assistant, _personality.ToString(), responseText));
                     }
@@ -424,50 +353,6 @@ namespace App.Pages
                     }
                     if (result.FunctionCalls.Count == 0)
                     {
-                        if (isPrematureTechnicianCompletion)
-                        {
-                            technicianExecutionRecoveryCount++;
-                            var recoveryEvidence = string.Empty;
-                            if (technicianExecutionRecoveryCount == 1 && _technicianTools is not null)
-                            {
-                                var discoveryArguments = new JsonObject
-                                {
-                                    ["path"] = ".",
-                                    ["pattern"] = ".*",
-                                    ["hidden"] = false
-                                };
-                                var discoveryResult = await _technicianTools.ExecuteAsync(
-                                    "list_file_and_directory",
-                                    discoveryArguments,
-                                    operationCancellation.Token);
-                                await LogToolExecutionAsync(
-                                    "list_file_and_directory",
-                                    discoveryArguments,
-                                    discoveryResult,
-                                    round,
-                                    automatic: true);
-                                AddMessage(new ChatMessage(
-                                    ChatItemKind.Tool,
-                                    "list_file_and_directory",
-                                    discoveryResult.Output,
-                                    ToolArguments: discoveryArguments,
-                                    ToolSucceeded: discoveryResult.Success));
-                                technicianToolCallCount++;
-                                recoveryEvidence = $"\n\nThe application already listed the workspace root for you. Use this evidence to choose search terms and continue:\n{discoveryResult.Output}";
-
-                            }
-                            nextSteps =
-                            [
-                                GeminiClient.CreateUserStep(
-                                    $"Your previous response was rejected because this implementation turn requires tool execution. Do not ask the user for a file path or directory structure. Call search_file with path \".\" now, try multiple request-related keywords when needed, read the relevant file, and complete the repair. Respond with a tool call, not a question, explanation, plan, or proposed code. Stop only for a specific blocker that the available tools cannot resolve.{recoveryEvidence}",
-                                    [])
-                            ];
-                            await _chatLog.WriteAsync(
-                                "technician.execution_recovery",
-                                ("attempt", technicianExecutionRecoveryCount),
-                                ("related", _technicianTurnClassification.Related));
-                            continue;
-                        }
                         break;
                     }
 
@@ -496,10 +381,6 @@ namespace App.Pages
 
                         var toolResult = await ExecuteToolAsync(call.Name, call.Arguments, operationCancellation.Token);
                         await LogToolExecutionAsync(call.Name, call.Arguments, toolResult, round, automatic: false);
-                        if (_personality == ChatPersonality.Technician
-                            && toolResult.Success
-                            && IsFileMutationTool(call.Name))
-                            technicianAppliedFileChange = true;
                         if (_personality == ChatPersonality.Technician) technicianToolCallCount++;
                         consecutiveFailedToolCalls = toolResult.Success ? 0 : consecutiveFailedToolCalls + 1;
                         AddMessage(new ChatMessage(
@@ -560,13 +441,6 @@ namespace App.Pages
                         await _chatLog.WriteAsync("technician.trouble_guidance", ("toolCallCount", technicianToolCallCount));
                     }
 
-                    if (_personality == ChatPersonality.Technician && !technicianAppliedFileChange)
-                    {
-                        responses.Add(GeminiClient.CreateUserStep(
-                            "Execution status: this turn has only inspected files; no file change has succeeded. If the request requires a code change, call patch_file or write_file now. Otherwise, state clearly that no files were changed. Never say or imply that a read_file result updated a file.",
-                            []));
-                    }
-
                     nextSteps = responses;
                 }
 
@@ -608,75 +482,37 @@ namespace App.Pages
             }
         }
 
-        private async Task<bool> PrepareTechnicianTurnAsync(string prompt, bool hasAttachments, CancellationToken token)
+        private async Task<bool> PrepareTechnicianTurnAsync(string prompt, TechnicianRequestMode mode, CancellationToken token)
         {
             if (_technicianOrchestrator is null) throw new InvalidOperationException("Technician orchestration is unavailable.");
 
-            var currentTurnStartIndex = Session.Messages.Count - 1;
-            var priorMessages = Session.Messages
-                .Take(Math.Max(0, Session.Messages.Count - 1))
-                .Where(message => message.IncludeInContext)
-                .Where(message => message.Kind is ChatItemKind.User or ChatItemKind.Assistant)
-                .ToList();
-            var recentConversation = Truncate(
-                string.Join("\n\n", priorMessages.TakeLast(4).Select(FormatTechnicianMessage)),
-                MaximumRelationshipContextCharacters);
-            var hasPreviousSession = priorMessages.Any(message => message.Kind is ChatItemKind.User or ChatItemKind.Assistant);
-            var classification = await _technicianOrchestrator.ClassifyAsync(prompt, recentConversation, hasPreviousSession, hasAttachments, token);
-            _technicianTurnClassification = classification;
-            var preservesSession = classification.Related || classification.RequestRetry;
-
-            if (!preservesSession)
-            {
-                var currentMessage = Session.Messages.Last();
-                var context = new TechnicianContextDocument(Session.ContextText);
-                context.ClearGeneratedRegions();
-                Session.ContextText = context.Text;
-                Session.History.Clear();
-                Session.Messages.Clear();
-                Session.Messages.Add(currentMessage);
-                Session.ProjectDocumentationScanned = false;
-                Session.ProjectDocumentationFingerprint = string.Empty;
-                await _chatLog.WriteAsync("technician.session_started", ("related", false));
-                RenderSession();
-                SaveSession();
-            }
+            _technicianRequestMode = mode;
 
             await LoadProjectDocumentationContextAsync(token);
-
-            if (!string.IsNullOrWhiteSpace(classification.NewContext))
-            {
-                ReplaceTechnicianContextRegion(TechnicianContextRegion.Session, classification.NewContext);
-                Session.History.Clear();
-                var currentTurn = Session.Messages.Skip(currentTurnStartIndex).ToList();
-                Session.Messages.Clear();
-                Session.Messages.AddRange(currentTurn);
-                RenderSession();
-                SaveSession();
-                await _chatLog.WriteAsync("technician.session_context_updated", ("related", preservesSession));
-            }
-
-            if (classification.RequestResearch)
+            if (mode is TechnicianRequestMode.Plan or TechnicianRequestMode.Research or TechnicianRequestMode.Design)
             {
                 try
                 {
-                    var researchContext = await _technicianOrchestrator.CreateResearchContextAsync(
-                        prompt,
-                        Session.ContextText,
-                        token);
-                    if (!string.IsNullOrWhiteSpace(researchContext))
+                    var specialistContext = mode switch
                     {
-                        ReplaceTechnicianContextRegion(TechnicianContextRegion.Specialist, $"### Research\n{researchContext}");
+                        TechnicianRequestMode.Plan => await _technicianOrchestrator.CreatePlanContextAsync(prompt, Session.ContextText, token),
+                        TechnicianRequestMode.Research => await _technicianOrchestrator.CreateResearchContextAsync(prompt, Session.ContextText, token),
+                        TechnicianRequestMode.Design => await _technicianOrchestrator.CreateDesignContextAsync(prompt, Session.ContextText, token),
+                        _ => string.Empty
+                    };
+                    if (!string.IsNullOrWhiteSpace(specialistContext))
+                    {
+                        ReplaceTechnicianContextRegion(TechnicianContextRegion.Specialist, $"### {mode}\n{specialistContext}");
                         AddMessage(new ChatMessage(
                             ChatItemKind.Thinking,
                             "Technician preparation",
-                            "Prepared research guidance before continuing."));
+                            $"Prepared {mode.ToString().ToLowerInvariant()} guidance before continuing."));
                     }
                 }
                 catch (Exception exception)
                 {
                     await _chatLog.WriteAsync("technician.specialist_failed",
-                        ("specialist", "research"),
+                        ("specialist", mode.ToString().ToLowerInvariant()),
                         ("exceptionType", exception.GetType().Name));
                     AddMessage(new ChatMessage(ChatItemKind.Tool, "specialist", exception.Message, ToolSucceeded: false));
                 }
@@ -784,15 +620,6 @@ namespace App.Pages
                 : await _secretaryTools.ExecuteAsync(name, arguments, token);
         }
 
-        private static bool IsFileMutationTool(string toolName) =>
-            toolName is "write_file" or "patch_file" or "delete_file";
-
-        private static bool UserRequestedHighCostModel(string prompt) =>
-            Regex.IsMatch(
-                prompt,
-                @"\b(?:use|switch|change|escalate|run)\b.{0,24}\bhigh[ -]cost model\b",
-                RegexOptions.IgnoreCase);
-
         private async Task LogToolExecutionAsync(
             string name,
             JsonObject arguments,
@@ -814,14 +641,6 @@ namespace App.Pages
                 ["output"] = output,
                 ["has_image"] = result.Image is not null
             });
-        }
-
-        private static bool TechnicianTurnStillRequiresExecution(
-            TechnicianTurnClassification classification,
-            bool appliedFileChange)
-        {
-            return classification.RequiresExecution
-                && !appliedFileChange;
         }
 
         private void RecordTechnicianTier(TechnicianModelTier tier)
@@ -981,20 +800,30 @@ namespace App.Pages
 
         private static string TechnicianInstruction() =>
             """
-            You are Technician, a senior developer and a Windows troubleshooter. You help the user with programming issues and PC issues. Briefly decline anything unrelated to those two roles.
+            # SYSTEM INSTRUCTIONS
+            **Role:** You are Technician, an automated code editor and PC troubleshooting agent. Your primary action is executing tools to inspect and fix the local workspace.
 
-            **Code.** You are an agentic coder. Work only inside the selected workspace path. State your plan in a line or two, then apply the complete fix the user asked for — complete meaning nothing missing, not extra. Add no features, options, abstractions, fallbacks, or defensive code beyond the request. Follow project conventions and preserve architecture and line endings. A clear request to fix, change, add, remove, or refactor code authorizes the full inspect, edit, and verification workflow; do not ask for permission to inspect or edit. For questions about the project, answer comprehensively.
+            ## 1. DIRECTIVES
+            - First output of every turn is a tool call. No greetings, no narration between calls.
+            - Never ask for a filename or path — the user doesn't know them. Finding files is your job. The §3 safety check is the only question you may ask.
+            - No "not found" before 6 distinct searches (rewording doesn't count). Budget: 20 calls.
+            - `§image-HZY6` / `§file-HZY6` are context. Mine for keywords; don't describe them.
 
-            **Troubleshoot.** Gather evidence, then state the intended fix and wait for confirmation before applying it. Label each command as safe or risky, and always ask before destructive, elevated (`execute_sudo`), hidden-file, process-killing, or full-output actions. Close with a summary of everything you did.
+            ## 2. WORK
+            - Start with `list_file_and_directory` at `.`, then vary `search_file` across synonyms, case/plural variants, partial stems, configs, and subdirectories until found.
+            - `read_file` before editing. Tool returns a suggestion → follow it next call.
+            - Done = `patch_file` applied. Reading, diagnosing, and proposing are not done. Never describe a fix instead of applying it; never ask "should I fix this?" Multiple issues → patch all. Ambiguous → pick the likeliest, apply, note it.
+            - After patching, `read_file` the changed region to confirm, then reply in clean Markdown: what broke, what changed, any assumptions.
 
-            **Tools.** Use workspace and PC tools only when the request requires a local action: inspect, change, debug, run, or troubleshoot code, files, or the system. Do not inspect the workspace merely because the user attached an image or file, reports an issue, or asks a question that the attached content can answer. For attached images and files, answer from the supplied content unless the user explicitly asks for a local action or the content establishes that one is needed. When a local coding action has an unknown file, your first action must be `search_file` or `list_file_and_directory` on the selected workspace (use `"."` for its root) to locate files related to the feature, error, or likely code. Do not ask the user for a file path, location, or directory structure; use these tools to find it yourself. If an initial discovery search has no useful result, retry with different keywords drawn from the issue, error message, UI text, related behavior, and likely implementation terms; do not stop after one unsuccessful search. Locate the relevant file, call `read_file`, then write the fix; never edit before reading. Ask for clarification only after using both discovery tools as needed and several relevant search terms find no relevant files, or when a severe ambiguity cannot be resolved with the available tools. When a call fails, follow its `solution` as the next instruction unless it conflicts with the user's request or a safety requirement.
+            ## 3. SAFETY
+            No permission needed to search, read, write, or run safe commands. **Confirm before** deleting files, changing system settings, or anything that could damage the PC — the sole exception to the no-questions rule.
 
-            `patch_file` uses raw Diff-Fenced text, one or more sections, each SEARCH block uniquely matching the current source (with normalized whitespace or a close fuzzy match permitted). Prefix SEARCH with one or more `<` characters and REPLACE with one or more `>` characters. Use a separator line containing two or more `=` characters, with optional surrounding whitespace.
-
+            ## 4. PATCH FORMAT
+            `patch_file`, exact Diff-Fenced format:
             <<<<<<< SEARCH
-            const timeout = 3000;
+            [exact current code to replace]
             =======
-            const timeout = 30000;
+            [new replacement code]
             >>>>>>> REPLACE
             """;
 
@@ -1970,28 +1799,34 @@ namespace App.Pages
         private async void ComposerBox_Paste(object sender, TextControlPasteEventArgs e)
         {
             if (_client is null || _isBusy || _operationCancellation is not null) return;
-            var content = Clipboard.GetContent();
-            var containsAttachmentContent = content.Contains(StandardDataFormats.StorageItems) || content.Contains(StandardDataFormats.Bitmap);
-            if (containsAttachmentContent) e.Handled = true;
-            var files = content.Contains(StandardDataFormats.StorageItems)
-                ? (await content.GetStorageItemsAsync()).OfType<StorageFile>().Where(IsMessageAttachmentFile).ToList()
-                : [];
-            if (files.Count > 0)
-            {
-                await AddMessageAttachmentsAsync(files);
-                return;
-            }
-            if (!content.Contains(StandardDataFormats.Bitmap))
-            {
-                if (!content.Contains(StandardDataFormats.Text)) return;
-                e.Handled = true;
-                InsertPlainTextIntoComposer(await content.GetTextAsync());
-                return;
-            }
-
             StorageFile? clipboardImage = null;
             try
             {
+                var content = Clipboard.GetContent();
+                var containsStorageItems = content.Contains(StandardDataFormats.StorageItems);
+                var containsBitmap = content.Contains(StandardDataFormats.Bitmap);
+                var containsText = content.Contains(StandardDataFormats.Text);
+                if (!containsStorageItems && !containsBitmap && !containsText) return;
+
+                e.Handled = true;
+                var files = containsStorageItems
+                    ? (await content.GetStorageItemsAsync()).OfType<StorageFile>().Where(IsMessageAttachmentFile).ToList()
+                    : [];
+                if (files.Count > 0)
+                {
+                    await AddMessageAttachmentsAsync(files);
+                    return;
+                }
+                if (!containsBitmap)
+                {
+                    if (containsText)
+                    {
+                        var text = await content.GetTextAsync();
+                        await UpdateComposerAfterPasteAsync(() => InsertPlainTextIntoComposer(text));
+                    }
+                    return;
+                }
+
                 var bitmapReference = await content.GetBitmapAsync();
                 clipboardImage = await ApplicationData.Current.TemporaryFolder.CreateFileAsync($"{Guid.NewGuid():N}.png", CreationCollisionOption.FailIfExists);
                 using var input = await bitmapReference.OpenReadAsync();
@@ -2003,7 +1838,11 @@ namespace App.Pages
             catch (Exception exception)
             {
                 AddMessage(new ChatMessage(ChatItemKind.Error, "Clipboard attachment error", exception.Message));
-                if (clipboardImage is not null) await clipboardImage.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                if (clipboardImage is not null)
+                {
+                    try { await clipboardImage.DeleteAsync(StorageDeleteOption.PermanentDelete); }
+                    catch { }
+                }
             }
         }
 
@@ -2027,21 +1866,42 @@ namespace App.Pages
             await InsertAttachmentTokensIntoComposerAsync(attachments);
         }
 
-        private Task InsertAttachmentTokensIntoComposerAsync(IReadOnlyList<ChatAttachment> attachments)
+        private async Task InsertAttachmentTokensIntoComposerAsync(IReadOnlyList<ChatAttachment> attachments)
         {
-            if (attachments.Count == 0) return Task.CompletedTask;
+            if (attachments.Count == 0) return;
             var tokens = string.Concat(attachments.Select(CreateAttachmentToken));
-            var selectionStart = ComposerBox.SelectionStart;
-            var text = GetComposerText();
-            var hasTextBefore = selectionStart > 0 && !char.IsWhiteSpace(text[selectionStart - 1]);
-            var prefix = hasTextBefore ? " " : string.Empty;
-            var insertion = $"{prefix}{tokens}";
-            ComposerBox.SelectedText = insertion;
-            ComposerBox.SelectionStart = selectionStart + insertion.Length;
-            ComposerBox.SelectionLength = 0;
+            await UpdateComposerAfterPasteAsync(() =>
+            {
+                var selectionStart = ComposerBox.SelectionStart;
+                var text = GetComposerText();
+                var hasTextBefore = selectionStart > 0 && !char.IsWhiteSpace(text[selectionStart - 1]);
+                var prefix = hasTextBefore ? " " : string.Empty;
+                var insertion = $"{prefix}{tokens}";
+                ComposerBox.SelectedText = insertion;
+                ComposerBox.SelectionStart = selectionStart + insertion.Length;
+                ComposerBox.SelectionLength = 0;
+            });
             _messageAttachments.AddRange(attachments);
             UpdateSendAvailability();
-            return Task.CompletedTask;
+        }
+
+        private Task UpdateComposerAfterPasteAsync(Action update)
+        {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!DispatcherQueue.TryEnqueue(() =>
+            {
+                try
+                {
+                    update();
+                    completion.SetResult();
+                }
+                catch (Exception exception)
+                {
+                    completion.SetException(exception);
+                }
+            }))
+                completion.SetException(new InvalidOperationException("The composer is no longer available."));
+            return completion.Task;
         }
 
         private void InsertPlainTextIntoComposer(string text)
