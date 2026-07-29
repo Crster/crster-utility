@@ -84,6 +84,7 @@ namespace App.Windows
         {
             IsHiddenToTray = false;
             AppWindow.Show();
+            Activate();
             NativeInputService.ActivateWindow(WindowNative.GetWindowHandle(this));
         }
 
