@@ -34,7 +34,6 @@ namespace App.Controls
         private bool _isCommitting;
         private bool _isSearchHighlighted;
         private readonly DispatcherTimer _initialFocusTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
-        private readonly DispatcherTimer _resizeTimer = new() { Interval = TimeSpan.FromMilliseconds(75) };
 
         public event EventHandler? RemoveRequested;
         public event EventHandler? EditRequested;
@@ -51,11 +50,6 @@ namespace App.Controls
             HorizontalAlignment = HorizontalAlignment.Stretch;
             AddHandler(DoubleTappedEvent, new DoubleTappedEventHandler(Noteblock_DoubleTapped), true);
             _initialFocusTimer.Tick += (_, _) => { _initialFocusTimer.Stop(); _isInitialEditorFocus = false; };
-            _resizeTimer.Tick += (_, _) =>
-            {
-                _resizeTimer.Stop();
-                if (_editor is not null) ResizeEditor(_editor);
-            };
         }
 
         internal void Configure(NotebookEntry entry, NotebookAttachmentStorageService attachmentStorage, bool startInEditMode = false)
@@ -159,28 +153,6 @@ namespace App.Controls
             InteractionStateChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        private void Root_GotFocus(object sender, RoutedEventArgs e) =>
-            BlockScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-
-        private void Root_LostFocus(object sender, RoutedEventArgs e)
-        {
-            _ = DispatcherQueue.TryEnqueue(() =>
-            {
-                if (XamlRoot is null || IsDescendantOf(FocusManager.GetFocusedElement(XamlRoot) as DependencyObject, Root)) return;
-                BlockScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Hidden;
-            });
-        }
-
-        private static bool IsDescendantOf(DependencyObject? element, DependencyObject ancestor)
-        {
-            while (element is not null)
-            {
-                if (ReferenceEquals(element, ancestor)) return true;
-                element = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(element);
-            }
-            return false;
-        }
-
         private void SetHoverBackground()
         {
             if (_isSearchHighlighted)
@@ -197,7 +169,6 @@ namespace App.Controls
         private void ShowPreview()
         {
             _initialFocusTimer.Stop();
-            _resizeTimer.Stop();
             _isInitialEditorFocus = false;
             _editor = null;
             _editorOriginalContent = null;
@@ -223,11 +194,9 @@ namespace App.Controls
             var editor = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 40, HorizontalAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(0), BorderThickness = new Thickness(0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), Text = _entry.Content };
             ScrollViewer.SetVerticalScrollBarVisibility(editor, ScrollBarVisibility.Disabled);
             editor.TextChanged += Editor_TextChanged;
-            editor.SizeChanged += Editor_SizeChanged;
             editor.KeyDown += Editor_KeyDown;
             editor.GotFocus += Editor_GotFocus;
             editor.Paste += Editor_Paste;
-            ResizeEditor(editor);
             _editor = editor;
             ContentHost.Children.Add(editor);
             _ = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { editor.Focus(FocusState.Keyboard); editor.SelectionStart = editor.Text.Length; });
@@ -244,14 +213,6 @@ namespace App.Controls
         {
             if (_entry is null || sender is not TextBox editor) return;
             _entry.Content = editor.Text;
-            _resizeTimer.Stop();
-            _resizeTimer.Start();
-        }
-
-        private static void Editor_SizeChanged(object sender, SizeChangedEventArgs e)
-        {
-            if (sender is TextBox editor && e.NewSize.Width != e.PreviousSize.Width)
-                ResizeEditor(editor);
         }
 
         private async void Editor_Paste(object sender, TextControlPasteEventArgs e)
@@ -409,22 +370,5 @@ namespace App.Controls
             return true;
         }
 
-        private static void ResizeEditor(TextBox editor)
-        {
-            var contentWidth = editor.ActualWidth - editor.Padding.Left - editor.Padding.Right;
-            if (contentWidth <= 0) return;
-
-            var measurement = new TextBlock
-            {
-                Text = string.IsNullOrEmpty(editor.Text) ? " " : editor.Text,
-                FontFamily = editor.FontFamily,
-                FontSize = editor.FontSize,
-                FontStyle = editor.FontStyle,
-                FontWeight = editor.FontWeight,
-                TextWrapping = TextWrapping.Wrap
-            };
-            measurement.Measure(new global::Windows.Foundation.Size(contentWidth, double.PositiveInfinity));
-            editor.Height = Math.Max(40, Math.Ceiling(measurement.DesiredSize.Height + editor.Padding.Top + editor.Padding.Bottom));
-        }
     }
 }

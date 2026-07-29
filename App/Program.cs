@@ -3,7 +3,9 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
 using System;
+using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace App
 {
@@ -14,6 +16,18 @@ namespace App
         private static App? _application;
         private static DispatcherQueue? _dispatcherQueue;
         private static bool _activationPending;
+
+        [DllImport("ole32.dll")]
+        private static extern int CoWaitForMultipleObjects(
+            uint flags,
+            uint timeoutMilliseconds,
+            uint handleCount,
+            IntPtr[] handles,
+            out uint index);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool AllowSetForegroundWindow(uint processId);
 
         [STAThread]
         private static void Main(string[] args)
@@ -31,26 +45,7 @@ namespace App
             if (!mainInstance.IsCurrent)
             {
                 var activationArguments = currentInstance.GetActivatedEventArgs();
-                var redirectThread = new Thread(() =>
-                {
-                    try
-                    {
-                        mainInstance.RedirectActivationToAsync(activationArguments)
-                            .AsTask()
-                            .GetAwaiter()
-                            .GetResult();
-                    }
-                    catch (Exception exception)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Activation redirection failed: {exception}");
-                    }
-                })
-                {
-                    IsBackground = false,
-                    Name = "ActivationRedirect"
-                };
-                redirectThread.SetApartmentState(ApartmentState.MTA);
-                redirectThread.Start();
+                RedirectActivationTo(activationArguments, mainInstance);
                 return;
             }
 
@@ -74,6 +69,37 @@ namespace App
                 if (activationPending)
                     EnqueueActivation(dispatcherQueue, application);
             });
+        }
+
+        private static void RedirectActivationTo(AppActivationArguments activationArguments, AppInstance mainInstance)
+        {
+            using var redirectCompleted = new EventWaitHandle(false, EventResetMode.ManualReset);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await mainInstance.RedirectActivationToAsync(activationArguments);
+                }
+                catch (Exception exception)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Activation redirection failed: {exception}");
+                }
+                finally
+                {
+                    redirectCompleted.Set();
+                }
+            });
+
+            const uint infinite = 0xFFFFFFFF;
+            var handles = new[] { redirectCompleted.SafeWaitHandle.DangerousGetHandle() };
+            var waitResult = CoWaitForMultipleObjects(0, infinite, 1, handles, out _);
+            if (waitResult < 0)
+                System.Diagnostics.Debug.WriteLine($"Activation redirection wait failed: 0x{waitResult:X8}");
+
+            if (!AllowSetForegroundWindow(mainInstance.ProcessId))
+                System.Diagnostics.Debug.WriteLine($"Foreground permission transfer failed: {Marshal.GetLastWin32Error()}");
+
+            Thread.Sleep(250);
         }
 
         private static void MainInstance_Activated(object? sender, AppActivationArguments args)

@@ -18,6 +18,7 @@ namespace App.Services
         private const int SmYVirtualScreen = 77;
         private const int SmCxVirtualScreen = 78;
         private const int SmCyVirtualScreen = 79;
+        private const int SwShowMaximized = 3;
         private const int SwRestore = 9;
 
         [DllImport("user32.dll", SetLastError = true)]
@@ -45,6 +46,10 @@ namespace App.Services
         private static extern bool ShowWindow(IntPtr windowHandle, int command);
 
         [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsZoomed(IntPtr windowHandle);
+
+        [DllImport("user32.dll")]
         private static extern uint GetWindowThreadProcessId(IntPtr windowHandle, out uint processId);
 
         [DllImport("user32.dll")]
@@ -65,7 +70,7 @@ namespace App.Services
             if (windowHandle == IntPtr.Zero)
                 return;
 
-            ShowWindow(windowHandle, SwRestore);
+            ShowWindow(windowHandle, IsZoomed(windowHandle) ? SwShowMaximized : SwRestore);
             var foregroundWindow = GetForegroundWindow();
             var currentThreadId = GetCurrentThreadId();
             var foregroundThreadId = foregroundWindow == IntPtr.Zero
