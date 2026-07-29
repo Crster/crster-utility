@@ -10,7 +10,7 @@ namespace App.Services
         private const string SessionName = "session";
         private const string SpecialistName = "specialist";
 
-        public TechnicianContextDocument(string text) => Text = text ?? string.Empty;
+        public TechnicianContextDocument(string text) => Text = MigrateLegacyMarkers(text ?? string.Empty);
 
         public string Text { get; private set; }
 
@@ -92,8 +92,8 @@ namespace App.Services
         private RegionBounds? FindRegion(TechnicianContextRegion region)
         {
             var name = Name(region);
-            var startMarker = $"<!-- technician:{name}:start -->";
-            var endMarker = $"<!-- technician:{name}:end -->";
+            var startMarker = $"<technician_{name}_context>";
+            var endMarker = $"</technician_{name}_context>";
             var starts = FindAll(startMarker);
             var ends = FindAll(endMarker);
             if (starts.Count == 0 && ends.Count == 0) return null;
@@ -125,13 +125,23 @@ namespace App.Services
         private static string BuildBlock(TechnicianContextRegion region, string content)
         {
             var name = Name(region);
-            var heading = region switch
+            return $"<technician_{name}_context>{Environment.NewLine}{content.Trim()}{Environment.NewLine}</technician_{name}_context>";
+        }
+
+        private static string MigrateLegacyMarkers(string text)
+        {
+            foreach (var name in new[] { WorkspaceName, SessionName, SpecialistName })
             {
-                TechnicianContextRegion.Workspace => "Workspace",
-                TechnicianContextRegion.Session => "Previous session",
-                _ => "Current-session guidance"
-            };
-            return $"<!-- technician:{name}:start -->{Environment.NewLine}## {heading}{Environment.NewLine}{content.Trim()}{Environment.NewLine}<!-- technician:{name}:end -->";
+                text = text.Replace(
+                    $"<!-- technician:{name}:start -->",
+                    $"<technician_{name}_context>",
+                    StringComparison.Ordinal);
+                text = text.Replace(
+                    $"<!-- technician:{name}:end -->",
+                    $"</technician_{name}_context>",
+                    StringComparison.Ordinal);
+            }
+            return text;
         }
 
         private static string Name(TechnicianContextRegion region) => region switch

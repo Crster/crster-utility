@@ -40,37 +40,45 @@ namespace App.Services
         private const string ExactMatchMode = "exact";
         private const string LineEndingMatchMode = "line_endings";
         private const string WhitespaceMatchMode = "whitespace";
+        private const string DecodedEscapeMatchMode = "decoded_escape";
         private const string PatchFormatGuidance = "Retry with this exact raw diff structure: <<<<<<< SEARCH\n[current file text]\n=======\n[replacement text]\n>>>>>>> REPLACE. The opening marker must contain the literal word SEARCH and the closing marker must contain the literal word REPLACE. Never put line numbers, character offsets, filenames, or other labels in either marker. Do not wrap the diff in Markdown fences.";
         private readonly GeminiClient _client;
         private readonly SecretaryToolService _secretaryTools;
         private readonly Func<string, Task<bool>> _confirmAsync;
-        private readonly Func<Task<ToolResult>> _compactAsync;
         public TechnicianToolService(GeminiClient client, SecretaryToolService secretaryTools,
-            Func<string, Task<bool>> confirmAsync, Func<Task<ToolResult>> compactAsync)
+            Func<string, Task<bool>> confirmAsync)
         {
             _client = client;
             _secretaryTools = secretaryTools;
             _confirmAsync = confirmAsync;
-            _compactAsync = compactAsync;
         }
 
         public string WorkspacePath { get; set; } = string.Empty;
 
-        public static JsonArray CreateExecutionDeclarations() =>
-        [
-            Function("read_file", "Read a discovered text file inside the selected workspace before editing it. Pass the relative filename returned by read_file_content or list_file_and_directory. startIndex and endIndex use slice semantics: negative values count from the end and an omitted endIndex means EOF.", Props(("file", String()), ("startIndex", Integer()), ("endIndex", Integer())), "file"),
-            Function("write_file", "Write text to a file inside the workspace. Creates parent folders when needed. Optionally provide zero-based, end-exclusive start and end offsets to replace a character range in an existing file; provide neither offset to replace the whole file. After corrected patch_file attempts fail, write_file remains available to complete the requested source change.", Props(("path", String()), ("content", String()), ("start", Integer()), ("end", Integer())), "path", "content"),
-            Function("patch_file", "Atomically patch one existing file using raw Diff-Fenced text. Every section must use the literal marker lines `<<<<<<< SEARCH`, `=======`, and `>>>>>>> REPLACE`. Never replace SEARCH or REPLACE with a line number, character offset, filename, or other label.", Props(("file", String()), ("diff", String()), ("syntax_check", Boolean())), "file", "diff"),
-            Function("delete_file", "Delete a file or empty directory inside the workspace after user confirmation.", Props(("path", String())), "path"),
-            Function("read_file_content", "Recursively searches file contents under a workspace-relative path and for lines matching a .NET regular expression. Matches against contents, not filenames. Hidden, dot-prefixed, and generated paths are excluded.", Props(("path", String()), ("grep_pattern", String())), "path", "grep_pattern"),
-            Function("list_file_and_directory", "Discover the workspace structure yourself instead of asking the user. List direct children matching a .NET regular expression; use path \".\" and pattern \".*\" for the workspace root, then inspect likely subdirectories. Use this when content searches do not reveal the target. hidden includes hidden, dot-prefixed, ignored, and generated entries after user confirmation.", Props(("path", String()), ("pattern", String()), ("hidden", Boolean())), "path", "pattern"),
-            Function("execute", "Run one complete Windows command string using the selected workspace as the working directory. Include the executable and all arguments in command, for example `powershell.exe -NoProfile -Command \"Get-ChildItem\"`. Do not use deprecated WMIC; use PowerShell CIM cmdlets instead. Output is head/tail truncated unless full is approved.", Props(("command", String()), ("full", Boolean())), "command"),
-            Function("execute_sudo", "Run one complete Windows command string elevated through UAC, using the selected workspace as the working directory. Include the executable and all arguments in command. Do not use deprecated WMIC; use PowerShell CIM cmdlets instead.", Props(("command", String()), ("full", Boolean())), "command"),
-            Function("list_process", "List running processes.", new JsonObject()),
-            Function("kill_process", "Terminate a process by process ID after confirmation.", Props(("process_id", Integer())), "process_id"),
-            Function("compact", "Build rich continuation context from the Technician chat, workspace, and memos, then clear chat and memos.", new JsonObject()),
-            Function("get_data", "Return only one of these local data values: local date/time, configured location, weather, clipboard text, language, or battery percentage. It cannot obtain any other data.", Props(("kind", SecretaryToolService.DataKindSchema())), "kind")
-        ];
+        public static JsonArray CreateExecutionDeclarations(bool includeGoogleSearch = false)
+        {
+            JsonArray declarations =
+            [
+                Function("read_file", "Read a discovered text file inside the selected workspace before editing it. Pass the relative filename returned by read_file_content or list_file_and_directory. startIndex and endIndex use slice semantics: negative values count from the end and an omitted endIndex means EOF.", Props(("file", String()), ("startIndex", Integer()), ("endIndex", Integer())), "file"),
+                Function("write_file", "Write text to a file inside the workspace. Creates parent folders when needed. Optionally provide zero-based, end-exclusive start and end offsets to replace a character range in an existing file; provide neither offset to replace the whole file. After corrected patch_file attempts fail, write_file remains available to complete the requested source change.", Props(("path", String()), ("content", String()), ("start", Integer()), ("end", Integer())), "path", "content"),
+                Function("patch_file", "Atomically patch one existing file using raw Diff-Fenced text. Every section must use the literal marker lines `<<<<<<< SEARCH`, `=======`, and `>>>>>>> REPLACE`. Never replace SEARCH or REPLACE with a line number, character offset, filename, or other label.", Props(("file", String()), ("diff", String()), ("syntax_check", Boolean())), "file", "diff"),
+                Function("delete_file", "Delete a file or empty directory inside the workspace after user confirmation.", Props(("path", String())), "path"),
+                Function("read_file_content", "Recursively searches file contents under a workspace-relative path and for lines matching a .NET regular expression. Matches against contents, not filenames. Hidden, dot-prefixed, and generated paths are excluded.", Props(("path", String()), ("grep_pattern", String())), "path", "grep_pattern"),
+                Function("list_file_and_directory", "Discover the workspace structure yourself instead of asking the user. List direct children matching a .NET regular expression; use path \".\" and pattern \".*\" for the workspace root, then inspect likely subdirectories. Use this when content searches do not reveal the target. hidden includes hidden, dot-prefixed, ignored, and generated entries after user confirmation.", Props(("path", String()), ("pattern", String()), ("hidden", Boolean())), "path", "pattern"),
+                Function("execute", "Run one complete Windows command string using the selected workspace as the working directory. Include the executable and all arguments in command, for example `powershell.exe -NoProfile -Command \"Get-ChildItem\"`. Do not use deprecated WMIC; use PowerShell CIM cmdlets instead. Output is head/tail truncated unless full is approved.", Props(("command", String()), ("full", Boolean())), "command"),
+                Function("execute_sudo", "Run one complete Windows command string elevated through UAC, using the selected workspace as the working directory. Include the executable and all arguments in command. Do not use deprecated WMIC; use PowerShell CIM cmdlets instead.", Props(("command", String()), ("full", Boolean())), "command"),
+                Function("list_process", "List running processes.", new JsonObject()),
+                Function("kill_process", "Terminate a process by process ID after confirmation.", Props(("process_id", Integer())), "process_id"),
+                Function("get_data", "Return only one of these local data values: local date/time, configured location, weather, clipboard text, language, or battery percentage. It cannot obtain any other data.", Props(("kind", SecretaryToolService.DataKindSchema())), "kind")
+            ];
+            if (includeGoogleSearch)
+                declarations.Add(Function(
+                    "google_search",
+                    "Search the web for current external information. Use a focused query and rely only on the returned grounded answer and sources.",
+                    Props(("query", String())),
+                    "query"));
+            return declarations;
+        }
 
         public async Task<ToolResult> ExecuteAsync(string name, JsonObject arguments, CancellationToken token)
         {
@@ -93,10 +101,7 @@ namespace App.Services
                     "execute_sudo" => await ExecuteCommandAsync(Required(arguments, "command"), true, OptionalBoolean(arguments, "full"), token),
                     "list_process" => ListProcesses(),
                     "kill_process" => await KillProcessAsync(OptionalInt(arguments, "process_id", 0)),
-                    "compact" => await CompactAsync(),
-                    "research" => await ResearchAsync(Required(arguments, "topic"), token),
-                    "plan" => await PlanAsync(Required(arguments, "request"), token),
-                    "design" => await DesignAsync(Required(arguments, "request"), token),
+                    "google_search" => await GoogleSearchAsync(Required(arguments, "query"), token),
                     "get_data" => NormalizeResult(await _secretaryTools.ExecuteAsync("get_data", arguments, token)),
                     _ => Error("unknown_tool", $"Technician cannot use the tool “{name}”.")
                 };
@@ -224,7 +229,12 @@ namespace App.Services
             return Ok(new JsonObject
             {
                 ["write_start"] = firstStart,
-                ["write_lenght"] = resolved.Sum(patch => patch.NewText.Length)
+                ["write_length"] = resolved.Sum(patch => patch.NewText.Length),
+                ["match_modes"] = new JsonArray(resolved
+                    .Select(patch => patch.MatchMode)
+                    .Distinct(StringComparer.Ordinal)
+                    .Select(mode => (JsonNode)mode)
+                    .ToArray())
             });
         }
 
@@ -295,6 +305,28 @@ namespace App.Services
                 false);
             if (matches.Count > 0) return matches;
 
+            if (allowArgumentEscapeFallback)
+            {
+                var normalizedEdit = NormalizeModelLiteralPatchText(edit);
+                if (normalizedEdit != edit)
+                {
+                    var decodedMatches = FindPatchMatches(
+                        source,
+                        normalizedEdit,
+                        editIndex,
+                        allowArgumentEscapeFallback: false);
+                    if (decodedMatches.Count > 0)
+                    {
+                        return decodedMatches
+                            .Select(match => match with
+                            {
+                                MatchMode = $"{DecodedEscapeMatchMode}:{match.MatchMode}"
+                            })
+                            .ToList();
+                    }
+                }
+            }
+
             var fuzzyMatches = ResolveCandidates(
                 source,
                 edit,
@@ -302,23 +334,39 @@ namespace App.Services
                 FindFuzzyMatches(source, expected),
                 "fuzzy",
                 true);
-            if (fuzzyMatches.Count > 0 || !allowArgumentEscapeFallback) return fuzzyMatches;
-
-            var normalizedEdit = NormalizeModelLiteralPatchText(edit);
-            return normalizedEdit == edit
-                ? []
-                : FindPatchMatches(source, normalizedEdit, editIndex, allowArgumentEscapeFallback: false);
+            return fuzzyMatches;
         }
 
         private static PatchEdit NormalizeModelLiteralPatchText(PatchEdit edit) => new(
             NormalizeModelLiteralPatchText(edit.OldText),
             NormalizeModelLiteralPatchText(edit.NewText));
 
-        private static string NormalizeModelLiteralPatchText(string value) => value
-            .Replace("\\r\\n", "\n", StringComparison.Ordinal)
-            .Replace("\\n", "\n", StringComparison.Ordinal)
-            .Replace("\\'", "'", StringComparison.Ordinal)
-            .Replace("\\#", "#", StringComparison.Ordinal);
+        private static readonly Regex UnicodeEscapePattern = new(
+            @"\\u(?<hex>[0-9A-Fa-f]{4})",
+            RegexOptions.Compiled,
+            TimeSpan.FromSeconds(1));
+
+        private static string NormalizeModelLiteralPatchText(string value)
+        {
+            var normalized = value;
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var decoded = UnicodeEscapePattern.Replace(
+                        normalized,
+                        match => ((char)Convert.ToInt32(match.Groups["hex"].Value, 16)).ToString())
+                    .Replace("\\r\\n", "\n", StringComparison.Ordinal)
+                    .Replace("\\n", "\n", StringComparison.Ordinal)
+                    .Replace("\\r", "\r", StringComparison.Ordinal)
+                    .Replace("\\t", "\t", StringComparison.Ordinal)
+                    .Replace("\\\"", "\"", StringComparison.Ordinal)
+                    .Replace("\\'", "'", StringComparison.Ordinal)
+                    .Replace("\\#", "#", StringComparison.Ordinal)
+                    .Replace("\\\\", "\\", StringComparison.Ordinal);
+                if (decoded.Equals(normalized, StringComparison.Ordinal)) break;
+                normalized = decoded;
+            }
+            return normalized;
+        }
 
         private static PatchIndex CreatePatchIndex(string content)
         {
@@ -668,6 +716,16 @@ namespace App.Services
                 ["closest_search"] = returnedCandidateText,
                 ["closest_search_truncated"] = candidateTruncated
             };
+            if (!candidateTruncated)
+            {
+                details["retry_diff"] = $"""
+                    <<<<<<< SEARCH
+                    {returnedCandidateText}
+                    =======
+                    {edit.NewText}
+                    >>>>>>> REPLACE
+                    """;
+            }
             if (diagnosis.Cause == "content_differs") details["first_mismatch"] = CreateMismatchDetail(diagnosis, expected.Length);
             details["candidate"] = new JsonObject
             {
@@ -1385,44 +1443,29 @@ namespace App.Services
             return Ok("Terminated the process.", new JsonObject { ["process_id"] = processId });
         }
 
-        private async Task<ToolResult> CompactAsync()
+        private async Task<ToolResult> GoogleSearchAsync(string query, CancellationToken token)
         {
-            return NormalizeResult(await _compactAsync());
-        }
+            var result = await _client.CreateGroundedInteractionAsync(
+                App.Settings.Current.LowCostModel,
+                query,
+                "Answer the search query using grounded web results. Be concise and factual. Include uncertainty when the available sources do not establish a claim.",
+                token);
+            if (string.IsNullOrWhiteSpace(result.Text))
+                return Error("search_unavailable", "Google Search returned no grounded answer.");
 
-        private async Task<ToolResult> ResearchAsync(string topic, CancellationToken token)
-        {
-            try
+            var sources = new JsonArray(result.Sources
+                .DistinctBy(source => source.Uri)
+                .Select(source => (JsonNode)new JsonObject
+                {
+                    ["title"] = source.Title,
+                    ["uri"] = source.Uri
+                })
+                .ToArray());
+            return Ok(new JsonObject
             {
-                var result = await _client.CreateSimpleInteractionAsync(App.Settings.Current.HighCostModel, [], [GeminiClient.CreateUserStep(topic, [])],
-                    "You are an internal context consultant. Create concise research context only from the supplied request and context. You have no tools, no web access, no file-system access, no command access, and no process access. Do not claim current, verified, or source-backed facts unless they are explicitly supplied. State uncertainty where it matters. Do not write a user-facing answer or reveal reasoning.", null, token);
-                if (string.IsNullOrWhiteSpace(result.Text)) return Error("research_unavailable", "The high-cost Gemini model did not return research context.");
-                return Ok("Generated private research context.", new JsonObject { ["context"] = result.Text });
-            }
-            catch (Exception exception)
-            {
-                return Error("research_unavailable", $"Research context request failed: {SanitizeExternalError(exception.Message)}");
-            }
-        }
-
-        private static string SanitizeExternalError(string message)
-        {
-            var normalized = Regex.Replace(message, @"\s+", " ").Trim();
-            return normalized.Length <= 500 ? normalized : $"{normalized[..500]}…";
-        }
-
-        private async Task<ToolResult> PlanAsync(string request, CancellationToken token)
-        {
-            var result = await _client.CreateSimpleInteractionAsync(App.Settings.Current.HighCostModel, [], [GeminiClient.CreateUserStep(request, [])],
-                "Write one short plain-text instruction paragraph for the main Technician agent. First classify the active request as workspace coding or Windows/device troubleshooting from the user's stated goal. For troubleshooting, keep the plan focused on inspecting and resolving the local PC issue, use system tools instead of project files, and ignore unrelated workspace context. For coding, use relevant workspace evidence. Explain the requested outcome, current problem, strongest confirmed evidence, likely cause, and next useful direction. Preserve important errors, paths, and identifiers, state uncertainty briefly, and tell the agent to verify with tools before applying the smallest complete fix. Do not invent facts, answer the user, execute work, use Markdown, headings, bullets, or reveal reasoning. Return only direct instruction sentences.", null, token);
-            return string.IsNullOrWhiteSpace(result.Text) ? Error("plan_unavailable", "The high-cost Gemini model did not return a plan.") : Ok("Generated an implementation plan.", new JsonObject { ["plan"] = result.Text });
-        }
-
-        private async Task<ToolResult> DesignAsync(string request, CancellationToken token)
-        {
-            var result = await _client.CreateSimpleInteractionAsync(App.Settings.Current.HighCostModel, [], [GeminiClient.CreateUserStep(request, [])],
-                "You are an internal UI/UX context consultant. Create a concise, implementation-ready private design brief from the supplied request and context only. You have no tools, no file-system access, no command access, no process access, and no web access. Do not claim independent inspection or current-trend research. Do not edit files, write a user-facing answer, or reveal reasoning. Specify the user goal, information hierarchy, layout and responsive behavior, component and interaction states, accessibility requirements, visual direction, and implementation considerations. Prefer practical, consistent decisions over generic design advice.", null, token);
-            return string.IsNullOrWhiteSpace(result.Text) ? Error("design_unavailable", "The high-cost Gemini model did not return a design brief.") : Ok("Generated a UI/UX design brief.", new JsonObject { ["design"] = result.Text });
+                ["answer"] = result.Text.Trim(),
+                ["sources"] = sources
+            });
         }
 
         private string ResolveWorkspacePath(string path)
@@ -1446,7 +1489,7 @@ namespace App.Services
 
         private static bool RequiresWorkspace(string toolName) => toolName is
             "read_file" or "write_file" or "patch_file" or "delete_file" or "read_file_content" or "list_file_and_directory"
-            or "execute" or "execute_sudo" or "list_process" or "kill_process";
+            or "execute" or "execute_sudo";
 
         private static void ValidateNoReparsePoints(string root, string path)
         {
