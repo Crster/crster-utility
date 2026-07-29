@@ -872,6 +872,7 @@ namespace App.Pages
             =======
             [new replacement code]
             >>>>>>> REPLACE
+            The marker words `SEARCH` and `REPLACE` are mandatory literals. Never substitute a line number, character offset, filename, or other label.
             """;
 
         private static string SmartInstruction() =>
