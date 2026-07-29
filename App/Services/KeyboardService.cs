@@ -20,6 +20,7 @@ namespace App.Services
         private const int WhKeyboardLl = 13;
         private const int WmKeyDown = 0x0100;
         private const int WmSysKeyDown = 0x0104;
+        private const uint VkF23 = 0x86;
         private IntPtr _hook;
         private readonly LowLevelKeyboardProc _callback;
         private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcher;
@@ -28,6 +29,7 @@ namespace App.Services
 
         public event EventHandler? SnapshotPressed;
         public event EventHandler? CaffeinePressed;
+        public event EventHandler? CopilotPressed;
 
         public KeyboardService(Microsoft.UI.Dispatching.DispatcherQueue dispatcher) { _dispatcher = dispatcher; _callback = HookCallback; }
         public void Configure(string snapshotShortcut, string caffeineShortcut)
@@ -46,12 +48,21 @@ namespace App.Services
             if (code >= 0 && (message == (IntPtr)WmKeyDown || message == (IntPtr)WmSysKeyDown))
             {
                 var key = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(data).vkCode;
-                if (_snapshot?.Matches(key, IsDown(VirtualKey.Control), IsDown(VirtualKey.Menu), IsDown(VirtualKey.Shift), IsDown(VirtualKey.LeftWindows) || IsDown(VirtualKey.RightWindows)) == true)
+                var control = IsDown(VirtualKey.Control);
+                var alt = IsDown(VirtualKey.Menu);
+                var shift = IsDown(VirtualKey.Shift);
+                var windows = IsDown(VirtualKey.LeftWindows) || IsDown(VirtualKey.RightWindows);
+                if (key == VkF23 && !control && !alt && shift && windows)
+                {
+                    _dispatcher.TryEnqueue(() => CopilotPressed?.Invoke(this, EventArgs.Empty));
+                    return (IntPtr)1;
+                }
+                if (_snapshot?.Matches(key, control, alt, shift, windows) == true)
                 {
                     _dispatcher.TryEnqueue(() => SnapshotPressed?.Invoke(this, EventArgs.Empty));
                     return (IntPtr)1;
                 }
-                if (_caffeine?.Matches(key, IsDown(VirtualKey.Control), IsDown(VirtualKey.Menu), IsDown(VirtualKey.Shift), IsDown(VirtualKey.LeftWindows) || IsDown(VirtualKey.RightWindows)) == true)
+                if (_caffeine?.Matches(key, control, alt, shift, windows) == true)
                 {
                     _dispatcher.TryEnqueue(() => CaffeinePressed?.Invoke(this, EventArgs.Empty));
                     return (IntPtr)1;

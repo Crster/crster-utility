@@ -27,6 +27,12 @@ namespace App.Services
                 .ToList();
         }
 
+        public IReadOnlyList<NoteDocument> ListNotes() =>
+            App.Settings.Database.Notes.FindAll().ToList();
+
+        public IReadOnlyList<MemoDocument> ListMemos() =>
+            App.Settings.Database.Memos.FindAll().ToList();
+
         public async Task<IReadOnlyList<MemoDocument>> FindMemosAsync(string topic, string query, int maximum, CancellationToken token)
         {
             topic = string.IsNullOrWhiteSpace(topic) ? string.Empty : NormalizeTopic(topic);

@@ -1,10 +1,12 @@
 using App.Models;
 using Cronos;
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.ApplicationModel.DataTransfer;
@@ -23,6 +25,7 @@ namespace App.Services
 
         public static JsonArray CreateDeclarations() => new()
         {
+            Function("search_saved_information", "Search all saved notes, memos, and todos using a .NET regular expression. regex is required. Use a focused, case-insensitive-compatible pattern such as four13\\s+group.", Props(("regex", String())), "regex"),
             Function("find_notes", "Find notes containing the supplied text.", Props(("query", String())), "query"),
             Function("find_memos", "Find saved memos. topic and query are optional: omit both to retrieve all saved memos, for example when summarizing what is known about the user.", Props(("topic", MemoTopic()), ("query", String()))),
             Function("write_memo", "Save a clearly stated detail that may make future help more personal, accurate, or useful. Never save secrets, credentials, guesses, or invented claims.", Props(("topic", MemoTopic()), ("value", String())), "topic", "value"),
@@ -40,6 +43,7 @@ namespace App.Services
             {
                 return name switch
                 {
+                    "search_saved_information" => await SearchLocalKnowledgeAsync(RequiredString(arguments, "regex"), token),
                     "find_notes" => FindNotes(RequiredString(arguments, "query")),
                     "find_memos" => await FindMemosAsync(OptionalString(arguments, "topic"), OptionalString(arguments, "query"), token),
                     "write_memo" => await WriteMemoAsync(RequiredString(arguments, "topic"), RequiredString(arguments, "value"), token),
@@ -56,6 +60,52 @@ namespace App.Services
             catch (FormatException exception) { return Error("invalid_arguments", exception.Message); }
             catch (ArgumentException exception) { return Error("invalid_arguments", exception.Message); }
             catch (Exception) { return Error("operation_failed", "Secretary could not complete that local operation."); }
+        }
+
+        private Task<ToolResult> SearchLocalKnowledgeAsync(string regexPattern, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            var regex = new Regex(regexPattern, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2));
+            var matches = new List<(DateTime Timestamp, JsonObject Item)>();
+            foreach (var note in _memory.ListNotes())
+            {
+                if (!regex.IsMatch(note.Value)) continue;
+                matches.Add((note.Timestamp, new JsonObject
+                {
+                    ["source"] = "note",
+                    ["key"] = note.Id,
+                    ["value"] = note.Value,
+                    ["written_utc"] = note.Timestamp.ToString("O")
+                }));
+            }
+
+            foreach (var memo in _memory.ListMemos())
+            {
+                if (!regex.IsMatch(memo.Value)) continue;
+                matches.Add((memo.Timestamp, new JsonObject
+                {
+                    ["source"] = "memo",
+                    ["key"] = memo.Id,
+                    ["topic"] = memo.Topic,
+                    ["value"] = memo.Value,
+                    ["written_utc"] = memo.Timestamp.ToString("O")
+                }));
+            }
+
+            foreach (var todo in _todos.List())
+            {
+                if (!regex.IsMatch(todo.Value)) continue;
+                var value = TodoJson(todo);
+                value.Insert(0, "source", "todo");
+                matches.Add((todo.CreatedAt, value));
+            }
+
+            var items = new JsonArray(matches
+                .OrderByDescending(match => match.Timestamp)
+                .Take(MaximumResults)
+                .Select(match => (JsonNode)match.Item)
+                .ToArray());
+            return Task.FromResult(Ok($"Found {items.Count} saved result(s).", new JsonObject { ["items"] = items }));
         }
 
         private ToolResult FindNotes(string query)

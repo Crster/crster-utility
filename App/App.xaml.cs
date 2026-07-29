@@ -54,6 +54,7 @@ namespace App
             _keyboard.Configure(Settings.Current.SnapshotShortcut, Settings.Current.CaffeineShortcut);
             _keyboard.SnapshotPressed += (_, _) => (App.MainWindow as Windows.MainWindow)?.CaptureSnapshotFromHotkey();
             _keyboard.CaffeinePressed += (_, _) => (App.MainWindow as Windows.MainWindow)?.ToggleCaffeineFromHotkey();
+            _keyboard.CopilotPressed += (_, _) => (App.MainWindow as Windows.MainWindow)?.ShowFromActivation();
             _keyboard.Start();
             Settings.Changed += (_, settings) => _keyboard.Configure(settings.SnapshotShortcut, settings.CaffeineShortcut);
 

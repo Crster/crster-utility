@@ -42,11 +42,13 @@
                             </StackPanel>
                         </ToggleButton>
                         <Button x:Name="CopyChatButton" Width="36" Height="36" Padding="0"
-                                Click="CopyChatButton_Click" ToolTipService.ToolTip="Copy">
+                                Click="CopyChatButton_Click" ToolTipService.ToolTip="Copy chat"
+                                AutomationProperties.Name="Copy chat">
                             <FontIcon Glyph="&#xE8C8;" />
                         </Button>
                         <Button x:Name="CopyChatSummaryButton" Width="36" Height="36" Padding="0"
-                                Click="CopyChatSummaryButton_Click" ToolTipService.ToolTip="Copy summary">
+                                Click="CopyChatSummaryButton_Click" ToolTipService.ToolTip="Copy chat summary"
+                                AutomationProperties.Name="Copy chat summary">
                             <FontIcon Glyph="&#xE9CE;" />
                         </Button>
                         <Button x:Name="ClearChatButton" Width="36" Height="36" Padding="0"
