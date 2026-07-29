@@ -1435,13 +1435,17 @@ namespace App.Pages
                     CancellationToken.None);
                 if (string.IsNullOrWhiteSpace(plan))
                 {
-                    StatusText.Text = "The planner did not produce a solution guide.";
+                    ShowTechnicianActionError(
+                        "Planning error",
+                        "The planner did not produce a solution guide.");
                     return;
                 }
             }
             catch (Exception exception)
             {
-                StatusText.Text = $"Could not create solution guide: {exception.Message}";
+                ShowTechnicianActionError(
+                    "Planning error",
+                    $"Could not create solution guide: {exception.Message}");
                 return;
             }
             finally
@@ -1477,13 +1481,15 @@ namespace App.Pages
                 var result = await CompactTechnicianAsync();
                 if (!result.Success)
                 {
-                    StatusText.Text = result.Output;
+                    ShowTechnicianActionError("Compaction error", result.Output);
                     return;
                 }
             }
             catch (Exception exception)
             {
-                StatusText.Text = $"Could not compact conversation: {exception.Message}";
+                ShowTechnicianActionError(
+                    "Compaction error",
+                    $"Could not compact conversation: {exception.Message}");
                 return;
             }
             finally
@@ -1491,6 +1497,12 @@ namespace App.Pages
                 SetBusy(false, StatusText.Text);
             }
             await SendFromComposerAsync(mode, prompt);
+        }
+
+        private void ShowTechnicianActionError(string title, string message)
+        {
+            StatusText.Text = message;
+            AddMessage(new ChatMessage(ChatItemKind.Error, title, message));
         }
 
         private Button CreateHistoryActionButton(string glyph, string tooltip, Func<Task> action)
