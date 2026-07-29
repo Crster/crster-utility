@@ -31,8 +31,6 @@ namespace App.Services
         private const int MaximumPatchSnippetCharacters = 3_000;
         private const int MaximumPatchAmbiguousMatches = 8;
         private const int MaximumPatchContextLineLength = 120;
-        private const int MaximumPatchSuccessSnippetEdits = 5;
-        private const int MaximumPatchSuccessSnippetLines = 12;
         private const int MaximumPatchSyntaxErrors = 10;
         private const int MaximumFuzzyScoredWindows = 8;
         private const int MaximumFuzzyCompareCharacters = 4_000;
@@ -60,14 +58,14 @@ namespace App.Services
 
         public static JsonArray CreateExecutionDeclarations() =>
         [
-            Function("read_file", "Read a discovered text file inside the selected workspace before editing it. Pass the relative filename returned by search_file or list_file_and_directory. startIndex and endIndex use slice semantics: negative values count from the end and an omitted endIndex means EOF.", Props(("file", String()), ("startIndex", Integer()), ("endIndex", Integer())), "file"),
+            Function("read_file", "Read a discovered text file inside the selected workspace before editing it. Pass the relative filename returned by read_file_content or list_file_and_directory. startIndex and endIndex use slice semantics: negative values count from the end and an omitted endIndex means EOF.", Props(("file", String()), ("startIndex", Integer()), ("endIndex", Integer())), "file"),
             Function("write_file", "Write text to a file inside the workspace. Creates parent folders when needed. Optionally provide zero-based, end-exclusive start and end offsets to replace a character range in an existing file; provide neither offset to replace the whole file. After corrected patch_file attempts fail, write_file remains available to complete the requested source change.", Props(("path", String()), ("content", String()), ("start", Integer()), ("end", Integer())), "path", "content"),
             Function("patch_file", "Atomically patch one existing file using raw Diff-Fenced text. Prefix SEARCH with one or more < characters and REPLACE with one or more > characters; separate them with a line containing two or more = characters and optional surrounding whitespace. Multiple sections are supported. Matching normalizes whitespace and permits a unique best fuzzy match of at least 80%.", Props(("file", String()), ("diff", String()), ("syntax_check", Boolean())), "file", "diff"),
             Function("delete_file", "Delete a file or empty directory inside the workspace after user confirmation.", Props(("path", String())), "path"),
-            Function("search_file", "Recursively search file contents beneath a relative workspace path. Required arguments: path (use \".\" for the workspace root) and grep_pattern (a line-by-line .NET regular expression, similar to grep). Use several distinct search calls before concluding there is no match: start with a literal identifier or UI text such as \"LoginService\" or \"Save changes\", then try related feature, error, behavior, and implementation terms. Use \"foo|bar\" to search alternatives in one call. This searches contents, not filenames; use list_file_and_directory to browse names. Excludes hidden, dot-prefixed, and generated paths by default.", Props(("path", String()), ("grep_pattern", String())), "path", "grep_pattern"),
+            Function("read_file_content", "Recursively search file contents beneath a relative workspace path. Required arguments: path (use \".\" for the workspace root) and grep_pattern (a line-by-line .NET regular expression, similar to grep). Use several distinct calls before concluding there is no match: start with a literal identifier or UI text such as \"LoginService\" or \"Save changes\", then try related feature, error, behavior, and implementation terms. Use \"foo|bar\" to search alternatives in one call. This searches contents, not filenames; use list_file_and_directory to browse names. Excludes hidden, dot-prefixed, and generated paths by default.", Props(("path", String()), ("grep_pattern", String())), "path", "grep_pattern"),
             Function("list_file_and_directory", "Discover the workspace structure yourself instead of asking the user. List direct children matching a .NET regular expression; use path \".\" and pattern \".*\" for the workspace root, then inspect likely subdirectories. Use this when content searches do not reveal the target. hidden includes hidden, dot-prefixed, ignored, and generated entries after user confirmation.", Props(("path", String()), ("pattern", String()), ("hidden", Boolean())), "path", "pattern"),
-            Function("execute", "Run an executable with an argument string in the selected workspace. Output is head/tail truncated unless full is approved.", Props(("exe", String()), ("args", String()), ("full", Boolean())), "exe"),
-            Function("execute_sudo", "Run an executable elevated through UAC and capture its output after confirmation.", Props(("exe", String()), ("args", String()), ("full", Boolean())), "exe"),
+            Function("execute", "Run one complete Windows command string using the selected workspace as the working directory. Include the executable and all arguments in command, for example `powershell.exe -NoProfile -Command \"Get-ChildItem\"`. Do not use deprecated WMIC; use PowerShell CIM cmdlets instead. Output is head/tail truncated unless full is approved.", Props(("command", String()), ("full", Boolean())), "command"),
+            Function("execute_sudo", "Run one complete Windows command string elevated through UAC, using the selected workspace as the working directory. Include the executable and all arguments in command. Do not use deprecated WMIC; use PowerShell CIM cmdlets instead.", Props(("command", String()), ("full", Boolean())), "command"),
             Function("list_process", "List running processes.", new JsonObject()),
             Function("kill_process", "Terminate a process by process ID after confirmation.", Props(("process_id", Integer())), "process_id"),
             Function("compact", "Build rich continuation context from the Technician chat, workspace, and memos, then clear chat and memos.", new JsonObject()),
@@ -79,7 +77,9 @@ namespace App.Services
             try
             {
                 if (RequiresWorkspace(name) && !HasWorkspace())
-                    return Error("workspace_required", "Select a Technician workspace before running local operations.");
+                    return name.Equals("patch_file", StringComparison.Ordinal)
+                        ? PatchError("workspace_required", "Select a Technician workspace before running local operations.")
+                        : Error("workspace_required", "Select a Technician workspace before running local operations.");
 
                 return name switch
                 {
@@ -87,10 +87,10 @@ namespace App.Services
                     "write_file" => WriteFile(Required(arguments, "path"), RequiredContent(arguments, "content"), OptionalWriteRange(arguments)),
                     "patch_file" => PatchFile(Required(arguments, "file"), arguments),
                     "delete_file" => await DeleteFileAsync(Required(arguments, "path")),
-                    "search_file" => await SearchFilesAsync(Required(arguments, "path"), RequiredContent(arguments, "grep_pattern"), token),
+                    "read_file_content" => await SearchFilesAsync(Required(arguments, "path"), RequiredContent(arguments, "grep_pattern"), token),
                     "list_file_and_directory" => await ListFilesAsync(Required(arguments, "path"), RequiredContent(arguments, "pattern"), OptionalBoolean(arguments, "hidden")),
-                    "execute" => await ExecuteCommandAsync(Required(arguments, "exe"), OptionalRaw(arguments, "args"), false, OptionalBoolean(arguments, "full"), token),
-                    "execute_sudo" => await ExecuteCommandAsync(Required(arguments, "exe"), OptionalRaw(arguments, "args"), true, OptionalBoolean(arguments, "full"), token),
+                    "execute" => await ExecuteCommandAsync(Required(arguments, "command"), false, OptionalBoolean(arguments, "full"), token),
+                    "execute_sudo" => await ExecuteCommandAsync(Required(arguments, "command"), true, OptionalBoolean(arguments, "full"), token),
                     "list_process" => ListProcesses(),
                     "kill_process" => await KillProcessAsync(OptionalInt(arguments, "process_id", 0)),
                     "compact" => await CompactAsync(),
@@ -107,15 +107,22 @@ namespace App.Services
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or FormatException)
             {
-                return Error("operation_failed", exception.Message);
+                return name.Equals("patch_file", StringComparison.Ordinal)
+                    ? PatchError("operation_failed", exception.Message)
+                    : Error("operation_failed", exception.Message);
             }
             catch (Win32Exception exception)
             {
-                return Error("command_unavailable", exception.Message);
+                return Error(
+                    "command_unavailable",
+                    exception.Message,
+                    solution: "Correct the command string and retry with an installed executable. For Windows management queries, use PowerShell CIM commands instead of WMIC.");
             }
             catch (Exception)
             {
-                return Error("operation_failed", "Technician could not complete that local operation.");
+                return name.Equals("patch_file", StringComparison.Ordinal)
+                    ? PatchError("operation_failed", "Technician could not complete that local operation.")
+                    : Error("operation_failed", "Technician could not complete that local operation.");
             }
         }
 
@@ -208,45 +215,16 @@ namespace App.Services
             }
 
             File.WriteAllText(fullPath, patched, new UTF8Encoding(false));
-            return PatchApplied(fullPath, patched, resolved);
+            return PatchApplied(resolved);
         }
 
-        private static ToolResult PatchApplied(string fullPath, string patched, List<ResolvedPatch> resolved)
+        private static ToolResult PatchApplied(List<ResolvedPatch> resolved)
         {
-            var lines = SplitLines(patched);
-            var includeSnippets = resolved.Count <= MaximumPatchSuccessSnippetEdits;
-            var reindented = resolved.Where(patch => patch.Reindented).ToArray();
-            var entries = new JsonArray(resolved.OrderBy(patch => patch.Start).Select(patch =>
-            {
-                var start = TranslatePatchStart(patch.Start, resolved);
-                var end = start + patch.NewText.Length;
-                var firstLine = LineIndexAt(lines, start);
-                var lastLine = LineIndexAt(lines, Math.Max(start, end - 1));
-                var entry = new JsonObject
-                {
-                    ["edit_index"] = patch.EditIndex,
-                    ["line_start"] = firstLine + 1,
-                    ["line_end"] = lastLine + 1,
-                    ["start"] = start,
-                    ["end"] = end,
-                    ["match_mode"] = patch.MatchMode,
-                    ["reindented"] = patch.Reindented
-                };
-                if (includeSnippets)
-                    entry["snippet"] = CreateNumberedSnippet(lines, firstLine, lastLine, firstLine, MaximumPatchSuccessSnippetLines);
-                return (JsonNode)entry;
-            }).ToArray());
-
-            var summary = new StringBuilder($"Applied {resolved.Count} edit(s).");
-            if (reindented.Length > 0)
-                summary.Append($" {reindented.Length} edit(s) had new_text re-indented to the file's indentation.");
             var firstStart = resolved.Min(patch => TranslatePatchStart(patch.Start, resolved));
-            var lastEnd = resolved.Max(patch => TranslatePatchStart(patch.Start, resolved) + patch.NewText.Length);
             return Ok(new JsonObject
             {
-                ["start"] = firstStart,
-                ["end"] = lastEnd,
-                ["edits"] = resolved.Count > 1 ? entries : null
+                ["write_start"] = firstStart,
+                ["write_lenght"] = resolved.Sum(patch => patch.NewText.Length)
             });
         }
 
@@ -1097,15 +1075,27 @@ namespace App.Services
             await producer;
             await Task.WhenAll(workers);
 
-            var ordered = matches.OrderBy(item => item.Filename, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.MatchStart).ToArray();
+            var termSource = Regex.Replace(regexPattern, @"\\[AbBdDsSwWZzG]", " ");
+            var searchTerms = Regex.Matches(termSource, @"[\p{L}\p{N}_-]{2,}")
+                .Select(match => match.Value)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var ordered = matches
+                .Select(item => new RankedSearchMatch(item, SearchSimilarityPercentage(item, searchTerms)))
+                .OrderByDescending(item => item.SimilarityPercentage)
+                .ThenBy(item => item.Match.Filename, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(item => item.Match.MatchStart)
+                .ToArray();
             if (ordered.Length == 0)
                 return Error("no_match", "no match found", solution: "Broaden or simplify the regular expression, then search the same path again.");
             var returned = new JsonArray();
             var remainingCharacters = MaximumSearchResultCharacters;
-            foreach (var item in ordered)
+            foreach (var ranked in ordered)
             {
+                var item = ranked.Match;
                 var node = new JsonObject
                 {
+                    ["similarity_percentage"] = ranked.SimilarityPercentage,
                     ["filename"] = item.Filename,
                     ["match_start"] = item.MatchStart,
                     ["snippet_start"] = item.SnippetStart,
@@ -1123,6 +1113,14 @@ namespace App.Services
                 ["total_matches"] = ordered.Length,
                 ["is_truncated"] = returned.Count < ordered.Length
             });
+        }
+
+        private static int SearchSimilarityPercentage(SearchMatch match, IReadOnlyList<string> searchTerms)
+        {
+            if (searchTerms.Count == 0) return 100;
+            var searchable = $"{match.Filename}\n{match.Snippet}";
+            var matchedTerms = searchTerms.Count(term => searchable.Contains(term, StringComparison.OrdinalIgnoreCase));
+            return (int)Math.Round(100d * matchedTerms / searchTerms.Count, MidpointRounding.AwayFromZero);
         }
 
         private static IEnumerable<string> EnumerateSearchFiles(string root)
@@ -1313,22 +1311,24 @@ namespace App.Services
                 || name.Equals("build", StringComparison.OrdinalIgnoreCase);
         }
 
-        private async Task<ToolResult> ExecuteCommandAsync(string command, string arguments, bool elevated, bool full, CancellationToken token)
+        private async Task<ToolResult> ExecuteCommandAsync(string command, bool elevated, bool full, CancellationToken token)
         {
             EnsureWorkspace();
-            if (elevated || full || IsRiskyCommand(command, arguments))
+            var workingDirectory = Path.GetFullPath(WorkspacePath);
+            if (elevated || full || IsRiskyCommand(command))
             {
                 var qualifier = elevated ? "elevated " : full ? "with unbounded output " : string.Empty;
-                if (!await _confirmAsync($"Run {qualifier}command '{command} {arguments}' in '{WorkspacePath}'?"))
+                if (!await _confirmAsync($"Run {qualifier}command '{command}' in '{workingDirectory}'?"))
                     return Error("confirmation_declined", "The user did not approve the command.", solution: "Run a safe bounded command instead, or ask the user to approve this operation.");
             }
             if (elevated)
             {
-                var result = await ElevatedCommandService.RunAsync(command, arguments, WorkspacePath, token);
+                var result = await ElevatedCommandService.RunAsync(command, workingDirectory, token);
                 return CommandResult(result.Stdout, result.Stderr, result.ExitCode, full);
             }
 
-            using var process = new Process { StartInfo = new ProcessStartInfo(command, arguments) { WorkingDirectory = WorkspacePath, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true } };
+            var startInfo = CreateCommandStartInfo(command, workingDirectory);
+            using var process = new Process { StartInfo = startInfo };
             process.Start();
             var outputTask = process.StandardOutput.ReadToEndAsync(token);
             var errorTask = process.StandardError.ReadToEndAsync(token);
@@ -1336,6 +1336,23 @@ namespace App.Services
             var stdout = await outputTask;
             var stderr = await errorTask;
             return CommandResult(stdout, stderr, process.ExitCode, full);
+        }
+
+        internal static ProcessStartInfo CreateCommandStartInfo(string command, string workingDirectory)
+        {
+            var startInfo = new ProcessStartInfo(Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe")
+            {
+                WorkingDirectory = workingDirectory,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/s");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add(command);
+            return startInfo;
         }
 
         private static ToolResult CommandResult(string stdout, string stderr, int exitCode, bool full)
@@ -1397,7 +1414,7 @@ namespace App.Services
         private async Task<ToolResult> PlanAsync(string request, CancellationToken token)
         {
             var result = await _client.CreateSimpleInteractionAsync(App.Settings.Current.HighCostModel, [], [GeminiClient.CreateUserStep(request, [])],
-                "You are an internal planning consultant. From the supplied active request and compacted Technician history, write the next user instruction that will be submitted directly to a coding agent. Use concise plain sentences in one prose paragraph, not Markdown, headings, bullets, numbered lists, sections, or code blocks. Tell the agent exactly which confirmed files to open, or which likely files and symbols to search for when filenames are not confirmed, what to inspect in each place, and the ordered steps for implementing the recommended solution. Include one concise alternative solution when a materially different approach is plausible, and explain when to use it. Focus only on investigation and implementation. Do not include validation, testing, test cases, linting, formatting, deployment, generic best practices, dependency recommendations unsupported by the supplied history, or invented filenames, technologies, and project conventions. Do not tell the agent to ask for information already present in the history. You have no tools, file-system access, command access, process access, or web access. Do not claim independent inspection, execute changes, answer the original user directly, or reveal reasoning. Return only the instruction paragraph.", null, token);
+                "Write one short plain-text instruction paragraph for the main coding agent. Explain the user's requested outcome, current problem, strongest confirmed evidence, likely cause, and next useful direction. Preserve important errors, paths, and identifiers, state uncertainty briefly, and tell the agent to verify with tools before applying the smallest complete fix. Do not invent facts, answer the user, execute work, use Markdown, headings, bullets, or reveal reasoning. Return only direct instruction sentences.", null, token);
             return string.IsNullOrWhiteSpace(result.Text) ? Error("plan_unavailable", "The high-cost Gemini model did not return a plan.") : Ok("Generated an implementation plan.", new JsonObject { ["plan"] = result.Text });
         }
 
@@ -1428,7 +1445,7 @@ namespace App.Services
         private bool HasWorkspace() => !string.IsNullOrWhiteSpace(WorkspacePath) && Directory.Exists(WorkspacePath);
 
         private static bool RequiresWorkspace(string toolName) => toolName is
-            "read_file" or "write_file" or "patch_file" or "delete_file" or "search_file" or "list_file_and_directory"
+            "read_file" or "write_file" or "patch_file" or "delete_file" or "read_file_content" or "list_file_and_directory"
             or "execute" or "execute_sudo" or "list_process" or "kill_process";
 
         private static void ValidateNoReparsePoints(string root, string path)
@@ -1456,14 +1473,13 @@ namespace App.Services
             }
         }
 
-        private static bool IsRiskyCommand(string command, string arguments)
+        private static bool IsRiskyCommand(string command)
         {
-            var commandLine = $"{command} {arguments}";
             return Regex.IsMatch(
-                       commandLine,
+                       command,
                        @"\b(rm|rmdir|rd|del|erase|Remove-Item|Clear-Content|format|diskpart|cipher|reg(?:\.exe)?|regedit|Set-ItemProperty|Remove-ItemProperty|takeown|icacls|cacls|attrib|bcdedit|shutdown|restart|taskkill|Stop-Process|Stop-Service|Restart-Service|sc|net|msiexec|winget|choco|scoop|Set-ExecutionPolicy)\b",
                        RegexOptions.IgnoreCase)
-                   || Regex.IsMatch(commandLine, @"\bgit(?:\.exe)?\s+(clean\b|reset\s+--hard\b)", RegexOptions.IgnoreCase);
+                   || Regex.IsMatch(command, @"\bgit(?:\.exe)?\s+(clean\b|reset\s+--hard\b)", RegexOptions.IgnoreCase);
         }
         private static string TruncateOutput(string value) => value.Length <= DefaultCommandOutputEdgeCharacters * 2
             ? value
@@ -1476,7 +1492,6 @@ namespace App.Services
         private static string Required(JsonObject arguments, string name) => Optional(arguments, name) is { Length: > 0 } value ? value : throw new FormatException($"{name} is required.");
         private static string RequiredContent(JsonObject arguments, string name) => arguments[name]?.GetValue<string>() ?? throw new FormatException($"{name} is required.");
         private static string Optional(JsonObject arguments, string name) => arguments[name]?.GetValue<string>()?.Trim() ?? string.Empty;
-        private static string OptionalRaw(JsonObject arguments, string name) => arguments[name]?.GetValue<string>() ?? string.Empty;
         private static int OptionalInt(JsonObject arguments, string name, int fallback) => arguments[name]?.GetValue<int>() ?? fallback;
         private static bool OptionalBoolean(JsonObject arguments, string name) => arguments[name]?.GetValue<bool>() ?? false;
         private static (int? Start, int? End) OptionalSlice(JsonObject arguments)
@@ -1504,11 +1519,12 @@ namespace App.Services
         private static ToolResult Ok(string summary, JsonObject? details = null) => Ok(details);
         private static ToolResult Error(string category, string summary, JsonObject? details = null, string? solution = null)
         {
-            var root = details ?? new JsonObject();
-            root.Insert(0, "solution", solution ?? SolutionFor(category));
-            root.Insert(0, "error", summary);
-            root.Insert(0, "success", false);
-            return new ToolResult(false, root.ToJsonString(ToolResultJson));
+            return new ToolResult(false, new JsonObject
+            {
+                ["success"] = false,
+                ["error"] = summary,
+                ["suggestion"] = solution ?? SolutionFor(category)
+            }.ToJsonString(ToolResultJson));
         }
         private static string SolutionFor(string category) => category switch
         {
@@ -1522,9 +1538,10 @@ namespace App.Services
         };
         private static ToolResult PatchError(string category, string summary, JsonObject? details = null)
         {
-            details ??= new JsonObject();
-            details.Insert(0, "expected_format", PatchFormatGuidance);
-            return Error(category, summary, details);
+            var suggestion = category.StartsWith("patch_", StringComparison.Ordinal)
+                ? $"{SolutionFor(category)} {PatchFormatGuidance}"
+                : SolutionFor(category);
+            return Error(category, summary, solution: suggestion);
         }
 
         private static ToolResult NormalizeResult(ToolResult result)
@@ -1539,13 +1556,15 @@ namespace App.Services
                 details.Remove("error");
                 details.Remove("error_category");
                 details.Remove("solution");
+                details.Remove("suggestion");
                 if (result.Success) return Ok(details);
                 var error = source?["error"]?.GetValue<string>()
                     ?? source?["summary"]?.GetValue<string>()
                     ?? "The delegated tool failed.";
-                var solution = source?["solution"]?.GetValue<string>()
+                var solution = source?["suggestion"]?.GetValue<string>()
+                    ?? source?["solution"]?.GetValue<string>()
                     ?? "Inspect the error and retry with corrected arguments.";
-                return Error("delegated_tool_failed", error, details, solution);
+                return Error("delegated_tool_failed", error, solution: solution);
             }
             catch (JsonException)
             {
@@ -1559,6 +1578,7 @@ namespace App.Services
         private sealed record ResolvedPatch(int Start, int Length, string NewText, int EditIndex, string MatchMode, bool Reindented);
         private sealed record SearchLine(int Start, string Text, string Terminator);
         private sealed record SearchMatch(string Filename, int MatchStart, int SnippetStart, string Match, string Snippet);
+        private sealed record RankedSearchMatch(SearchMatch Match, int SimilarityPercentage);
         private sealed class PendingSearchMatch(SearchLine line, SearchLine[] before, int column, string match)
         {
             public SearchLine Line { get; } = line;

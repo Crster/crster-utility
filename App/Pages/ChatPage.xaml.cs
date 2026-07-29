@@ -361,12 +361,16 @@ namespace App.Pages
                                 pendingCheckpoint = TechnicianCheckpoint.Stop;
                                 break;
                             }
-                            if (technicianToolCallCount >= TechnicianHighCostToolCallCheckpoint && !handledHighCostCheckpoint)
+                            if (_technicianRequestMode != TechnicianRequestMode.Smart
+                                && technicianToolCallCount >= TechnicianHighCostToolCallCheckpoint
+                                && !handledHighCostCheckpoint)
                             {
                                 pendingCheckpoint = TechnicianCheckpoint.CompactAndUpgrade;
                                 break;
                             }
-                            if (technicianToolCallCount >= TechnicianHighThinkingToolCallCheckpoint && !handledHighThinkingCheckpoint)
+                            if (_technicianRequestMode != TechnicianRequestMode.Smart
+                                && technicianToolCallCount >= TechnicianHighThinkingToolCallCheckpoint
+                                && !handledHighThinkingCheckpoint)
                             {
                                 pendingCheckpoint = TechnicianCheckpoint.CompactAndRaiseThinking;
                                 break;
@@ -576,7 +580,7 @@ namespace App.Pages
         {
             if (_personality == ChatPersonality.Technician)
                 return _technicianTools is null
-                    ? new ToolResult(false, "{\"success\":false,\"error\":\"Technician tools are unavailable.\",\"solution\":\"Reconnect Technician and retry the operation.\"}")
+                    ? new ToolResult(false, "{\"success\":false,\"error\":\"Technician tools are unavailable.\",\"suggestion\":\"Reconnect Technician and retry the operation.\"}")
                     : await _technicianTools.ExecuteAsync(name, arguments, token);
             if (_personality == ChatPersonality.Smart)
                 return _smartTools is null
@@ -651,16 +655,23 @@ namespace App.Pages
 
         private void PruneHistory()
         {
-            var retainedCharacters = Session.History.Sum(step => step.ToJsonString().Length);
-            while (retainedCharacters > MaximumHistoryCharacters && Session.History.Count > 1)
-            {
-                retainedCharacters -= Session.History[0].ToJsonString().Length;
-                Session.History.RemoveAt(0);
-            }
             while (Session.History.Count > 0
                 && !string.Equals(Session.History[0]["type"]?.GetValue<string>(), "user_input", StringComparison.Ordinal))
             {
                 Session.History.RemoveAt(0);
+            }
+
+            var retainedCharacters = Session.History.Sum(step => step.ToJsonString().Length);
+            while (retainedCharacters > MaximumHistoryCharacters)
+            {
+                var nextTurnIndex = Session.History.FindIndex(
+                    1,
+                    step => string.Equals(step["type"]?.GetValue<string>(), "user_input", StringComparison.Ordinal));
+                if (nextTurnIndex < 0) break;
+
+                for (var index = 0; index < nextTurnIndex; index++)
+                    retainedCharacters -= Session.History[index].ToJsonString().Length;
+                Session.History.RemoveRange(0, nextTurnIndex);
             }
         }
 
@@ -846,7 +857,7 @@ namespace App.Pages
             - `§image-HZY6` / `§file-HZY6` are context. Mine for keywords; don't describe them.
 
             ## 2. WORK
-            - Start with `list_file_and_directory` at `.`, then vary `search_file` across synonyms, case/plural variants, partial stems, configs, and subdirectories until found.
+            - Start with `list_file_and_directory` at `.`, then vary `read_file_content` across synonyms, case/plural variants, partial stems, configs, and subdirectories until found.
             - `read_file` before editing. Tool returns a suggestion → follow it next call.
             - Done = `patch_file` applied. Reading, diagnosing, and proposing are not done. Never describe a fix instead of applying it; never ask "should I fix this?" Multiple issues → patch all. Ambiguous → pick the likeliest, apply, note it.
             - After patching, `read_file` the changed region to confirm, then reply in clean Markdown: what broke, what changed, any assumptions.
@@ -1758,7 +1769,7 @@ namespace App.Pages
             "write_file" => "Write file",
             "patch_file" => "Patch file",
             "delete_file" => "Delete file",
-            "search_file" => "Search files",
+            "read_file_content" => "Read file content",
             "list_file_and_directory" => "List files and directories",
             "execute" => "Run command",
             "execute_sudo" => "Run elevated command",
@@ -1785,8 +1796,8 @@ namespace App.Pages
 
         private static JsonNode? ToolDisplayArgument(JsonObject arguments)
         {
-            var preferredArgument = arguments["file"] ?? arguments["path"] ?? arguments["exe"]
-                ?? arguments["regex_pattern"] ?? arguments["command"]
+            var preferredArgument = arguments["file"] ?? arguments["grep_pattern"] ?? arguments["path"]
+                ?? arguments["exe"] ?? arguments["regex_pattern"] ?? arguments["command"]
                 ?? arguments["query"] ?? arguments["value"] ?? arguments["topic"] ?? arguments["request"]
                 ?? arguments["kind"] ?? arguments["process_id"] ?? arguments["key"] ?? arguments.First().Value;
             return preferredArgument;
@@ -1948,8 +1959,7 @@ namespace App.Pages
                 var content = Clipboard.GetContent();
                 var containsStorageItems = content.Contains(StandardDataFormats.StorageItems);
                 var containsBitmap = content.Contains(StandardDataFormats.Bitmap);
-                var containsText = content.Contains(StandardDataFormats.Text);
-                if (!containsStorageItems && !containsBitmap && !containsText) return;
+                if (!containsStorageItems && !containsBitmap) return;
 
                 e.Handled = true;
                 var files = containsStorageItems
@@ -1961,14 +1971,7 @@ namespace App.Pages
                     return;
                 }
                 if (!containsBitmap)
-                {
-                    if (containsText)
-                    {
-                        var text = await content.GetTextAsync();
-                        await UpdateComposerAfterPasteAsync(() => InsertPlainTextIntoComposer(text));
-                    }
                     return;
-                }
 
                 var bitmapReference = await content.GetBitmapAsync();
                 clipboardImage = await ApplicationData.Current.TemporaryFolder.CreateFileAsync($"{Guid.NewGuid():N}.png", CreationCollisionOption.FailIfExists);
@@ -2045,14 +2048,6 @@ namespace App.Pages
             }))
                 completion.SetException(new InvalidOperationException("The composer is no longer available."));
             return completion.Task;
-        }
-
-        private void InsertPlainTextIntoComposer(string text)
-        {
-            var selectionStart = ComposerBox.SelectionStart;
-            ComposerBox.SelectedText = text;
-            ComposerBox.SelectionStart = selectionStart + text.Length;
-            ComposerBox.SelectionLength = 0;
         }
 
         private static string GetClipboardAttachmentDisplayName(StorageFile file)

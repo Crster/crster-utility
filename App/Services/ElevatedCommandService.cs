@@ -12,8 +12,7 @@ namespace App.Services
         internal const string HelperArgument = "--technician-elevated-command";
 
         internal static async Task<ElevatedCommandResult> RunAsync(
-            string executable,
-            string arguments,
+            string command,
             string workingDirectory,
             CancellationToken token)
         {
@@ -23,7 +22,7 @@ namespace App.Services
             {
                 await File.WriteAllTextAsync(
                     requestPath,
-                    JsonSerializer.Serialize(new ElevatedCommandRequest(executable, arguments, workingDirectory)),
+                    JsonSerializer.Serialize(new ElevatedCommandRequest(command, workingDirectory)),
                     token);
                 var appExecutable = Environment.ProcessPath
                     ?? throw new InvalidOperationException("The application executable path is unavailable.");
@@ -59,14 +58,9 @@ namespace App.Services
                     ?? throw new InvalidOperationException("The elevated command request is invalid.");
                 using var process = new Process
                 {
-                    StartInfo = new ProcessStartInfo(request.Executable, request.Arguments)
-                    {
-                        WorkingDirectory = request.WorkingDirectory,
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        CreateNoWindow = true
-                    }
+                    StartInfo = TechnicianToolService.CreateCommandStartInfo(
+                        request.Command,
+                        request.WorkingDirectory)
                 };
                 process.Start();
                 var stdout = process.StandardOutput.ReadToEndAsync();
@@ -92,7 +86,7 @@ namespace App.Services
             catch (UnauthorizedAccessException) { }
         }
 
-        private sealed record ElevatedCommandRequest(string Executable, string Arguments, string WorkingDirectory);
+        private sealed record ElevatedCommandRequest(string Command, string WorkingDirectory);
     }
 
     internal sealed record ElevatedCommandResult(string Stdout, string Stderr, int ExitCode);
