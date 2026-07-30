@@ -72,7 +72,7 @@
                             </DataTemplate>
                         </Button.ContentTemplate>
                     </Button>
-                    <Button x:Name="SaveNoteButton" Grid.Column="1" Tag="save" Click="ToolButton_Click" Content="Save note" Visibility="Collapsed" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False" />
+                    <Button x:Name="SaveNoteButton" Grid.Column="1" Tag="save" Click="ToolButton_Click" Content="Save note" Visibility="Collapsed" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False" Style="{StaticResource AccentButtonStyle}" />
                 </Grid>
             </Border>
 
@@ -106,7 +106,7 @@
                                     <ControlTemplate TargetType="ListViewItem">
                                         <ContentPresenter Content="{TemplateBinding Content}"
                                                   ContentTemplate="{TemplateBinding ContentTemplate}"
-                                                  ContentTransitions="{TemplateBinding ContentTransitions}"
+                                                  ContentTransitions="{x:Null}"
                                                   HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
                                                   VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
                                     </ControlTemplate>
@@ -123,7 +123,9 @@
                 <Grid x:Name="NoteEditorView" Visibility="Collapsed">
                     <TextBox x:Name="NoteEditor"
                          KeyDown="NoteEditor_KeyDown"
+                         Paste="NoteEditor_Paste"
                          AcceptsReturn="True"
+                         FontFamily="Cascadia Mono"
                          TextWrapping="Wrap"
                          VerticalAlignment="Stretch"
                          VerticalContentAlignment="Top"

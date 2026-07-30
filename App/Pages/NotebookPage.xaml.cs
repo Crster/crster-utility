@@ -11,6 +11,8 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Navigation;
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
 using Windows.System;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
@@ -231,15 +233,21 @@ namespace App.Pages
         private async Task SaveEditingAsync()
         {
             if (_editingEntry is null) return;
-            _editingEntry.Content = NoteEditor.Text;
-            if (string.IsNullOrWhiteSpace(_editingEntry.Content))
+            var editingEntry = _editingEntry;
+            editingEntry.Content = NoteEditor.Text;
+            if (string.IsNullOrWhiteSpace(editingEntry.Content))
             {
                 if (_isCreatingNote) { CloseEditor(); return; }
-                _entries.Remove(_editingEntry);
+                _entries.Remove(editingEntry);
             }
-            else if (_isCreatingNote && !_entries.Contains(_editingEntry)) _entries.Insert(0, _editingEntry);
+            else if (_isCreatingNote && !_entries.Contains(editingEntry)) _entries.Insert(0, editingEntry);
 
-            if (await SaveNotebookAsync()) CloseEditor();
+            if (await SaveNotebookAsync())
+            {
+                var entryIndex = _entries.IndexOf(editingEntry);
+                CloseEditor();
+                if (entryIndex >= 0) _entries[entryIndex] = editingEntry;
+            }
         }
 
         private void CloseEditor()
@@ -303,6 +311,47 @@ namespace App.Pages
             {
                 e.Handled = true;
                 CloseEditor();
+            }
+        }
+
+        private async void NoteEditor_Paste(object sender, TextControlPasteEventArgs e)
+        {
+            if (_editingEntry is null || _attachmentStorage is null) return;
+            var editingEntry = _editingEntry;
+            try
+            {
+                var content = Clipboard.GetContent();
+                var containsStorageItems = content.Contains(StandardDataFormats.StorageItems);
+                var containsBitmap = content.Contains(StandardDataFormats.Bitmap);
+                if (!containsStorageItems && !containsBitmap) return;
+
+                e.Handled = true;
+                var references = new List<string>();
+                if (containsStorageItems)
+                {
+                    var files = (await content.GetStorageItemsAsync()).OfType<StorageFile>().ToList();
+                    foreach (var file in files)
+                    {
+                        var attachmentId = await _attachmentStorage.CopyFromPathAsync(file.Path);
+                        var target = $"local://{attachmentId}{file.FileType}";
+                        references.Add(NotebookAttachmentStorageService.IsImagePath(file.Path)
+                            ? $"![{System.IO.Path.GetFileNameWithoutExtension(file.Name)}]({target})"
+                            : $"[{file.Name}]({target})");
+                    }
+                }
+                else
+                {
+                    var attachmentId = await _attachmentStorage.CopyBitmapAsync(await content.GetBitmapAsync());
+                    references.Add($"![Pasted image](local://{attachmentId}.png)");
+                }
+
+                if (!ReferenceEquals(editingEntry, _editingEntry) || references.Count == 0) return;
+                InsertEditorText(string.Join(Environment.NewLine, references));
+                SaveStatusText.Text = string.Empty;
+            }
+            catch (Exception exception)
+            {
+                SaveStatusText.Text = $"Paste failed: {exception.Message}";
             }
         }
 

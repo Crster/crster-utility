@@ -43,7 +43,7 @@ namespace App.Windows
             InitializeComponent();
             this.ExtendsContentIntoTitleBar = true;
 
-            AppWindow.Resize(new SizeInt32(800, 600));
+            AppWindow.Resize(new SizeInt32(800, 720));
             CenterOnCurrentScreen();
             AppWindow.SetIcon("Assets/WindowIcon.ico");
             AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;

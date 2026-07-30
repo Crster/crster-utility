@@ -13,7 +13,6 @@
             PointerExited="Root_PointerExited">
         <ScrollViewer x:Name="BlockScrollViewer"
                       MaxHeight="500"
-                      Loaded="BlockScroll_Loaded"
                       HorizontalScrollMode="Disabled"
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollMode="Enabled"

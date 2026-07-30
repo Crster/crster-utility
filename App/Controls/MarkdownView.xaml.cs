@@ -345,16 +345,12 @@ namespace App.Controls
             Background = (Brush)Application.Current.Resources["ControlFillColorSecondaryBrush"],
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(12),
-            Child = new ScrollViewer
+            Child = new TextBlock
             {
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Content = new TextBlock
-                {
-                    Text = code.TrimEnd(),
-                    FontFamily = new FontFamily("Cascadia Mono"),
-                    IsTextSelectionEnabled = true,
-                    TextWrapping = TextWrapping.NoWrap
-                }
+                Text = code.TrimEnd(),
+                FontFamily = new FontFamily("Cascadia Mono"),
+                IsTextSelectionEnabled = true,
+                TextWrapping = TextWrapping.Wrap
             }
         };
 

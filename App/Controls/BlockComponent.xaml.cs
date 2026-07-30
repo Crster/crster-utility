@@ -14,6 +14,7 @@ namespace App.Controls
         private NotebookAttachmentStorageService? _attachmentStorage;
         private bool _isPointerOver;
         private bool _isSearchHighlighted;
+        private int _renderVersion;
 
         public event EventHandler? EditRequested;
 
@@ -24,13 +25,19 @@ namespace App.Controls
             InitializeComponent();
             HorizontalAlignment = HorizontalAlignment.Stretch;
             AddHandler(DoubleTappedEvent, new DoubleTappedEventHandler(Noteblock_DoubleTapped), true);
+            BlockScrollViewer.AddHandler(PointerWheelChangedEvent, new PointerEventHandler(BlockScrollViewer_PointerWheelChanged), true);
         }
 
         internal void Configure(NotebookEntry entry, NotebookAttachmentStorageService attachmentStorage)
         {
             _entry = entry;
             _attachmentStorage = attachmentStorage;
-            ShowPreview();
+            ContentHost.Children.Clear();
+            var renderVersion = ++_renderVersion;
+            _ = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (renderVersion == _renderVersion) ShowPreview();
+            });
         }
 
         internal void HighlightSearchResult()
@@ -65,6 +72,35 @@ namespace App.Controls
             SetHoverBackground();
         }
 
+        private void BlockScrollViewer_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
+        {
+            var pointerProperties = e.GetCurrentPoint(BlockScrollViewer).Properties;
+            if (pointerProperties.IsHorizontalMouseWheel) return;
+
+            var wheelDelta = pointerProperties.MouseWheelDelta;
+            var isAtRequestedEdge = wheelDelta > 0
+                ? BlockScrollViewer.VerticalOffset <= 0.5
+                : wheelDelta < 0 && BlockScrollViewer.VerticalOffset >= BlockScrollViewer.ScrollableHeight - 0.5;
+            if (!isAtRequestedEdge || FindParentScrollViewer() is not { } parentScrollViewer) return;
+
+            var targetOffset = Math.Clamp(
+                parentScrollViewer.VerticalOffset - wheelDelta,
+                0,
+                parentScrollViewer.ScrollableHeight);
+            if (Math.Abs(targetOffset - parentScrollViewer.VerticalOffset) <= 0.5) return;
+
+            parentScrollViewer.ChangeView(null, targetOffset, null, true);
+            e.Handled = true;
+        }
+
+        private ScrollViewer? FindParentScrollViewer()
+        {
+            DependencyObject? current = this;
+            while ((current = VisualTreeHelper.GetParent(current)) is not null)
+                if (current is ScrollViewer scrollViewer) return scrollViewer;
+            return null;
+        }
+
         private void SetHoverBackground()
         {
             if (_isSearchHighlighted)
@@ -94,21 +130,6 @@ namespace App.Controls
         {
             _ = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
                 BlockScrollViewer.ChangeView(null, BlockScrollViewer.ScrollableHeight, null, true));
-        }
-
-        private void BlockScroll_Loaded(object sender, RoutedEventArgs e)
-        {
-            var scrollViewer = (ScrollViewer)sender;
-            SizeChangedEventHandler? sizeChangedHandler = null;
-            sizeChangedHandler = (_, _) =>
-            {
-                scrollViewer.ChangeView(null, scrollViewer.ScrollableHeight, null, true);
-                if (scrollViewer.Content is FrameworkElement content)
-                    content.SizeChanged -= sizeChangedHandler;
-            };
-            if (scrollViewer.Content is FrameworkElement content)
-                content.SizeChanged += sizeChangedHandler;
-            scrollViewer.ChangeView(null, scrollViewer.ScrollableHeight, null, true);
         }
     }
 }
