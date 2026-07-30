@@ -15,7 +15,7 @@
             <StackPanel Spacing="18">
                 <StackPanel Spacing="5">
                     <TextBlock Text="Set up Crster Utility" Style="{StaticResource TitleTextBlockStyle}" />
-                    <TextBlock Text="Choose where to store the database and provide Gemini API key for smart functionality." TextWrapping="Wrap"
+                    <TextBlock Text="Choose where to store the database and provide Qwen API key for smart functionality." TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 </StackPanel>
                 <StackPanel Spacing="6">
@@ -26,7 +26,7 @@
                         <Button Grid.Column="1" Content="Browse" Click="BrowseButton_Click" />
                     </Grid>
                 </StackPanel>
-                <PasswordBox x:Name="GeminiApiKeyBox" Header="Gemini API key" PlaceholderText="Paste your Gemini API key" />
+                <PasswordBox x:Name="QwenApiKeyBox" Header="Qwen API key" PlaceholderText="Paste your Qwen API key" />
                 <TextBlock x:Name="StatusText" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" />
                 <Button x:Name="ContinueButton" Content="Continue" HorizontalAlignment="Right" Click="ContinueButton_Click" />
             </StackPanel>

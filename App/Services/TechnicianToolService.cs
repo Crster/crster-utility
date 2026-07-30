@@ -42,10 +42,10 @@ namespace App.Services
         private const string WhitespaceMatchMode = "whitespace";
         private const string DecodedEscapeMatchMode = "decoded_escape";
         private const string PatchFormatGuidance = "Retry with this exact raw diff structure: <<<<<<< SEARCH\n[current file text]\n=======\n[replacement text]\n>>>>>>> REPLACE. The opening marker must contain the literal word SEARCH and the closing marker must contain the literal word REPLACE. Never put line numbers, character offsets, filenames, or other labels in either marker. Do not wrap the diff in Markdown fences.";
-        private readonly GeminiClient _client;
+        private readonly QwenClient _client;
         private readonly SecretaryToolService _secretaryTools;
         private readonly Func<string, Task<bool>> _confirmAsync;
-        public TechnicianToolService(GeminiClient client, SecretaryToolService secretaryTools,
+        public TechnicianToolService(QwenClient client, SecretaryToolService secretaryTools,
             Func<string, Task<bool>> confirmAsync)
         {
             _client = client;

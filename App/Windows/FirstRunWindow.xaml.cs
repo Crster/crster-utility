@@ -49,22 +49,22 @@ namespace App.Windows
         private async void ContinueButton_Click(object sender, RoutedEventArgs e)
         {
             var folder = DatabaseFolderBox.Text.Trim();
-            var apiKey = GeminiApiKeyBox.Password.Trim();
+            var apiKey = QwenApiKeyBox.Password.Trim();
             if (folder.Length == 0 || apiKey.Length == 0)
             {
-                StatusText.Text = "Database folder and Gemini API key are required.";
+                StatusText.Text = "Database folder and Qwen API key are required.";
                 return;
             }
 
             ContinueButton.IsEnabled = false;
-            StatusText.Text = "Verifying storage and Gemini...";
+            StatusText.Text = "Verifying storage and Qwen...";
             try
             {
                 Directory.CreateDirectory(folder);
                 var probe = Path.Combine(folder, $".crster-access-{Guid.NewGuid():N}.tmp");
                 await File.WriteAllTextAsync(probe, "probe");
                 File.Delete(probe);
-                using (var client = new GeminiClient(apiKey))
+                using (var client = new QwenClient(apiKey))
                     _ = await client.EmbedRetrievalQueryAsync("Crster Utility setup", CancellationToken.None);
                 App.Settings.Configure(folder, apiKey);
                 SetupCompleted?.Invoke(this, EventArgs.Empty);

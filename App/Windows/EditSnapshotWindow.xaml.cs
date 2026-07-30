@@ -801,9 +801,9 @@ namespace App.Windows
         private async Task CopyTextAndCloseAsync()
         {
             if (isCopyingText) return;
-            if (string.IsNullOrWhiteSpace(App.Settings.Current.GeminiApiKey))
+            if (string.IsNullOrWhiteSpace(App.Settings.Current.QwenApiKey))
             {
-                await ShowCopyTextErrorAsync("A Gemini API key is required to copy text from a snapshot.");
+                await ShowCopyTextErrorAsync("A Qwen API key is required to copy text from a snapshot.");
                 return;
             }
 
@@ -821,10 +821,10 @@ namespace App.Windows
                 temporaryImagePath = Path.Combine(Path.GetTempPath(), $"CrsterSnapshot-{Guid.NewGuid():N}.png");
                 await image.SaveAsync(temporaryImagePath, CanvasBitmapFileFormat.Png);
 
-                using var client = new GeminiClient(App.Settings.Current.GeminiApiKey);
+                using var client = new QwenClient(App.Settings.Current.QwenApiKey);
                 var attachment = await client.UploadFileAsync(temporaryImagePath, CancellationToken.None);
                 remoteFileName = attachment.RemoteName;
-                var request = GeminiClient.CreateUserStep(
+                var request = QwenClient.CreateUserStep(
                     "Analyze the attached image. First, extract every readable piece of text exactly, preserving useful line breaks. If there is no readable text, provide one short, factual description of the image. Return only the extracted text or description, with no introduction or labels.",
                     [attachment]);
                 var response = await client.CreateSimpleInteractionAsync(
@@ -835,7 +835,7 @@ namespace App.Windows
                     null,
                     CancellationToken.None);
                 var text = response.Text.Trim();
-                if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("Gemini returned no text for the selected image.");
+                if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("Qwen returned no text for the selected image.");
 
                 var dataPackage = new DataPackage();
                 dataPackage.SetText(text);
@@ -859,7 +859,7 @@ namespace App.Windows
                 {
                     try
                     {
-                        using var client = new GeminiClient(App.Settings.Current.GeminiApiKey);
+                        using var client = new QwenClient(App.Settings.Current.QwenApiKey);
                         await client.DeleteFileAsync(remoteFileName, CancellationToken.None);
                     }
                     catch { }

@@ -122,9 +122,9 @@ namespace App.Pages
                 SaveStatusText.Text = "Select text in the note editor to improve it.";
                 return;
             }
-            if (string.IsNullOrWhiteSpace(App.Settings.Current.GeminiApiKey))
+            if (string.IsNullOrWhiteSpace(App.Settings.Current.QwenApiKey))
             {
-                SaveStatusText.Text = "A Gemini API key is required to improve text.";
+                SaveStatusText.Text = "A Qwen API key is required to improve text.";
                 return;
             }
 
@@ -134,7 +134,7 @@ namespace App.Pages
             {
                 var selectionStart = NoteEditor.SelectionStart;
                 var selectedText = NoteEditor.SelectedText;
-                using var client = new GeminiClient(App.Settings.Current.GeminiApiKey);
+                using var client = new QwenClient(App.Settings.Current.QwenApiKey);
                 var improved = await client.ImproveWritingAsync(selectedText, _pageCancellation.Token);
                 _pageCancellation.Token.ThrowIfCancellationRequested();
                 if (NoteEditor.SelectionStart != selectionStart || !string.Equals(NoteEditor.SelectedText, selectedText, StringComparison.Ordinal))

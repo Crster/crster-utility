@@ -156,9 +156,9 @@ namespace App.Pages
         {
             var prompt = PromptBox.Text.Trim();
             if (_isBusy || prompt.Length == 0) return;
-            if (string.IsNullOrWhiteSpace(App.Settings.Current.GeminiApiKey))
+            if (string.IsNullOrWhiteSpace(App.Settings.Current.QwenApiKey))
             {
-                await ShowErrorAsync("Gemini API key required", "Add a Gemini API key in Settings before using Artist.");
+                await ShowErrorAsync("Qwen API key required", "Add a Qwen API key in Settings before using Artist.");
                 return;
             }
 
@@ -185,7 +185,7 @@ namespace App.Pages
                 if (_pendingAttachment is not null) contextImages.Add(_pendingAttachment);
 
                 SetBusy(true);
-                using var client = new GeminiClient(App.Settings.Current.GeminiApiKey);
+                using var client = new QwenClient(App.Settings.Current.QwenApiKey);
                 var generated = await client.GenerateImageAsync(generationPrompt, contextImages, _pageCancellation.Token);
                 _pageCancellation.Token.ThrowIfCancellationRequested();
                 await SetImageAsync(generated);

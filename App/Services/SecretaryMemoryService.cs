@@ -13,9 +13,9 @@ namespace App.Services
         {
             "personal", "career", "knowledge", "opinion", "idea", "relationship", "guide", "milestone"
         };
-        private readonly GeminiClient _client;
+        private readonly QwenClient _client;
 
-        public SecretaryMemoryService(GeminiClient client) => _client = client;
+        public SecretaryMemoryService(QwenClient client) => _client = client;
 
         public IReadOnlyList<NoteDocument> FindNotes(string query, int maximum = 20)
         {

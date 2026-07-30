@@ -33,7 +33,7 @@ namespace App.Services
             {
                 var values = Parse(File.ReadAllLines(_path));
                 var folder = Read(values, "Storage.DatabaseFolder");
-                var apiKey = Read(values, "Gemini.ApiKey");
+                var apiKey = Read(values, "Qwen.ApiKey");
                 if (string.IsNullOrWhiteSpace(folder) || string.IsNullOrWhiteSpace(apiKey)) return Current = AppSettings.CreateDefault();
                 Initialize(folder, apiKey);
             }
@@ -48,22 +48,22 @@ namespace App.Services
 
         public Task<AppSettings> LoadAsync() => Task.FromResult(Load());
 
-        public void Configure(string databaseFolder, string geminiApiKey)
+        public void Configure(string databaseFolder, string qwenApiKey)
         {
             databaseFolder = System.IO.Path.GetFullPath(databaseFolder.Trim());
-            geminiApiKey = geminiApiKey.Trim();
-            if (geminiApiKey.Length == 0) throw new InvalidOperationException("A Gemini API key is required.");
+            qwenApiKey = qwenApiKey.Trim();
+            if (qwenApiKey.Length == 0) throw new InvalidOperationException("A Qwen API key is required.");
             Directory.CreateDirectory(databaseFolder);
-            Initialize(databaseFolder, geminiApiKey);
-            WriteBootstrap(databaseFolder, geminiApiKey);
+            Initialize(databaseFolder, qwenApiKey);
+            WriteBootstrap(databaseFolder, qwenApiKey);
         }
 
-        private void Initialize(string databaseFolder, string geminiApiKey)
+        private void Initialize(string databaseFolder, string qwenApiKey)
         {
             _database?.Dispose();
             _database = new LiteDatabaseService(System.IO.Path.Combine(databaseFolder, "CrsterUtility.db"));
             SeedSettings(_database.Settings);
-            Current = AppSettings.FromDatabase(databaseFolder, geminiApiKey, _database.Settings);
+            Current = AppSettings.FromDatabase(databaseFolder, qwenApiKey, _database.Settings);
             IsConfigured = true;
         }
 
@@ -81,7 +81,7 @@ namespace App.Services
                 document.Value = definition.Read(settings);
                 collection.Update(definition.Key, document);
             }
-            WriteBootstrap(settings.DatabaseFolder, settings.GeminiApiKey);
+            WriteBootstrap(settings.DatabaseFolder, settings.QwenApiKey);
             var embeddingModelChanged = !string.Equals(Current.EmbeddingModel, settings.EmbeddingModel, StringComparison.OrdinalIgnoreCase);
             Current = settings;
             Changed?.Invoke(this, settings);
@@ -95,7 +95,7 @@ namespace App.Services
             var document = Database.Settings.FindById(key) ?? throw new KeyNotFoundException($"Unknown setting '{key}'.");
             document.Value = document.Default;
             Database.Settings.Update(key, document);
-            Current = AppSettings.FromDatabase(Current.DatabaseFolder, Current.GeminiApiKey, Database.Settings);
+            Current = AppSettings.FromDatabase(Current.DatabaseFolder, Current.QwenApiKey, Database.Settings);
             Changed?.Invoke(this, Current);
         }
 
@@ -142,7 +142,7 @@ namespace App.Services
         {
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
             var temporaryPath = $"{_path}.{Guid.NewGuid():N}.tmp";
-            File.WriteAllLines(temporaryPath, ["[Storage]", $"DatabaseFolder={databaseFolder}", "", "[Gemini]", $"ApiKey={apiKey}"]);
+            File.WriteAllLines(temporaryPath, ["[Storage]", $"DatabaseFolder={databaseFolder}", "", "[Qwen]", $"ApiKey={apiKey}"]);
             File.Move(temporaryPath, _path, true);
         }
 
@@ -176,11 +176,11 @@ namespace App.Services
             new("snapshot.captureMouseCursor", "Capture mouse cursor", true, value => value.SnapshotCaptureMouseCursor),
             new("recording.microphoneDeviceId", "Recording microphone", "", value => value.RecordingMicrophoneDeviceId),
             new("caffeine.shortcut", "Caffeine shortcut", "Ctrl+Shift+Alt+F12", value => value.CaffeineShortcut),
-            new("gemini.lastChatPersonality", "Last chat personality", "Secretary", value => value.LastChatPersonality),
-            new("gemini.embeddingModel", "Embedding model", "gemini-embedding-001", value => value.EmbeddingModel),
-            new("gemini.lowCostModel", "Low cost model", "gemini-2.5-flash-lite", value => value.LowCostModel),
-            new("gemini.highCostModel", "High cost model", "gemini-3.5-flash", value => value.HighCostModel),
-            new("gemini.artistModel", "Artist model", "gemini-3.1-flash-image", value => value.ArtistModel),
+            new("qwen.lastChatPersonality", "Last chat personality", "Secretary", value => value.LastChatPersonality),
+            new("qwen.embeddingModel", "Embedding model", "text-embedding-v4", value => value.EmbeddingModel),
+            new("qwen.lowCostModel", "Low cost model", "qwen-flash", value => value.LowCostModel),
+            new("qwen.highCostModel", "High cost model", "qwen-plus", value => value.HighCostModel),
+            new("qwen.artistModel", "Artist model", "qwen-image-2.0", value => value.ArtistModel),
             new("technician.workspace", "Technician workspace", "", value => value.TechnicianWorkspace),
             new("general.city", "City", "Manila", value => value.City),
             new("general.country", "Country", "Philippines", value => value.Country)
@@ -188,17 +188,17 @@ namespace App.Services
 
         public string DatabaseFolder { get; set; } = string.Empty;
         public string NotebookDataPath { get => DatabaseFolder; set => DatabaseFolder = value; }
-        public string GeminiApiKey { get; set; } = string.Empty;
+        public string QwenApiKey { get; set; } = string.Empty;
         public bool StartWithWindows { get; set; }
         public string SnapshotShortcut { get; set; } = "PrintScreen";
         public bool SnapshotCaptureMouseCursor { get; set; } = true;
         public string RecordingMicrophoneDeviceId { get; set; } = string.Empty;
         public string CaffeineShortcut { get; set; } = "Ctrl+Shift+Alt+F12";
         public string LastChatPersonality { get; set; } = "Secretary";
-        public string EmbeddingModel { get; set; } = "gemini-embedding-001";
-        public string LowCostModel { get; set; } = "gemini-2.5-flash-lite";
-        public string HighCostModel { get; set; } = "gemini-3.5-flash";
-        public string ArtistModel { get; set; } = "gemini-3.1-flash-image";
+        public string EmbeddingModel { get; set; } = "text-embedding-v4";
+        public string LowCostModel { get; set; } = "qwen-flash";
+        public string HighCostModel { get; set; } = "qwen-plus";
+        public string ArtistModel { get; set; } = "qwen-image-2.0";
         public string TechnicianWorkspace { get; set; } = string.Empty;
         public string City { get; set; } = "Manila";
         public string Country { get; set; } = "Philippines";
@@ -212,17 +212,17 @@ namespace App.Services
         {
             var result = CreateDefault();
             result.DatabaseFolder = folder;
-            result.GeminiApiKey = apiKey;
+            result.QwenApiKey = apiKey;
             result.StartWithWindows = Bool("general.startWithWindows", result.StartWithWindows);
             result.SnapshotShortcut = Text("snapshot.shortcut", result.SnapshotShortcut);
             result.SnapshotCaptureMouseCursor = Bool("snapshot.captureMouseCursor", result.SnapshotCaptureMouseCursor);
             result.RecordingMicrophoneDeviceId = Text("recording.microphoneDeviceId", result.RecordingMicrophoneDeviceId);
             result.CaffeineShortcut = Text("caffeine.shortcut", result.CaffeineShortcut);
-            result.LastChatPersonality = Text("gemini.lastChatPersonality", result.LastChatPersonality);
-            result.EmbeddingModel = Text("gemini.embeddingModel", result.EmbeddingModel);
-            result.LowCostModel = Text("gemini.lowCostModel", result.LowCostModel);
-            result.HighCostModel = Text("gemini.highCostModel", result.HighCostModel);
-            result.ArtistModel = Text("gemini.artistModel", result.ArtistModel);
+            result.LastChatPersonality = Text("qwen.lastChatPersonality", result.LastChatPersonality);
+            result.EmbeddingModel = Text("qwen.embeddingModel", result.EmbeddingModel);
+            result.LowCostModel = Text("qwen.lowCostModel", result.LowCostModel);
+            result.HighCostModel = Text("qwen.highCostModel", result.HighCostModel);
+            result.ArtistModel = Text("qwen.artistModel", result.ArtistModel);
             result.TechnicianWorkspace = Text("technician.workspace", result.TechnicianWorkspace);
             result.City = Text("general.city", result.City);
             result.Country = Text("general.country", result.Country);

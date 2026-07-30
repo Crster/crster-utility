@@ -22,7 +22,7 @@ namespace App.Services
         {
             try
             {
-                using var client = new GeminiClient(App.Settings.Current.GeminiApiKey);
+                using var client = new QwenClient(App.Settings.Current.QwenApiKey);
                 var database = App.Settings.Database;
                 foreach (var note in database.Notes.FindAll())
                 {

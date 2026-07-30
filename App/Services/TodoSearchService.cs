@@ -34,16 +34,16 @@ namespace App.Services
             var todos = Database.Todos.Find(todo => !todo.IsDone).ToList();
             if (todos.Count == 0) return [];
 
-            using var gemini = new GeminiClient(App.Settings.Current.GeminiApiKey);
+            using var qwen = new QwenClient(App.Settings.Current.QwenApiKey);
             foreach (var todo in todos.Where(todo => todo.Embedding.Length == 0))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var embedding = await gemini.EmbedRetrievalDocumentAsync(todo.Category, todo.Value, cancellationToken);
+                var embedding = await qwen.EmbedRetrievalDocumentAsync(todo.Category, todo.Value, cancellationToken);
                 todo.Embedding = NotebookDatabaseService.FloatsToBytes(embedding);
                 Database.Todos.Update(todo);
             }
 
-            var queryEmbedding = await gemini.EmbedRetrievalQueryAsync(query, cancellationToken);
+            var queryEmbedding = await qwen.EmbedRetrievalQueryAsync(query, cancellationToken);
             return todos
                 .Where(todo => todo.Embedding.Length > 0)
                 .Select(todo => (Todo: todo, Score: NotebookDatabaseService.Cosine(
@@ -58,8 +58,8 @@ namespace App.Services
 
         public async Task RefreshEmbeddingAsync(TodoDocument todo, CancellationToken cancellationToken = default)
         {
-            using var gemini = new GeminiClient(App.Settings.Current.GeminiApiKey);
-            var embedding = await gemini.EmbedRetrievalDocumentAsync(todo.Category, todo.Value, cancellationToken);
+            using var qwen = new QwenClient(App.Settings.Current.QwenApiKey);
+            var embedding = await qwen.EmbedRetrievalDocumentAsync(todo.Category, todo.Value, cancellationToken);
             todo.Embedding = NotebookDatabaseService.FloatsToBytes(embedding);
             Database.Todos.Update(todo);
         }

@@ -6,9 +6,9 @@ namespace App.Models
 {
     internal enum ChatItemKind { User, Assistant, Thinking, Tool, Error }
     internal enum ChatPersonality { Secretary, Smart, Technician }
-    internal enum GeminiThinkingLevel { Default, Disabled, Minimal, Low, High }
+    internal enum QwenThinkingLevel { Default, Disabled, Minimal, Low, High }
 
-    internal sealed class GeminiModel
+    internal sealed class QwenModel
     {
         public required string Id { get; init; }
         public required string DisplayName { get; init; }
@@ -29,14 +29,14 @@ namespace App.Models
         Guid AttachmentId = default,
         string FileExtension = "",
         string TokenName = "");
-    internal sealed record GeminiFunctionCall(string Id, string Name, JsonObject Arguments);
+    internal sealed record QwenFunctionCall(string Id, string Name, JsonObject Arguments);
     internal sealed record GeneratedImage(byte[] Data, string MimeType);
     internal sealed record GroundedSource(string Title, string Uri);
 
-    internal sealed class GeminiTurnResult
+    internal sealed class QwenTurnResult
     {
         public List<JsonObject> Steps { get; } = [];
-        public List<GeminiFunctionCall> FunctionCalls { get; } = [];
+        public List<QwenFunctionCall> FunctionCalls { get; } = [];
         public List<GroundedSource> Sources { get; } = [];
         public string Text { get; set; } = string.Empty;
         public string Thinking { get; set; } = string.Empty;
