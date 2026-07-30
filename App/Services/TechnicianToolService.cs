@@ -59,17 +59,17 @@ namespace App.Services
         {
             JsonArray declarations =
             [
-                Function("read_file", "Read a discovered text file inside the selected workspace before editing it. Pass the relative filename returned by read_file_content or list_file_and_directory. startIndex and endIndex use slice semantics: negative values count from the end and an omitted endIndex means EOF.", Props(("file", String()), ("startIndex", Integer()), ("endIndex", Integer())), "file"),
-                Function("write_file", "Write text to a file inside the workspace. Creates parent folders when needed. Optionally provide zero-based, end-exclusive start and end offsets to replace a character range in an existing file; provide neither offset to replace the whole file. After corrected patch_file attempts fail, write_file remains available to complete the requested source change.", Props(("path", String()), ("content", String()), ("start", Integer()), ("end", Integer())), "path", "content"),
-                Function("patch_file", "Atomically patch one existing file using raw Diff-Fenced text. Every section must use the literal marker lines `<<<<<<< SEARCH`, `=======`, and `>>>>>>> REPLACE`. Never replace SEARCH or REPLACE with a line number, character offset, filename, or other label.", Props(("file", String()), ("diff", String()), ("syntax_check", Boolean())), "file", "diff"),
-                Function("delete_file", "Delete a file or empty directory inside the workspace after user confirmation.", Props(("path", String())), "path"),
-                Function("read_file_content", "Recursively searches file contents under a workspace-relative path and for lines matching a .NET regular expression. Matches against contents, not filenames. Hidden, dot-prefixed, and generated paths are excluded.", Props(("path", String()), ("grep_pattern", String())), "path", "grep_pattern"),
-                Function("list_file_and_directory", "Discover the workspace structure yourself instead of asking the user. List direct children matching a .NET regular expression; use path \".\" and pattern \".*\" for the workspace root, then inspect likely subdirectories. Use this when content searches do not reveal the target. hidden includes hidden, dot-prefixed, ignored, and generated entries after user confirmation.", Props(("path", String()), ("pattern", String()), ("hidden", Boolean())), "path", "pattern"),
-                Function("execute", "Run one complete Windows command string using the selected workspace as the working directory. Include the executable and all arguments in command, for example `powershell.exe -NoProfile -Command \"Get-ChildItem\"`. Do not use deprecated WMIC; use PowerShell CIM cmdlets instead. Output is head/tail truncated unless full is approved.", Props(("command", String()), ("full", Boolean())), "command"),
-                Function("execute_sudo", "Run one complete Windows command string elevated through UAC, using the selected workspace as the working directory. Include the executable and all arguments in command. Do not use deprecated WMIC; use PowerShell CIM cmdlets instead.", Props(("command", String()), ("full", Boolean())), "command"),
-                Function("list_process", "List running processes.", new JsonObject()),
-                Function("kill_process", "Terminate a process by process ID after confirmation.", Props(("process_id", Integer())), "process_id"),
-                Function("get_data", "Return only one of these local data values: local date/time, configured location, weather, clipboard text, language, or battery percentage. It cannot obtain any other data.", Props(("kind", SecretaryToolService.DataKindSchema())), "kind")
+                Function("read_workspace_file", "Use after discovering a file to read its current text before editing. The path must be inside the selected workspace. Optional offsets use slice semantics: negative values count from the end and an omitted end offset means end of file.", Props(("workspace_path", String("Workspace-relative file path returned by search_workspace_files or list_workspace_entries.")), ("start_offset", Integer("Optional inclusive character offset; negative values count from the end.")), ("end_offset", Integer("Optional exclusive character offset; omit for end of file."))), "workspace_path"),
+                Function("write_workspace_file", "Use to create a file or replace file text inside the selected workspace. Prefer patch_workspace_file for focused edits. Omit both offsets to replace the whole file; provide both for a zero-based, end-exclusive replacement range.", Props(("workspace_path", String("Workspace-relative target file path.")), ("file_content", String("Exact text to write; may be empty.")), ("start_offset", Integer("Optional zero-based inclusive replacement offset.")), ("end_offset", Integer("Optional zero-based exclusive replacement offset."))), "workspace_path", "file_content"),
+                Function("patch_workspace_file", "Use for focused edits to one existing workspace file. Supply raw diff-fenced SEARCH/REPLACE blocks whose SEARCH text is copied from the latest file content. Required marker lines are <<<<<<< SEARCH, =======, and >>>>>>> REPLACE.", Props(("workspace_path", String("Workspace-relative file path read immediately before this call.")), ("search_replace_diff", String("One or more raw SEARCH/REPLACE blocks without Markdown fences.")), ("validate_syntax", Boolean("When true, reject C# changes that introduce syntax errors."))), "workspace_path", "search_replace_diff"),
+                Function("delete_workspace_entry", "Use to delete one file or empty directory inside the selected workspace. Always requires user confirmation.", Props(("workspace_path", String("Workspace-relative path of the file or empty directory to delete."))), "workspace_path"),
+                Function("search_workspace_files", "Use first to locate relevant code or text by recursively matching file contents under a workspace-relative path. Searches contents, not filenames; excludes hidden and generated paths.", Props(("workspace_path", String("Workspace-relative directory to search; use \".\" for the entire workspace.")), ("search_pattern", String("Case-insensitive .NET regular expression matched against file contents."))), "workspace_path", "search_pattern"),
+                Function("list_workspace_entries", "Use to discover filenames and directories when content search cannot locate the target. Lists direct children whose names match a pattern. Use \".\" and \".*\" for the workspace root.", Props(("workspace_path", String("Workspace-relative directory to list; use \".\" for the root.")), ("name_pattern", String("Case-insensitive .NET regular expression matched against entry names.")), ("include_hidden", Boolean("Include hidden, dot-prefixed, ignored, and generated entries; requires confirmation."))), "workspace_path", "name_pattern"),
+                Function("run_workspace_command", "Use to run one non-elevated Windows command in the selected workspace for inspection, build, lint, or verification. Include the executable and every argument in one command line.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("return_full_output", Boolean("Return untruncated output; may require confirmation."))), "command_line"),
+                Function("run_elevated_workspace_command", "Use only when the requested Windows command requires administrator privileges. Runs in the selected workspace through UAC and requires confirmation.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("return_full_output", Boolean("Return untruncated output; may require confirmation."))), "command_line"),
+                Function("list_running_processes", "Use when the user asks which processes are currently running. Returns process names and numeric IDs.", new JsonObject()),
+                Function("terminate_process", "Use to stop one running process by its numeric ID. Always requires user confirmation.", Props(("process_id", Integer("Positive process ID returned by list_running_processes."))), "process_id"),
+                Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", SecretaryToolService.DataKindSchema())), "context_type")
             ];
             if (includeGoogleSearch)
                 declarations.Add(Function(
@@ -85,34 +85,34 @@ namespace App.Services
             try
             {
                 if (RequiresWorkspace(name) && !HasWorkspace())
-                    return name.Equals("patch_file", StringComparison.Ordinal)
+                    return name.Equals("patch_workspace_file", StringComparison.Ordinal)
                         ? PatchError("workspace_required", "Select a Technician workspace before running local operations.")
                         : Error("workspace_required", "Select a Technician workspace before running local operations.");
 
                 return name switch
                 {
-                    "read_file" => ReadFile(Required(arguments, "file"), OptionalSlice(arguments)),
-                    "write_file" => WriteFile(Required(arguments, "path"), RequiredContent(arguments, "content"), OptionalWriteRange(arguments)),
-                    "patch_file" => PatchFile(Required(arguments, "file"), arguments),
-                    "delete_file" => await DeleteFileAsync(Required(arguments, "path")),
-                    "read_file_content" => await SearchFilesAsync(Required(arguments, "path"), RequiredContent(arguments, "grep_pattern"), token),
-                    "list_file_and_directory" => await ListFilesAsync(Required(arguments, "path"), RequiredContent(arguments, "pattern"), OptionalBoolean(arguments, "hidden")),
-                    "execute" => await ExecuteCommandAsync(Required(arguments, "command"), false, OptionalBoolean(arguments, "full"), token),
-                    "execute_sudo" => await ExecuteCommandAsync(Required(arguments, "command"), true, OptionalBoolean(arguments, "full"), token),
-                    "list_process" => ListProcesses(),
-                    "kill_process" => await KillProcessAsync(OptionalInt(arguments, "process_id", 0)),
+                    "read_workspace_file" => ReadFile(Required(arguments, "workspace_path"), OptionalSlice(arguments)),
+                    "write_workspace_file" => WriteFile(Required(arguments, "workspace_path"), RequiredContent(arguments, "file_content"), OptionalWriteRange(arguments)),
+                    "patch_workspace_file" => PatchFile(Required(arguments, "workspace_path"), arguments),
+                    "delete_workspace_entry" => await DeleteFileAsync(Required(arguments, "workspace_path")),
+                    "search_workspace_files" => await SearchFilesAsync(Required(arguments, "workspace_path"), RequiredContent(arguments, "search_pattern"), token),
+                    "list_workspace_entries" => await ListFilesAsync(Required(arguments, "workspace_path"), RequiredContent(arguments, "name_pattern"), OptionalBoolean(arguments, "include_hidden")),
+                    "run_workspace_command" => await ExecuteCommandAsync(Required(arguments, "command_line"), false, OptionalBoolean(arguments, "return_full_output"), token),
+                    "run_elevated_workspace_command" => await ExecuteCommandAsync(Required(arguments, "command_line"), true, OptionalBoolean(arguments, "return_full_output"), token),
+                    "list_running_processes" => ListProcesses(),
+                    "terminate_process" => await KillProcessAsync(OptionalInt(arguments, "process_id", 0)),
                     "google_search" => await GoogleSearchAsync(Required(arguments, "query"), token),
-                    "get_data" => NormalizeResult(await _secretaryTools.ExecuteAsync("get_data", arguments, token)),
+                    "get_local_context" => NormalizeResult(await _secretaryTools.ExecuteAsync("get_local_context", arguments, token)),
                     _ => Error("unknown_tool", $"Technician cannot use the tool “{name}”.")
                 };
             }
-            catch (FormatException exception) when (name.Equals("patch_file", StringComparison.Ordinal))
+            catch (FormatException exception) when (name.Equals("patch_workspace_file", StringComparison.Ordinal))
             {
                 return PatchError("patch_invalid_format", $"The patch was rejected and the file was not changed. {exception.Message}");
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or FormatException)
             {
-                return name.Equals("patch_file", StringComparison.Ordinal)
+                return name.Equals("patch_workspace_file", StringComparison.Ordinal)
                     ? PatchError("operation_failed", exception.Message)
                     : Error("operation_failed", exception.Message);
             }
@@ -125,7 +125,7 @@ namespace App.Services
             }
             catch (Exception)
             {
-                return name.Equals("patch_file", StringComparison.Ordinal)
+                return name.Equals("patch_workspace_file", StringComparison.Ordinal)
                     ? PatchError("operation_failed", "Technician could not complete that local operation.")
                     : Error("operation_failed", "Technician could not complete that local operation.");
             }
@@ -140,7 +140,7 @@ namespace App.Services
             var content = File.ReadAllText(fullPath);
             var start = ResolveSliceIndex(slice.Start ?? 0, content.Length);
             var end = ResolveSliceIndex(slice.End ?? content.Length, content.Length);
-            if (end < start) throw new FormatException("endIndex resolves before startIndex.");
+            if (end < start) throw new FormatException("end_offset resolves before start_offset.");
             var selectedContent = content[start..end];
             var returnedContent = selectedContent.Length <= MaximumReadResultCharacters ? selectedContent : selectedContent[..MaximumReadResultCharacters];
             return Ok(new JsonObject
@@ -175,7 +175,7 @@ namespace App.Services
             var fullPath = ResolveWorkspacePath(path);
             if (!File.Exists(fullPath)) return PatchError("file_not_found", "The patch was not applied because the file does not exist.");
             var content = File.ReadAllText(fullPath);
-            var edits = ParseDiffFencedEdits(RequiredContent(arguments, "diff"));
+            var edits = ParseDiffFencedEdits(RequiredContent(arguments, "search_replace_diff"));
             var source = CreatePatchIndex(content);
             var resolved = new List<ResolvedPatch>();
 
@@ -207,7 +207,7 @@ namespace App.Services
                 patched = patched[..patch.Start] + patch.NewText + patched[(patch.Start + patch.Length)..];
 
             // An approximate match may have landed on the wrong block, so gate C# on Roslyn even when the caller did not ask.
-            if (OptionalBoolean(arguments, "syntax_check") && Path.GetExtension(fullPath).Equals(".cs", StringComparison.OrdinalIgnoreCase))
+            if (OptionalBoolean(arguments, "validate_syntax") && Path.GetExtension(fullPath).Equals(".cs", StringComparison.OrdinalIgnoreCase))
             {
                 var errors = CSharpSyntaxTree.ParseText(patched).GetDiagnostics()
                     .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
@@ -934,7 +934,7 @@ namespace App.Services
         private static ToolResult PatchSyntaxError(IReadOnlyList<Diagnostic> errors) =>
             PatchError("patch_syntax_error", $"The patched result has {errors.Count} C# syntax error(s); the file was not changed.", new JsonObject
             {
-                ["next_step"] = "Nothing was written. Fix REPLACE so the result is syntactically complete, then retry. Set syntax_check false only if this C# file is intentionally incomplete.",
+                ["next_step"] = "Nothing was written. Fix REPLACE so the result is syntactically complete, then retry. Set validate_syntax to false only if this C# file is intentionally incomplete.",
                 ["errors"] = new JsonArray(errors.Select(error => (JsonNode)CapLine(error.ToString(), MaximumPatchSnippetLineLength)).ToArray())
             });
 
@@ -1307,7 +1307,7 @@ namespace App.Services
             var root = ResolveWorkspacePath(string.IsNullOrWhiteSpace(path) ? "." : path);
             if (!Directory.Exists(root)) return Error("directory_not_found", "The path is not a directory.");
             if (hidden && !await _confirmAsync($"Include hidden, dot-prefixed, ignored, and generated entries in '{root}'?"))
-                return Error("confirmation_declined", "Hidden listing was not approved.", solution: "Call list_file_and_directory with hidden false, or ask the user to approve hidden access.");
+                return Error("confirmation_declined", "Hidden listing was not approved.", solution: "Call list_workspace_entries with include_hidden set to false, or ask the user to approve hidden access.");
             var filter = new Regex(regex, RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromSeconds(1));
             var entries = Directory.EnumerateFileSystemEntries(root).ToArray();
             var ignored = hidden ? [] : await GetGitIgnoredEntriesAsync(root, entries);
@@ -1488,8 +1488,8 @@ namespace App.Services
         private bool HasWorkspace() => !string.IsNullOrWhiteSpace(WorkspacePath) && Directory.Exists(WorkspacePath);
 
         private static bool RequiresWorkspace(string toolName) => toolName is
-            "read_file" or "write_file" or "patch_file" or "delete_file" or "read_file_content" or "list_file_and_directory"
-            or "execute" or "execute_sudo";
+            "read_workspace_file" or "write_workspace_file" or "patch_workspace_file" or "delete_workspace_entry"
+            or "search_workspace_files" or "list_workspace_entries" or "run_workspace_command" or "run_elevated_workspace_command";
 
         private static void ValidateNoReparsePoints(string root, string path)
         {
@@ -1539,18 +1539,18 @@ namespace App.Services
         private static bool OptionalBoolean(JsonObject arguments, string name) => arguments[name]?.GetValue<bool>() ?? false;
         private static (int? Start, int? End) OptionalSlice(JsonObject arguments)
         {
-            return (arguments["startIndex"]?.GetValue<int>(), arguments["endIndex"]?.GetValue<int>());
+            return (arguments["start_offset"]?.GetValue<int>(), arguments["end_offset"]?.GetValue<int>());
         }
         private static (int Start, int End)? OptionalWriteRange(JsonObject arguments)
         {
-            var start = arguments["start"]?.GetValue<int>();
-            var end = arguments["end"]?.GetValue<int>();
+            var start = arguments["start_offset"]?.GetValue<int>();
+            var end = arguments["end_offset"]?.GetValue<int>();
             if (start.HasValue != end.HasValue) throw new FormatException("start and end must be provided together.");
             return start.HasValue ? (start.Value, end!.Value) : null;
         }
-        private static JsonObject String() => new() { ["type"] = "string" };
-        private static JsonObject Integer() => new() { ["type"] = "integer" };
-        private static JsonObject Boolean() => new() { ["type"] = "boolean" };
+        private static JsonObject String(string? description = null) { var schema = new JsonObject { ["type"] = "string" }; if (description is not null) schema["description"] = description; return schema; }
+        private static JsonObject Integer(string? description = null) { var schema = new JsonObject { ["type"] = "integer" }; if (description is not null) schema["description"] = description; return schema; }
+        private static JsonObject Boolean(string? description = null) { var schema = new JsonObject { ["type"] = "boolean" }; if (description is not null) schema["description"] = description; return schema; }
         private static JsonObject Props(params (string Name, JsonObject Schema)[] properties) { var result = new JsonObject(); foreach (var property in properties) result[property.Name] = property.Schema; return result; }
         private static JsonObject Function(string name, string description, JsonObject properties, params string[] required) { var parameters = new JsonObject { ["type"] = "object", ["properties"] = properties }; if (required.Length > 0) parameters["required"] = new JsonArray(required.Select(value => (JsonNode)value).ToArray()); return new JsonObject { ["type"] = "function", ["name"] = name, ["description"] = description, ["parameters"] = parameters }; }
         // The default encoder escapes <, >, &, ' and every non-ASCII character as \uXXXX, which inflates code
@@ -1572,7 +1572,7 @@ namespace App.Services
         private static string SolutionFor(string category) => category switch
         {
             "workspace_required" => "Select an existing Technician workspace, then retry the tool.",
-            "file_not_found" or "path_not_found" or "directory_not_found" => "Check the path with list_file_and_directory, then retry with an existing path.",
+            "file_not_found" or "path_not_found" or "directory_not_found" => "Check the path with list_workspace_entries, then retry with an existing path.",
             "patch_not_found" => "Read the target file and retry with a more distinctive SEARCH block copied from the current content.",
             "patch_ambiguous" => "Add more surrounding source text to the SEARCH block so one location is the unique best match.",
             "confirmation_declined" => "Continue without the risky action or ask the user to approve it explicitly.",

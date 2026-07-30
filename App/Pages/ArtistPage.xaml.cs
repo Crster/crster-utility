@@ -165,10 +165,18 @@ namespace App.Pages
             var contextImages = new System.Collections.Generic.List<GeneratedImage>();
             try
             {
+                var generationPrompt = prompt;
                 if (_normalizedSelection.HasValue)
                 {
+                    if (_image is null) throw new InvalidOperationException("There is no image to edit.");
+                    contextImages.Add(await CreateJpegContextImageAsync(_image));
                     var selection = new GeneratedImage(await CropSelectionAsync(), "image/jpeg");
                     contextImages.Add(await CreateJpegContextImageAsync(selection));
+                    generationPrompt =
+                        "Edit the first image and return the complete edited image. " +
+                        "The second image is a close-up of the selected region to change. " +
+                        "Apply the requested change only to that region and preserve the rest of the first image. " +
+                        $"Requested change: {prompt}";
                 }
                 else if ((_includePreviewOnNextSend || _hasGeneratedPreview) && _image is not null)
                 {
@@ -178,7 +186,7 @@ namespace App.Pages
 
                 SetBusy(true);
                 using var client = new GeminiClient(App.Settings.Current.GeminiApiKey);
-                var generated = await client.GenerateImageAsync(prompt, contextImages, _pageCancellation.Token);
+                var generated = await client.GenerateImageAsync(generationPrompt, contextImages, _pageCancellation.Token);
                 _pageCancellation.Token.ThrowIfCancellationRequested();
                 await SetImageAsync(generated);
                 _pendingAttachment = null;

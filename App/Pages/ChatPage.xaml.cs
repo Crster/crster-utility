@@ -160,7 +160,7 @@ namespace App.Pages
             try
             {
                 var shouldContinue = _personality != ChatPersonality.Technician
-                    || await PrepareTechnicianTurnAsync(technicianMode, _operationCancellation.Token);
+                    || await PrepareTechnicianTurnAsync(technicianMode, prompt, _operationCancellation.Token);
                 await _chatLog.WriteAsync("send.started",
                     ("personality", _personality),
                     ("model", Model()),
@@ -495,14 +495,26 @@ namespace App.Pages
             }
         }
 
-        private async Task<bool> PrepareTechnicianTurnAsync(TechnicianRequestMode mode, CancellationToken token)
+        private async Task<bool> PrepareTechnicianTurnAsync(
+            TechnicianRequestMode mode,
+            string userPrompt,
+            CancellationToken token)
         {
             if (_technicianOrchestrator is null) throw new InvalidOperationException("Technician orchestration is unavailable.");
 
             _technicianRequestMode = mode;
 
-            await LoadProjectDocumentationContextAsync(token);
+            if (IsWorkspaceRequest(userPrompt))
+                await LoadProjectDocumentationContextAsync(token);
             return true;
+        }
+
+        private static bool IsWorkspaceRequest(string prompt)
+        {
+            return Regex.IsMatch(
+                prompt,
+                @"\b(workspace|codebase|repository|repo|project|source code|code|build|compile|compiler|lint|test|file|folder|directory|solution|csproj|slnx|xaml|typescript|javascript|csharp|html|css)\b|(?:^|[\s`""'])(?:\.{0,2}[\\/])|[\w.-]+\.(?:cs|csproj|sln|slnx|xaml|ts|tsx|js|jsx|json|html|css|xml|yaml|yml|md)\b",
+                RegexOptions.IgnoreCase);
         }
 
         private async Task CompactTechnicianHistoryForModelSwitchAsync(
@@ -971,13 +983,16 @@ namespace App.Pages
             You are Technician, a coding and Windows troubleshooting agent.
 
             ACT FIRST:
-            For every workspace-dependent request, scan the workspace before explaining, diagnosing, or changing anything. Call the best tool first with no narration. Continue calling tools until you have enough evidence, then answer.
+            First classify the request as either workspace/code work or Windows/device troubleshooting.
+            - Workspace/code work: scan the selected workspace before explaining, diagnosing, or changing anything.
+            - Windows/device troubleshooting: do not scan, list, search, or read the workspace unless the user explicitly connects the problem to workspace files. Use the relevant process, command, elevated-command, local-context, or Google Search tool instead.
+            Call the best relevant tool first with no narration. Continue calling tools until you have enough evidence, then answer.
 
             WORKFLOW:
             - General conversation or timeless knowledge: answer without tools.
             - Question or diagnosis: inspect, then answer; do not edit unless asked.
             - Fix or implementation: inspect, read the target, make the smallest complete change, and verify it.
-            - Use `read_file_content` to locate code, `list_file_and_directory` for structure, `read_file` before editing, `patch_file` or `write_file` to edit, and `execute` for narrow validation.
+            - Use `search_workspace_files` to locate code, `list_workspace_entries` for structure, `read_workspace_file` before editing, `patch_workspace_file` or `write_workspace_file` to edit, and `run_workspace_command` for narrow validation.
             - Use process, elevated, deletion, local-data, or Google Search tools only when relevant and available.
             - Follow tool error suggestions and change approach instead of repeating a failed call.
             - Never invent evidence, results, changes, or validation.
@@ -1561,10 +1576,11 @@ namespace App.Pages
         private async Task ResubmitTechnicianPromptAsync(TechnicianRequestMode mode)
         {
             if (_isBusy || _operationCancellation is not null) return;
-            var instruction = mode == TechnicianRequestMode.Think
-                ? "Revisit my previous request using deeper reasoning and Google Search when current external evidence would help. Continue from the existing history and do not repeat completed work."
-                : "Continue my previous request with the high-cost model and high thinking. Use the existing history and do not repeat completed work.";
-            await SendFromComposerAsync(mode, instruction);
+            var previousRequest = Session.Messages
+                .LastOrDefault(message => message.Kind == ChatItemKind.User)
+                ?.Content;
+            if (string.IsNullOrWhiteSpace(previousRequest)) return;
+            await SendFromComposerAsync(mode, previousRequest);
         }
 
         private void ShowTechnicianActionError(string title, string message)
@@ -1846,25 +1862,25 @@ namespace App.Pages
 
         private static string HumanizeToolName(string name) => name switch
         {
-            "read_file" => "Read file",
-            "write_file" => "Write file",
-            "patch_file" => "Patch file",
-            "delete_file" => "Delete file",
-            "read_file_content" => "Read file content",
-            "list_file_and_directory" => "List files and directories",
-            "execute" => "Run command",
-            "execute_sudo" => "Run elevated command",
-            "list_process" => "List processes",
-            "kill_process" => "Terminate process",
-            "find_notes" => "Find notes",
-            "find_memos" => "Find memos",
-            "write_memo" => "Save memo",
-            "delete_memo" => "Delete memo",
-            "find_todos" => "Find todos",
-            "get_todo_categories" => "Get todo categories",
-            "get_todos" => "Get relevant todos",
-            "write_todo" => "Save todo",
-            "get_data" => "Get local data",
+            "read_workspace_file" => "Read workspace file",
+            "write_workspace_file" => "Write workspace file",
+            "patch_workspace_file" => "Patch workspace file",
+            "delete_workspace_entry" => "Delete workspace entry",
+            "search_workspace_files" => "Search workspace files",
+            "list_workspace_entries" => "List workspace entries",
+            "run_workspace_command" => "Run workspace command",
+            "run_elevated_workspace_command" => "Run elevated command",
+            "list_running_processes" => "List running processes",
+            "terminate_process" => "Terminate process",
+            "search_notes" => "Search notes",
+            "search_memos" => "Search memos",
+            "save_memo" => "Save memo",
+            "remove_memo" => "Remove memo",
+            "search_todos" => "Search todos",
+            "list_todo_categories" => "List todo categories",
+            "list_due_todos" => "List due todos",
+            "save_todo" => "Save todo",
+            "get_local_context" => "Get local context",
             _ => string.Join(' ', name.Split('_', StringSplitOptions.RemoveEmptyEntries).Select(HumanizeToolWord))
         };
 
@@ -1877,10 +1893,10 @@ namespace App.Pages
 
         private static JsonNode? ToolDisplayArgument(JsonObject arguments)
         {
-            var preferredArgument = arguments["file"] ?? arguments["grep_pattern"] ?? arguments["path"]
-                ?? arguments["exe"] ?? arguments["regex_pattern"] ?? arguments["command"]
-                ?? arguments["query"] ?? arguments["value"] ?? arguments["topic"] ?? arguments["request"]
-                ?? arguments["kind"] ?? arguments["process_id"] ?? arguments["key"] ?? arguments.First().Value;
+            var preferredArgument = arguments["workspace_path"] ?? arguments["absolute_file_path"] ?? arguments["absolute_directory_path"]
+                ?? arguments["search_pattern"] ?? arguments["name_pattern"] ?? arguments["command_line"]
+                ?? arguments["search_text"] ?? arguments["todo_text"] ?? arguments["memo_text"] ?? arguments["memo_topic"]
+                ?? arguments["context_type"] ?? arguments["process_id"] ?? arguments["memo_key"] ?? arguments.First().Value;
             return preferredArgument;
         }
 

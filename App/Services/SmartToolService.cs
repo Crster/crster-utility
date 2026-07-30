@@ -27,12 +27,12 @@ namespace App.Services
 
         public static JsonArray CreateDeclarations() =>
         [
-            Function("find_notes", "Find notes containing the supplied text.", Props(("query", String())), "query"),
-            Function("find_todos", "Find todos in a category whose text contains the query.", Props(("category", String()), ("query", String())), "category", "query"),
-            Function("get_data", "Get one current local data value.", Props(("kind", SecretaryToolService.DataKindSchema())), "kind"),
-            Function("read_file", "Read a text file at an absolute Windows path explicitly supplied by the user. Optionally provide zero-based, end-exclusive start and end character offsets.", Props(("path", String()), ("start", Integer()), ("end", Integer())), "path"),
-            Function("search_file", "Recursively search files beneath an absolute Windows directory explicitly supplied by the user. Returns matching paths and contextual line snippets.", Props(("directory", String()), ("regex_pattern", String())), "directory", "regex_pattern"),
-            Function("list_file_and_directory", "List files and directories beneath an absolute Windows path explicitly supplied by the user. Optionally filter by regex and depth.", Props(("path", String()), ("depth", Integer()), ("regex", String())), "path"),
+            Function("search_notes", "Use when the user wants saved notes whose text contains a phrase.", Props(("search_text", String("Literal text to find in saved note content."))), "search_text"),
+            Function("search_todos", "Use when the user wants todos in one category whose text contains a phrase.", Props(("category_name", String("Exact todo category name.")), ("search_text", String("Literal text to find in todo content."))), "category_name", "search_text"),
+            Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", SecretaryToolService.DataKindSchema())), "context_type"),
+            Function("read_user_file", "Use to read a text file only after the user explicitly provides its absolute Windows path. Optional offsets select a zero-based, end-exclusive character range.", Props(("absolute_file_path", String("Full absolute Windows path explicitly provided by the user.")), ("start_offset", Integer("Optional zero-based first character to return.")), ("end_offset", Integer("Optional zero-based exclusive end character; requires start_offset."))), "absolute_file_path"),
+            Function("search_user_directory", "Use to recursively find text matches inside files under an absolute Windows directory explicitly provided by the user. Returns file paths, line numbers, and snippets.", Props(("absolute_directory_path", String("Full absolute Windows directory path explicitly provided by the user.")), ("search_pattern", String("Case-insensitive .NET regular expression matched against file contents."))), "absolute_directory_path", "search_pattern"),
+            Function("list_user_directory", "Use to discover files and folders under an absolute Windows directory explicitly provided by the user. Can limit recursion depth and filter entry names.", Props(("absolute_directory_path", String("Full absolute Windows directory path explicitly provided by the user.")), ("max_depth", Integer("Optional recursion depth from 0 to 10; defaults to 3.")), ("name_pattern", String("Optional case-insensitive .NET regular expression matched against entry names."))), "absolute_directory_path"),
             new JsonObject { ["type"] = "google_search" }
         ];
 
@@ -42,10 +42,10 @@ namespace App.Services
             {
                 return name switch
                 {
-                    "find_notes" or "find_todos" or "get_data" => await _secretaryTools.ExecuteAsync(name, arguments, token),
-                    "read_file" => ReadFile(Required(arguments, "path"), OptionalRange(arguments)),
-                    "search_file" => SearchFiles(Required(arguments, "directory"), Required(arguments, "regex_pattern")),
-                    "list_file_and_directory" => ListFiles(Required(arguments, "path"), OptionalInt(arguments, "depth", 3), Optional(arguments, "regex")),
+                    "search_notes" or "search_todos" or "get_local_context" => await _secretaryTools.ExecuteAsync(name, arguments, token),
+                    "read_user_file" => ReadFile(Required(arguments, "absolute_file_path"), OptionalRange(arguments)),
+                    "search_user_directory" => SearchFiles(Required(arguments, "absolute_directory_path"), Required(arguments, "search_pattern")),
+                    "list_user_directory" => ListFiles(Required(arguments, "absolute_directory_path"), OptionalInt(arguments, "max_depth", 3), Optional(arguments, "name_pattern")),
                     _ => Error("unknown_tool", $"Smart cannot use the tool “{name}”.")
                 };
             }
@@ -274,14 +274,14 @@ namespace App.Services
         private static int OptionalInt(JsonObject arguments, string name, int fallback) => arguments[name]?.GetValue<int>() ?? fallback;
         private static (int Start, int End)? OptionalRange(JsonObject arguments)
         {
-            var start = arguments["start"]?.GetValue<int>();
-            var end = arguments["end"]?.GetValue<int>();
-            if (start.HasValue != end.HasValue) throw new FormatException("start and end must be provided together.");
+            var start = arguments["start_offset"]?.GetValue<int>();
+            var end = arguments["end_offset"]?.GetValue<int>();
+            if (start.HasValue != end.HasValue) throw new FormatException("start_offset and end_offset must be provided together.");
             return start.HasValue ? (start.Value, end!.Value) : null;
         }
 
-        private static JsonObject String() => new() { ["type"] = "string" };
-        private static JsonObject Integer() => new() { ["type"] = "integer" };
+        private static JsonObject String(string? description = null) { var schema = new JsonObject { ["type"] = "string" }; if (description is not null) schema["description"] = description; return schema; }
+        private static JsonObject Integer(string? description = null) { var schema = new JsonObject { ["type"] = "integer" }; if (description is not null) schema["description"] = description; return schema; }
         private static JsonObject Props(params (string Name, JsonObject Schema)[] properties) { var result = new JsonObject(); foreach (var property in properties) result[property.Name] = property.Schema; return result; }
         private static JsonObject Function(string name, string description, JsonObject properties, params string[] required)
         {

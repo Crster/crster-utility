@@ -25,16 +25,16 @@ namespace App.Services
 
         public static JsonArray CreateDeclarations() => new()
         {
-            Function("search_saved_information", "Search all saved notes, memos, and todos using a .NET regular expression. regex is required. Use a focused, case-insensitive-compatible pattern such as four13\\s+group.", Props(("regex", String())), "regex"),
-            Function("find_notes", "Find notes containing the supplied text.", Props(("query", String())), "query"),
-            Function("find_memos", "Find saved memos. topic and query are optional: omit both to retrieve all saved memos, for example when summarizing what is known about the user.", Props(("topic", MemoTopic()), ("query", String()))),
-            Function("write_memo", "Save a clearly stated detail that may make future help more personal, accurate, or useful. Never save secrets, credentials, guesses, or invented claims.", Props(("topic", MemoTopic()), ("value", String())), "topic", "value"),
-            Function("delete_memo", "Delete an incorrect, outdated, conflicting, or explicitly forgotten memo by key. Find the memo first unless its key is already known.", Props(("key", String())), "key"),
-            Function("find_todos", "Find todos in a category whose text contains the query.", Props(("category", String()), ("query", String())), "category", "query"),
-            Function("get_todo_categories", "List all todo categories and their descriptions.", new JsonObject()),
-            Function("get_todos", "Get unfinished unscheduled todos and scheduled todos due now or within 30 minutes.", new JsonObject()),
-            Function("write_todo", "Save a todo. notify is optional standard five-field cron text interpreted in local time.", Props(("value", String()), ("category", String()), ("notify", String())), "value", "category"),
-            Function("get_data", "Get one current local data value.", Props(("kind", DataKindSchema())), "kind")
+            Function("search_saved_items", "Use when the user asks about previously saved information across notes, memos, or todos. Searches all three sources with a case-insensitive .NET regular expression.", Props(("search_pattern", String("Focused .NET regular expression matched against saved text, for example: four13\\s+group."))), "search_pattern"),
+            Function("search_notes", "Use when the user wants notes whose text contains a phrase. Returns matching saved notes only.", Props(("search_text", String("Literal text to find in saved note content."))), "search_text"),
+            Function("search_memos", "Use when the user asks what is remembered about them. Filter by memo topic, text, or both; omit both filters to return all memos.", Props(("memo_topic", MemoTopic()), ("search_text", String("Optional literal text to find in memo content.")))),
+            Function("save_memo", "Use only to remember an explicit, durable user detail that will improve future help. Never save secrets, credentials, guesses, or inferred claims.", Props(("memo_topic", MemoTopic()), ("memo_text", String("Exact user-provided detail to remember."))), "memo_topic", "memo_text"),
+            Function("remove_memo", "Use to forget one saved memo identified by its memo key. Search memos first when the key is unknown.", Props(("memo_key", String("Exact key returned by search_memos or search_saved_items."))), "memo_key"),
+            Function("search_todos", "Use to find todos within one category whose text contains a phrase.", Props(("category_name", String("Exact todo category name.")), ("search_text", String("Literal text to find in todo content."))), "category_name", "search_text"),
+            Function("list_todo_categories", "Use before saving or searching todos when the available category names are unknown. Returns every category and its description.", new JsonObject()),
+            Function("list_due_todos", "Use when the user asks what they need to do now. Returns unfinished unscheduled todos and scheduled todos due now or within 30 minutes.", new JsonObject()),
+            Function("save_todo", "Use when the user explicitly asks to remember a task. Saves the task in an existing category and can optionally schedule local notifications with a five-field cron expression.", Props(("todo_text", String("Task text to save.")), ("category_name", String("Exact category name from list_todo_categories.")), ("notification_cron", String("Optional five-field cron expression interpreted in local time."))), "todo_text", "category_name"),
+            Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", DataKindSchema())), "context_type")
         };
 
         public async Task<ToolResult> ExecuteAsync(string name, JsonObject arguments, CancellationToken token)
@@ -43,16 +43,16 @@ namespace App.Services
             {
                 return name switch
                 {
-                    "search_saved_information" => await SearchLocalKnowledgeAsync(RequiredString(arguments, "regex"), token),
-                    "find_notes" => FindNotes(RequiredString(arguments, "query")),
-                    "find_memos" => await FindMemosAsync(OptionalString(arguments, "topic"), OptionalString(arguments, "query"), token),
-                    "write_memo" => await WriteMemoAsync(RequiredString(arguments, "topic"), RequiredString(arguments, "value"), token),
-                    "delete_memo" => DeleteMemo(RequiredString(arguments, "key")),
-                    "find_todos" => FindTodos(RequiredString(arguments, "category"), RequiredString(arguments, "query")),
-                    "get_todo_categories" => GetTodoCategories(),
-                    "get_todos" => GetTodos(),
-                    "write_todo" => await WriteTodoAsync(RequiredString(arguments, "value"), RequiredString(arguments, "category"), OptionalString(arguments, "notify"), token),
-                    "get_data" => await GetDataAsync(RequiredString(arguments, "kind"), token),
+                    "search_saved_items" => await SearchLocalKnowledgeAsync(RequiredString(arguments, "search_pattern"), token),
+                    "search_notes" => FindNotes(RequiredString(arguments, "search_text")),
+                    "search_memos" => await FindMemosAsync(OptionalString(arguments, "memo_topic"), OptionalString(arguments, "search_text"), token),
+                    "save_memo" => await WriteMemoAsync(RequiredString(arguments, "memo_topic"), RequiredString(arguments, "memo_text"), token),
+                    "remove_memo" => DeleteMemo(RequiredString(arguments, "memo_key")),
+                    "search_todos" => FindTodos(RequiredString(arguments, "category_name"), RequiredString(arguments, "search_text")),
+                    "list_todo_categories" => GetTodoCategories(),
+                    "list_due_todos" => GetTodos(),
+                    "save_todo" => await WriteTodoAsync(RequiredString(arguments, "todo_text"), RequiredString(arguments, "category_name"), OptionalString(arguments, "notification_cron"), token),
+                    "get_local_context" => await GetDataAsync(RequiredString(arguments, "context_type"), token),
                     _ => Error("unknown_tool", $"Secretary cannot use the tool “{name}”.")
                 };
             }
@@ -295,7 +295,12 @@ namespace App.Services
             return result;
         }
 
-        private static JsonObject String() => new() { ["type"] = "string" };
+        private static JsonObject String(string? description = null)
+        {
+            var schema = new JsonObject { ["type"] = "string" };
+            if (description is not null) schema["description"] = description;
+            return schema;
+        }
         private static JsonObject MemoTopic() => new()
         {
             ["type"] = "string",

@@ -156,7 +156,7 @@ namespace App.Services
                 },
                 ["generationConfig"] = new JsonObject
                 {
-                    ["responseModalities"] = new JsonArray("IMAGE")
+                    ["responseModalities"] = new JsonArray("TEXT", "IMAGE")
                 }
             };
             using var request = CreateRequest(
@@ -179,7 +179,33 @@ namespace App.Services
                         ?? "image/png");
             }
 
-            throw new InvalidOperationException("Gemini completed the request without returning an image.");
+            throw new InvalidOperationException(ReadMissingImageReason(root));
+        }
+
+        private static string ReadMissingImageReason(JsonObject root)
+        {
+            var promptBlockReason = root["promptFeedback"]?["blockReason"]?.GetValue<string>()
+                ?? root["prompt_feedback"]?["block_reason"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(promptBlockReason))
+                return $"Gemini blocked this image request ({promptBlockReason}). Try a less graphic description.";
+
+            foreach (var candidate in root["candidates"]?.AsArray() ?? [])
+            {
+                var finishReason = candidate?["finishReason"]?.GetValue<string>()
+                    ?? candidate?["finish_reason"]?.GetValue<string>();
+                var responseText = string.Join(
+                    " ",
+                    candidate?["content"]?["parts"]?.AsArray()
+                        .Select(part => part?["text"]?.GetValue<string>())
+                        .Where(text => !string.IsNullOrWhiteSpace(text))
+                    ?? []);
+
+                if (!string.IsNullOrWhiteSpace(responseText)) return responseText.Trim();
+                if (!string.IsNullOrWhiteSpace(finishReason))
+                    return $"Gemini completed without an image ({finishReason}). Try a less graphic description.";
+            }
+
+            return "Gemini completed the request without returning an image.";
         }
 
         private async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken)
@@ -290,7 +316,7 @@ namespace App.Services
             {
                 // Gemini 2.x treats a content-block array as a multimodal function response,
                 // even when that array contains only text. Use the standard text result shape.
-                var allowFullCommandOutput = call.Name is "execute" or "execute_sudo"
+                var allowFullCommandOutput = call.Name is "run_workspace_command" or "run_elevated_workspace_command"
                     && call.Arguments["full"]?.GetValue<bool>() == true;
                 content = JsonValue.Create(allowFullCommandOutput ? result.Output : TruncateFunctionResult(result.Output))!;
             }
