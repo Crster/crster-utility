@@ -24,6 +24,7 @@ namespace App.Windows
         private static readonly FeatureSearchResult[] FeatureSearchResults =
         [
             new() { Title = "Caffeine", Details = "Keep your computer active", SearchTerms = "caffeine keep awake active prevent sleep", Destination = "ToolsPage" },
+            new() { Title = "Cody", Details = "Open the agentic coding workspace", SearchTerms = "cody code coding agent workspace terminal files", Destination = "CodyPage" },
             new() { Title = "Take a screenshot", Details = "Capture and edit your screen", SearchTerms = "screenshot screen capture snapshot take picture", Destination = "SnapshotsPage" },
             new() { Title = "Record screen", Details = "Start a screen recording", SearchTerms = "record screen recording video capture start recording", Destination = "RecordingsPage" },
             new() { Title = "Artist", Details = "Generate and edit images with Qwen", SearchTerms = "artist image generate generator edit qwen", Destination = "ArtistPage" },
@@ -144,6 +145,10 @@ namespace App.Windows
                 else if (tag == "ChatPage")
                 {
                     NavigationPresenter.Navigate(typeof(Pages.ChatPage));
+                }
+                else if (tag == "CodyPage")
+                {
+                    NavigationPresenter.Navigate(typeof(Pages.CodyPage));
                 }
                 else if (tag == "SettingsPage")
                 {
@@ -294,6 +299,9 @@ namespace App.Windows
                     break;
                 case "TodoPage":
                     SidebarNavigation.SelectedItem = TodoNavItem;
+                    break;
+                case "CodyPage":
+                    SidebarNavigation.SelectedItem = CodyNavItem;
                     break;
                 case "SettingsPage":
                     SidebarNavigation.SelectedItem = SidebarNavigation.SettingsItem;

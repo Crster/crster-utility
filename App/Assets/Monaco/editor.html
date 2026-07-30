@@ -1,0 +1,151 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self' https://monaco.local; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://monaco.local; style-src 'self' 'unsafe-inline' https://monaco.local; font-src 'self' data: https://monaco.local; worker-src 'self' blob: https://monaco.local">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        html, body, #editor { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #1e1e1e; }
+        html.light, html.light body, html.light #editor { background: #ffffff; }
+    </style>
+    <script>
+        if (new URLSearchParams(location.search).get('theme') === 'light') {
+            document.documentElement.classList.add('light');
+        }
+    </script>
+    <script>
+        self.MonacoEnvironment = {
+            getWorkerUrl: function () {
+                return URL.createObjectURL(new Blob([
+                    "self.MonacoEnvironment={baseUrl:'https://monaco.local/'};" +
+                    "importScripts('https://monaco.local/vs/base/worker/workerMain.js');"
+                ], { type: 'text/javascript' }));
+            }
+        };
+    </script>
+    <script src="https://monaco.local/vs/loader.js"></script>
+</head>
+<body>
+    <div id="editor"></div>
+    <script>
+        window.chrome.webview.postMessage('debug:HTML bootstrap started');
+        let pendingHostMessage = null;
+        let changingModel = false;
+        window.chrome.webview.addEventListener('message', function (event) {
+            const message = event.data;
+            if (!window.codyEditor) {
+                pendingHostMessage = message;
+                return;
+            }
+            applyHostMessage(message);
+        });
+        function applyHostMessage(message) {
+            if (!message || !window.codyEditor) return;
+            if (message.type === 'openModel') {
+                window.chrome.webview.postMessage(
+                    'debug:Applying model language=' + (message.language || 'plaintext') +
+                    ' characters=' + String((message.value || '').length));
+                changingModel = true;
+                const uri = documentUri(message.documentId);
+                let model = monaco.editor.getModel(uri);
+                if (!model) {
+                    model = monaco.editor.createModel(
+                        message.value || '',
+                        message.language || 'plaintext',
+                        uri);
+                }
+                window.codyEditor.setModel(model);
+                monaco.editor.setTheme(message.theme || 'vs-dark');
+                changingModel = false;
+                requestAnimationFrame(function () {
+                    window.codyEditor.layout();
+                    const layout = window.codyEditor.getLayoutInfo();
+                    window.chrome.webview.postMessage(
+                        'debug:Model value after apply characters=' + String(model.getValueLength()) +
+                        ' layout=' + String(layout.width) + 'x' + String(layout.height));
+                    window.chrome.webview.postMessage('modelApplied');
+                });
+            } else if (message.type === 'activateModel') {
+                const model = monaco.editor.getModel(documentUri(message.documentId));
+                if (model) {
+                    window.codyEditor.setModel(model);
+                    window.codyEditor.layout();
+                    window.codyEditor.focus();
+                }
+            } else if (message.type === 'closeModel') {
+                const model = monaco.editor.getModel(documentUri(message.documentId));
+                if (model) model.dispose();
+            } else if (message.type === 'setTheme') {
+                monaco.editor.setTheme(message.theme || 'vs-dark');
+            } else if (message.type === 'layout') {
+                window.codyEditor.layout();
+            } else if (message.type === 'focus') {
+                window.codyEditor.layout();
+                window.codyEditor.focus();
+            }
+        }
+        function documentUri(documentId) {
+            return monaco.Uri.parse('cody://workspace/' + encodeURIComponent(documentId));
+        }
+        window.getDocumentValue = function (documentId) {
+            const model = monaco.editor.getModel(documentUri(documentId));
+            return model ? model.getValue() : '';
+        };
+        window.addEventListener('error', function (event) {
+            window.chrome.webview.postMessage('error:' + (event.message || 'Unknown JavaScript error'));
+        });
+        window.addEventListener('unhandledrejection', function (event) {
+            const reason = String(event.reason);
+            if (reason.includes('Canceled')) {
+                event.preventDefault();
+                window.chrome.webview.postMessage('debug:Ignored expected Monaco cancellation');
+                return;
+            }
+            window.chrome.webview.postMessage('error:Unhandled promise rejection: ' + reason);
+        });
+        document.addEventListener('securitypolicyviolation', function (event) {
+            window.chrome.webview.postMessage(
+                'error:CSP blocked ' + event.blockedURI + ' for ' + event.violatedDirective);
+        });
+        window.chrome.webview.postMessage('debug:Configuring Monaco AMD loader');
+        require.config({ paths: { vs: 'https://monaco.local/vs' } });
+        require(['vs/editor/editor.main'], function () {
+            window.chrome.webview.postMessage('debug:Monaco editor.main loaded');
+            window.codyEditor = monaco.editor.create(document.getElementById('editor'), {
+                value: '',
+                language: 'plaintext',
+                automaticLayout: true,
+                fontFamily: 'Cascadia Mono, Consolas, monospace',
+                fontSize: 13,
+                minimap: { enabled: true },
+                scrollBeyondLastLine: false,
+                smoothScrolling: true,
+                bracketPairColorization: { enabled: true },
+                guides: { bracketPairs: true, indentation: true },
+                padding: { top: 10, bottom: 10 }
+            });
+            window.chrome.webview.postMessage('debug:Monaco editor instance created');
+            window.codyEditor.onDidChangeModelContent(function () {
+                if (!changingModel && window.codyEditor.getModel()) {
+                    const id = decodeURIComponent(window.codyEditor.getModel().uri.path.substring(1));
+                    window.chrome.webview.postMessage('changed:' + encodeURIComponent(id));
+                }
+            });
+            window.codyEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () {
+                if (!window.codyEditor.getModel()) return;
+                const id = decodeURIComponent(window.codyEditor.getModel().uri.path.substring(1));
+                window.chrome.webview.postMessage('save:' + encodeURIComponent(id));
+            });
+            window.chrome.webview.postMessage('ready');
+            if (pendingHostMessage) {
+                const message = pendingHostMessage;
+                pendingHostMessage = null;
+                applyHostMessage(message);
+            }
+        }, function (error) {
+            window.chrome.webview.postMessage('error:' + String(error));
+        });
+    </script>
+</body>
+</html>

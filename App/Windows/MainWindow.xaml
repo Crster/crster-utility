@@ -23,7 +23,7 @@
             x:Name="titleBar"
             Title="Crster Utility"
             IsBackButtonVisible="False"
-            IsPaneToggleButtonVisible="True">
+            IsPaneToggleButtonVisible="False">
             <TitleBar.IconSource>
                 <ImageIconSource ImageSource="/Assets/WindowIcon.ico" />
             </TitleBar.IconSource>
@@ -51,13 +51,20 @@
         <NavigationView
             x:Name="SidebarNavigation"
             Grid.Row="1"
+            PaneDisplayMode="LeftCompact"
+            IsPaneOpen="False"
             IsBackButtonVisible="Collapsed"
-            IsPaneToggleButtonVisible="False">
+            IsPaneToggleButtonVisible="True">
 
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="ChatNavItem" Content="Chat" Tag="ChatPage">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE8BD;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="CodyNavItem" Content="Cody" Tag="CodyPage">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE943;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem x:Name="NotebookNavItem" Content="Notebook" Tag="NotebookBooksPage">

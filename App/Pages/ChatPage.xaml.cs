@@ -96,9 +96,12 @@ namespace App.Pages
                 _sessionStorage.Save(personality, session);
             }
             _personality = Enum.TryParse<ChatPersonality>(_settings.LastChatPersonality, true, out var savedPersonality)
+                && savedPersonality != ChatPersonality.Cody
                 ? savedPersonality
                 : ChatPersonality.Secretary;
-            PersonalityBox.ItemsSource = Enum.GetValues<ChatPersonality>();
+            PersonalityBox.ItemsSource = Enum.GetValues<ChatPersonality>()
+                .Where(personality => personality != ChatPersonality.Cody)
+                .ToArray();
             PersonalityBox.SelectedItem = _personality;
             if (string.IsNullOrWhiteSpace(_settings.QwenApiKey) && !await RequestApiKeyAsync()) { StatusText.Text = "A Qwen API key is required."; return; }
             _client = new QwenClient(_settings.QwenApiKey);

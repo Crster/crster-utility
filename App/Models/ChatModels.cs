@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 namespace App.Models
 {
     internal enum ChatItemKind { User, Assistant, Thinking, Tool, Error }
-    internal enum ChatPersonality { Secretary, Smart, Technician }
+    internal enum ChatPersonality { Secretary, Smart, Technician, Cody }
     internal enum QwenThinkingLevel { Default, Disabled, Minimal, Low, High }
 
     internal sealed class QwenModel
