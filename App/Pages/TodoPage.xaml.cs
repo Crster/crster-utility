@@ -18,6 +18,8 @@ namespace App.Pages
 {
     public sealed partial class TodoPage : Page
     {
+        private sealed record TodoItemContext(string Id, bool Urgent);
+
         private readonly TodoRepository _repository = new();
         private readonly TodoSearchService _search = new();
         private readonly HashSet<string> _expandedGroups = new(StringComparer.Ordinal);
@@ -46,27 +48,22 @@ namespace App.Pages
         {
             _cancelOperation = null;
             TodoGroupsHost.Children.Clear();
-            var todos = _repository.List();
             var categoryDocuments = _repository.ListCategories();
-            var categoryDescriptions = categoryDocuments.ToDictionary(category => category.Id, category => category.Description, StringComparer.Ordinal);
-            var categories = categoryDocuments
-                .Select(category => category.Id)
-                .Concat(todos.Select(todo => todo.Category))
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(category => todos.Where(todo => todo.Category == category)
-                    .Select(todo => todo.CreatedAt).DefaultIfEmpty(DateTime.MaxValue).Min())
-                .ToList();
-
-            var urgent = todos.Where(todo => !todo.IsDone && IsUrgent(todo, out _)).ToList();
-            if (urgent.Count > 0) TodoGroupsHost.Children.Add(CreateUrgentSection(urgent));
-            if (_isCreatingGroup) TodoGroupsHost.Children.Add(CreateNewGroupEditor());
-            foreach (var category in categories)
+            var urgent = new List<TodoDocument>();
+            var groups = new List<UIElement>();
+            foreach (var category in categoryDocuments)
             {
-                categoryDescriptions.TryGetValue(category, out var description);
-                TodoGroupsHost.Children.Add(CreateGroup(category, description ?? string.Empty, todos.Where(todo => todo.Category == category).ToList()));
+                var todos = _repository.ListByCategory(category.Id);
+                urgent.AddRange(todos.Where(todo => !todo.IsDone && IsUrgent(todo, out _)));
+                groups.Add(CreateGroup(category.Id, category.Description, todos));
             }
 
-            EmptyState.Visibility = categories.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            if (urgent.Count > 0) TodoGroupsHost.Children.Add(CreateUrgentSection(urgent));
+            if (_isCreatingGroup) TodoGroupsHost.Children.Add(CreateNewGroupEditor());
+            foreach (var group in groups)
+                TodoGroupsHost.Children.Add(group);
+
+            EmptyState.Visibility = categoryDocuments.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private UIElement CreateNewGroupEditor()
@@ -167,36 +164,39 @@ namespace App.Pages
             if (string.Equals(_creatingTodoCategory, category, StringComparison.Ordinal))
                 panel.Children.Add(CreateNewTodoEditor(category));
             else
-            {
-                var actions = new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 8,
-                    HorizontalAlignment = HorizontalAlignment.Left
-                };
-                var newTodo = new HyperlinkButton
-                {
-                    Content = "New Todo",
-                    Tag = category
-                };
-                newTodo.Click += NewTodoButton_Click;
-                actions.Children.Add(newTodo);
-                if (todos.Any(todo => todo.IsDone))
-                {
-                    var toggle = new HyperlinkButton
-                    {
-                        Content = showDone ? "Hide done" : $"Show done ({todos.Count(todo => todo.IsDone)})"
-                    };
-                    toggle.Click += (_, _) =>
-                    {
-                        if (!_expandedGroups.Add(category)) _expandedGroups.Remove(category);
-                        Render();
-                    };
-                    actions.Children.Add(toggle);
-                }
-                panel.Children.Add(actions);
-            }
+                panel.Children.Add(CreateGroupActions(panel, category, todos, showDone));
             return card;
+        }
+
+        private StackPanel CreateGroupActions(StackPanel group, string category, IReadOnlyList<TodoDocument> todos, bool showDone)
+        {
+            var actions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            var newTodo = new HyperlinkButton
+            {
+                Content = "New Todo",
+                Tag = category
+            };
+            newTodo.Click += (_, _) => BeginNewTodo(group, category);
+            actions.Children.Add(newTodo);
+            if (todos.Any(todo => todo.IsDone))
+            {
+                var toggle = new HyperlinkButton
+                {
+                    Content = showDone ? "Hide done" : $"Show done ({todos.Count(todo => todo.IsDone)})"
+                };
+                toggle.Click += (_, _) =>
+                {
+                    if (!_expandedGroups.Add(category)) _expandedGroups.Remove(category);
+                    Render();
+                };
+                actions.Children.Add(toggle);
+            }
+            return actions;
         }
 
         private UIElement CreateNewTodoEditor(string category)
@@ -227,14 +227,36 @@ namespace App.Pages
             void Cancel()
             {
                 _creatingTodoCategory = null;
-                Render();
+                RefreshGroup(grid, category);
             }
             async void Save()
             {
                 if (string.IsNullOrWhiteSpace(input.Text)) return;
                 var todo = _repository.Create(input.Text, category, "user");
                 _creatingTodoCategory = null;
-                Render();
+                _cancelOperation = null;
+                if (grid.Parent is StackPanel group)
+                {
+                    group.Children.Remove(grid);
+                    var list = group.Children.OfType<ListView>().FirstOrDefault();
+                    var item = CreateTodoListItem(todo, false);
+                    if (list is null)
+                    {
+                        list = new ListView
+                        {
+                            SelectionMode = ListViewSelectionMode.None,
+                            IsItemClickEnabled = false,
+                            HorizontalContentAlignment = HorizontalAlignment.Stretch
+                        };
+                        list.Items.Add(item);
+                        group.Children.Insert(1, list);
+                    }
+                    else
+                        list.Items.Insert(0, item);
+
+                    var todos = _repository.ListByCategory(category);
+                    group.Children.Add(CreateGroupActions(group, category, todos, _expandedGroups.Contains(category)));
+                }
                 try { await _search.RefreshEmbeddingAsync(todo); }
                 catch (Exception exception) { System.Diagnostics.Debug.WriteLine($"Todo embedding failed: {exception.Message}"); }
             }
@@ -380,20 +402,24 @@ namespace App.Pages
                 HorizontalContentAlignment = HorizontalAlignment.Stretch
             };
             foreach (var todo in todos)
-            {
-                list.Items.Add(new ListViewItem
-                {
-                    Content = CreateTodoItem(todo, urgent),
-                    HorizontalContentAlignment = HorizontalAlignment.Stretch
-                });
-            }
+                list.Items.Add(CreateTodoListItem(todo, urgent));
             return list;
+        }
+
+        private ListViewItem CreateTodoListItem(TodoDocument todo, bool urgent)
+        {
+            return new ListViewItem
+            {
+                Content = CreateTodoItem(todo, urgent),
+                HorizontalContentAlignment = HorizontalAlignment.Stretch
+            };
         }
 
         private UIElement CreateTodoItem(TodoDocument todo, bool urgent)
         {
             var root = new Grid
             {
+                Tag = new TodoItemContext(todo.Id, urgent),
                 Padding = new Thickness(4, 8, 4, 8),
                 MinHeight = 58,
                 Background = new SolidColorBrush(Colors.Transparent)
@@ -465,7 +491,7 @@ namespace App.Pages
             root.PointerExited += (_, _) => { if (_cancelOperation is null) SetActionsVisible(false); };
 
             notify.Click += async (_, _) => await ConfigureNotificationAsync(todo);
-            edit.Click += (_, _) => BeginTodoEdit(root, todo);
+            edit.Click += (_, _) => BeginTodoEdit(root, todo, urgent);
             delete.Click += (_, _) => BeginDelete(actions, todo);
             if (todo.Id == _requestedTodoId)
             {
@@ -546,7 +572,7 @@ namespace App.Pages
             };
         }
 
-        private void BeginTodoEdit(Grid root, TodoDocument todo)
+        private void BeginTodoEdit(Grid root, TodoDocument todo, bool urgent)
         {
             var input = new TextBox { Text = todo.Value, TextWrapping = TextWrapping.Wrap };
             Grid.SetColumn(input, 1);
@@ -560,7 +586,7 @@ namespace App.Pages
             root.Children.Insert(1, input);
             input.SelectAll();
             input.Focus(FocusState.Programmatic);
-            void Cancel() => Render();
+            void Cancel() => ReplaceTodoItem(root, todo, urgent);
             async void Save()
             {
                 if (string.IsNullOrWhiteSpace(input.Text))
@@ -573,14 +599,14 @@ namespace App.Pages
                 var value = input.Text.Trim();
                 if (string.Equals(todo.Value, value, StringComparison.Ordinal))
                 {
-                    Render();
+                    ReplaceTodoItem(root, todo, urgent);
                     return;
                 }
 
                 todo.Value = value;
                 todo.Embedding = [];
                 _repository.Update(todo);
-                Render();
+                ReplaceTodoItems(todo);
                 try { await _search.RefreshEmbeddingAsync(todo); }
                 catch (Exception exception) { System.Diagnostics.Debug.WriteLine($"Todo embedding failed: {exception.Message}"); }
             }
@@ -593,6 +619,61 @@ namespace App.Pages
                 e.Handled = true;
                 Save();
             };
+        }
+
+        private void ReplaceTodoItem(Grid root, TodoDocument todo, bool urgent)
+        {
+            _cancelOperation = null;
+            DependencyObject? parent = root;
+            while (parent is not null && parent is not ListViewItem)
+                parent = VisualTreeHelper.GetParent(parent);
+
+            if (parent is ListViewItem item)
+                item.Content = CreateTodoItem(todo, urgent);
+        }
+
+        private void ReplaceTodoItems(TodoDocument todo)
+        {
+            _cancelOperation = null;
+            var roots = new List<(Grid Root, bool Urgent)>();
+            FindTodoRoots(TodoGroupsHost, todo.Id, roots);
+            foreach (var item in roots)
+                ReplaceTodoItem(item.Root, todo, item.Urgent);
+        }
+
+        private static void FindTodoRoots(
+            DependencyObject parent,
+            string todoId,
+            ICollection<(Grid Root, bool Urgent)> roots)
+        {
+            for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, index);
+                if (child is Grid { Tag: TodoItemContext context } grid
+                    && string.Equals(context.Id, todoId, StringComparison.Ordinal))
+                    roots.Add((grid, context.Urgent));
+                else
+                    FindTodoRoots(child, todoId, roots);
+            }
+        }
+
+        private void RefreshGroup(DependencyObject child, string category)
+        {
+            _cancelOperation = null;
+            DependencyObject? parent = child;
+            while (parent is not null && parent is not Border)
+                parent = VisualTreeHelper.GetParent(parent);
+
+            if (parent is not Border card) return;
+            var categoryDocument = _repository.ListCategories()
+                .FirstOrDefault(candidate => string.Equals(candidate.Id, category, StringComparison.Ordinal));
+            if (categoryDocument is null) return;
+            if (CreateGroup(category, categoryDocument.Description, _repository.ListByCategory(category)) is Border replacement)
+            {
+                var replacementContent = replacement.Child;
+                replacement.Child = null;
+                card.Child = replacementContent;
+            }
         }
 
         private void BeginDelete(StackPanel actions, TodoDocument todo)
@@ -707,11 +788,13 @@ namespace App.Pages
             Render();
         }
 
-        private void NewTodoButton_Click(object sender, RoutedEventArgs e)
+        private void BeginNewTodo(StackPanel group, string category)
         {
-            if (sender is not HyperlinkButton { Tag: string category }) return;
             _creatingTodoCategory = category;
-            Render();
+            _cancelOperation = null;
+            if (group.Children.Count > 0)
+                group.Children.RemoveAt(group.Children.Count - 1);
+            group.Children.Add(CreateNewTodoEditor(category));
         }
     }
 }

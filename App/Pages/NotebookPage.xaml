@@ -20,39 +20,65 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel x:Name="EditingToolbar" Orientation="Horizontal" Spacing="2">
-                        <Button Tag="heading" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Heading"><FontIcon Glyph="&#xE8D2;" /></Button>
-                        <Button Tag="bold" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Bold"><FontIcon Glyph="&#xE8DD;" /></Button>
-                        <Button Tag="italic" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Italic"><FontIcon Glyph="&#xE8DB;" /></Button>
-                        <Button Tag="code" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Code"><FontIcon Glyph="&#xF683;" /></Button>
-                        <Button Tag="code_block" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Code block"><FontIcon Glyph="&#xE943;" /></Button>
+                        <Button Tag="heading" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Heading">
+                            <FontIcon Glyph="&#xE8D2;" />
+                        </Button>
+                        <Button Tag="bold" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Bold">
+                            <FontIcon Glyph="&#xE8DD;" />
+                        </Button>
+                        <Button Tag="italic" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Italic">
+                            <FontIcon Glyph="&#xE8DB;" />
+                        </Button>
+                        <Button Tag="code" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Code">
+                            <FontIcon Glyph="&#xF683;" />
+                        </Button>
+                        <Button Tag="code_block" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Code block">
+                            <FontIcon Glyph="&#xE943;" />
+                        </Button>
                         <Border Width="1" Height="20" Margin="5,0" Background="{ThemeResource CardStrokeColorDefaultBrush}" />
-                        <Button Tag="file" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Attach"><FontIcon Glyph="&#xE723;" /></Button>
-                        <Button Tag="image" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Image"><FontIcon Glyph="&#xE91B;" /></Button>
-                        <Button Tag="secret" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Secret"><FontIcon Glyph="&#xED1A;" /></Button>
-                        <Button Tag="table" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Table"><FontIcon Glyph="&#xE80A;" /></Button>
+                        <Button Tag="file" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Attach">
+                            <FontIcon Glyph="&#xE723;" />
+                        </Button>
+                        <Button Tag="image" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Image">
+                            <FontIcon Glyph="&#xE91B;" />
+                        </Button>
+                        <Button Tag="secret" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Secret">
+                            <FontIcon Glyph="&#xED1A;" />
+                        </Button>
+                        <Button Tag="table" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Table">
+                            <FontIcon Glyph="&#xE80A;" />
+                        </Button>
                         <Border Width="1" Height="20" Margin="5,0" Background="{ThemeResource CardStrokeColorDefaultBrush}" />
-                        <Button Tag="date" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Date"><FontIcon Glyph="&#xE787;" /></Button>
-                        <Button Tag="generated_password" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Password"><FontIcon Glyph="&#xE8D7;" /></Button>
-                        <Button Tag="random" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Random"><FontIcon Glyph="&#xE8B1;" /></Button>
-                        <Button Tag="improve" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Improve"><FontIcon Glyph="&#xF4A5;" /></Button>
+                        <Button Tag="date" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Date">
+                            <FontIcon Glyph="&#xE787;" />
+                        </Button>
+                        <Button Tag="generated_password" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Password">
+                            <FontIcon Glyph="&#xE8D7;" />
+                        </Button>
+                        <Button Tag="random" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Random">
+                            <FontIcon Glyph="&#xE8B1;" />
+                        </Button>
+                        <Button Tag="improve" Click="ToolButton_Click" Width="34" Height="32" Padding="5" AllowFocusOnInteraction="False" ToolTipService.ToolTip="Improve">
+                            <FontIcon Glyph="&#xF4A5;" />
+                        </Button>
                     </StackPanel>
-                <Button x:Name="NewNoteButton" Grid.Column="1" Tag="new" Click="ToolButton_Click" Content="New note" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False">
-                    <Button.ContentTemplate>
-                        <DataTemplate>
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <FontIcon Glyph="&#xE710;" FontSize="12" />
-                                <TextBlock Text="{Binding}" />
-                            </StackPanel>
-                        </DataTemplate>
-                    </Button.ContentTemplate>
-                </Button>
-                <Button x:Name="SaveNoteButton" Grid.Column="1" Tag="save" Click="ToolButton_Click" Content="Save note" Visibility="Collapsed" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False" />
+                    <Button x:Name="NewNoteButton" Grid.Column="1" Tag="new" Click="ToolButton_Click" Content="New note" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False">
+                        <Button.ContentTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon Glyph="&#xE710;" FontSize="12" />
+                                    <TextBlock Text="{Binding}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </Button.ContentTemplate>
+                    </Button>
+                    <Button x:Name="SaveNoteButton" Grid.Column="1" Tag="save" Click="ToolButton_Click" Content="Save note" Visibility="Collapsed" VerticalAlignment="Center" Height="32" Padding="12,0" AllowFocusOnInteraction="False" />
                 </Grid>
             </Border>
 
-        <Grid Grid.Row="2">
-            <ListView x:Name="BlocksHost"
-                      Padding="0,0,16,0"
+            <Grid Grid.Row="2">
+                <ListView x:Name="BlocksHost"
+                      Padding="0,0,15,0"
                       HorizontalContentAlignment="Stretch"
                       SelectionMode="None"
                       IsItemClickEnabled="False"
@@ -62,40 +88,40 @@
                       ScrollViewer.HorizontalScrollMode="Disabled"
                       Background="Transparent"
                       BorderThickness="0">
-            <ListView.ItemTemplate>
-                <DataTemplate>
-                    <controls:Noteblock Loaded="Block_Loaded" />
-                </DataTemplate>
-            </ListView.ItemTemplate>
-            <ListView.ItemContainerStyle>
-                <Style TargetType="ListViewItem">
-                    <Setter Property="HorizontalAlignment" Value="Stretch" />
-                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                    <Setter Property="VerticalContentAlignment" Value="Top" />
-                    <Setter Property="MinHeight" Value="0" />
-                    <Setter Property="Padding" Value="0" />
-                    <Setter Property="Margin" Value="0" />
-                    <Setter Property="Template">
-                        <Setter.Value>
-                            <ControlTemplate TargetType="ListViewItem">
-                                <ContentPresenter Content="{TemplateBinding Content}"
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <controls:Noteblock Loaded="Block_Loaded" />
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="HorizontalAlignment" Value="Stretch" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="VerticalContentAlignment" Value="Top" />
+                            <Setter Property="MinHeight" Value="0" />
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="Margin" Value="0" />
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListViewItem">
+                                        <ContentPresenter Content="{TemplateBinding Content}"
                                                   ContentTemplate="{TemplateBinding ContentTemplate}"
                                                   ContentTransitions="{TemplateBinding ContentTransitions}"
                                                   HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
                                                   VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
-                            </ControlTemplate>
-                        </Setter.Value>
-                    </Setter>
-                </Style>
-            </ListView.ItemContainerStyle>
-            <ListView.ItemsPanel>
-                <ItemsPanelTemplate>
-                    <ItemsStackPanel />
-                </ItemsPanelTemplate>
-            </ListView.ItemsPanel>
-            </ListView>
-            <Grid x:Name="NoteEditorView" Visibility="Collapsed">
-                <TextBox x:Name="NoteEditor"
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsStackPanel />
+                        </ItemsPanelTemplate>
+                    </ListView.ItemsPanel>
+                </ListView>
+                <Grid x:Name="NoteEditorView" Visibility="Collapsed">
+                    <TextBox x:Name="NoteEditor"
                          KeyDown="NoteEditor_KeyDown"
                          AcceptsReturn="True"
                          TextWrapping="Wrap"
@@ -107,27 +133,27 @@
                          BorderThickness="1"
                          ScrollViewer.VerticalScrollBarVisibility="Auto"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
-            </Grid>
-            <!-- Section: Empty State -->
-            <StackPanel x:Name="EmptyState"
+                </Grid>
+                <!-- Section: Empty State -->
+                <StackPanel x:Name="EmptyState"
                         Visibility="Collapsed"
                         IsHitTestVisible="False"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center">
-                <FontIcon Glyph="&#xE70B;" FontSize="64"
+                    <FontIcon Glyph="&#xE70B;" FontSize="64"
                           Foreground="{ThemeResource TextFillColorDisabledBrush}"
                           HorizontalAlignment="Center" />
-                <TextBlock Text="No notes yet"
+                    <TextBlock Text="No notes yet"
                            Style="{StaticResource SubtitleTextBlockStyle}"
                            HorizontalAlignment="Center"
                            Margin="0,16,0,4" />
-                <TextBlock Text="Create a new note to start writing."
+                    <TextBlock Text="Create a new note to start writing."
                            Style="{StaticResource CaptionTextBlockStyle}"
                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                            HorizontalAlignment="Center" />
-            </StackPanel>
-        </Grid>
-        <TextBlock x:Name="SaveStatusText"
+                </StackPanel>
+            </Grid>
+            <TextBlock x:Name="SaveStatusText"
                    Grid.Row="3"
                    Margin="10,8,10,0"
                    Foreground="{ThemeResource SystemFillColorCriticalBrush}"

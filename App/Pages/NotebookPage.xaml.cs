@@ -24,8 +24,6 @@ namespace App.Pages
         private NotebookAttachmentStorageService? _attachmentStorage;
         private NotebookEntry? _editingEntry;
         private bool _isCreatingNote;
-        private Noteblock? _hoveredBlock;
-        private Noteblock? _focusedBlock;
         private bool _isLoading;
         private bool _isSaving;
         private bool _saveQueued;
@@ -68,8 +66,6 @@ namespace App.Pages
             _pageCancellation.Cancel();
             BlocksHost.ItemsSource = null;
             _entries.Clear();
-            _hoveredBlock = null;
-            _focusedBlock = null;
             _editingEntry = null;
             base.OnNavigatedFrom(e);
         }
@@ -189,14 +185,8 @@ namespace App.Pages
         {
             if (sender is not Noteblock { DataContext: NotebookEntry entry } block || _attachmentStorage is null) return;
             block.Configure(entry, _attachmentStorage);
-            block.RemoveRequested -= Block_RemoveRequested;
             block.EditRequested -= Block_EditRequested;
-            block.InteractionStateChanged -= Block_InteractionStateChanged;
-            block.CommitRequested -= Block_CommitRequested;
-            block.RemoveRequested += Block_RemoveRequested;
             block.EditRequested += Block_EditRequested;
-            block.InteractionStateChanged += Block_InteractionStateChanged;
-            block.CommitRequested += Block_CommitRequested;
 
             if (string.Equals(_searchResultKey, entry.Key, StringComparison.OrdinalIgnoreCase))
             {
@@ -205,37 +195,15 @@ namespace App.Pages
             }
         }
 
-        private void Block_InteractionStateChanged(object? sender, EventArgs e)
-        {
-            if (sender is not Noteblock block) return;
-            if (block.IsBlockPointerOver) _hoveredBlock = block;
-            else if (ReferenceEquals(block, _hoveredBlock)) _hoveredBlock = null;
-            if (block.IsEditorFocused) _focusedBlock = block;
-            else if (ReferenceEquals(block, _focusedBlock)) _focusedBlock = null;
-            SetEditingToolbarEnabled(_editingEntry is not null || _focusedBlock is not null);
-        }
-
         private void SetEditingToolbarEnabled(bool isEnabled)
         {
             foreach (var button in EditingToolbar.Children.OfType<Button>())
                 button.IsEnabled = isEnabled;
         }
 
-        private Task<bool> Block_CommitRequested(Noteblock block) => SaveNotebookAsync();
-
         private void Block_EditRequested(object? sender, EventArgs e)
         {
             if (sender is Noteblock block) OpenEditor(block.Entry, false);
-        }
-
-        private void Block_RemoveRequested(object? sender, EventArgs e)
-        {
-            if (sender is not Noteblock block) return;
-            if (ReferenceEquals(block, _hoveredBlock)) _hoveredBlock = null;
-            if (ReferenceEquals(block, _focusedBlock)) _focusedBlock = null;
-            _entries.Remove(block.Entry);
-            UpdateEmptyState();
-            _ = SaveNotebookAsync();
         }
 
         private void OpenEditor(NotebookEntry entry, bool isCreatingNote)
@@ -287,11 +255,81 @@ namespace App.Pages
             UpdateEmptyState();
         }
 
-        private void NoteEditor_KeyDown(object sender, KeyRoutedEventArgs e)
+        private async void NoteEditor_KeyDown(object sender, KeyRoutedEventArgs e)
         {
-            if (e.Key != VirtualKey.Escape) return;
-            e.Handled = true;
-            CloseEditor();
+            if (e.Key == VirtualKey.F1)
+            {
+                e.Handled = true;
+                InsertEditorValue(await NotebookShortcutService.GetSystemUsageTextAsync());
+                return;
+            }
+
+            if (e.Key == VirtualKey.F2)
+            {
+                e.Handled = true;
+                await InsertSelectedFilePathAsync();
+                return;
+            }
+
+            if (e.Key == VirtualKey.F5)
+            {
+                e.Handled = true;
+                InsertEditorValue(DateTime.Now.ToString("g"));
+                return;
+            }
+
+            if (e.Key == VirtualKey.F6)
+            {
+                e.Handled = true;
+                InsertEditorValue($"@password{{{NotebookShortcutService.CreateReadablePassword()}}}");
+                return;
+            }
+
+            if (e.Key == VirtualKey.F7)
+            {
+                e.Handled = true;
+                InsertEditorValue(NotebookShortcutService.CreateSecretKey());
+                return;
+            }
+
+            if (e.Key == VirtualKey.F8)
+            {
+                e.Handled = true;
+                InsertEditorValue(Guid.NewGuid().ToString());
+                return;
+            }
+
+            if (e.Key == VirtualKey.Escape)
+            {
+                e.Handled = true;
+                CloseEditor();
+            }
+        }
+
+        private async Task InsertSelectedFilePathAsync()
+        {
+            if (App.MainWindow is null || _editingEntry is null) return;
+            var editingEntry = _editingEntry;
+            var selectionStart = NoteEditor.SelectionStart;
+            var selectionLength = NoteEditor.SelectionLength;
+            var picker = new FileOpenPicker();
+            picker.FileTypeFilter.Add("*");
+            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow));
+            var file = await picker.PickSingleFileAsync();
+            if (file is null || !ReferenceEquals(editingEntry, _editingEntry)) return;
+
+            NoteEditor.SelectionStart = Math.Min(selectionStart, NoteEditor.Text.Length);
+            NoteEditor.SelectionLength = Math.Min(selectionLength, NoteEditor.Text.Length - NoteEditor.SelectionStart);
+            InsertEditorValue(file.Path);
+        }
+
+        private void InsertEditorValue(string text)
+        {
+            if (_editingEntry is null) return;
+            NoteEditor.SelectedText = text;
+            NoteEditor.SelectionStart += text.Length;
+            NoteEditor.SelectionLength = 0;
+            NoteEditor.Focus(FocusState.Keyboard);
         }
 
         private void InsertEditorSyntax((string Prefix, string Suffix) syntax)
@@ -373,5 +411,6 @@ namespace App.Pages
             finally { _isSaving = false; }
             return saved;
         }
+
     }
 }

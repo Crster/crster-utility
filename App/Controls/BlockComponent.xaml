@@ -7,14 +7,18 @@
             Padding="10"
             HorizontalAlignment="Stretch"
             Background="Transparent"
-            CornerRadius="6"
+            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+            BorderThickness="0,0,0,3"
             PointerEntered="Root_PointerEntered"
             PointerExited="Root_PointerExited">
         <ScrollViewer x:Name="BlockScrollViewer"
+                      MaxHeight="500"
+                      Loaded="BlockScroll_Loaded"
                       HorizontalScrollMode="Disabled"
                       HorizontalScrollBarVisibility="Disabled"
-                      VerticalScrollMode="Disabled"
-                      VerticalScrollBarVisibility="Hidden">
+                      VerticalScrollMode="Enabled"
+                      VerticalScrollBarVisibility="Auto"
+                      IsVerticalScrollChainingEnabled="False">
             <Grid x:Name="ContentHost" />
         </ScrollViewer>
     </Border>
