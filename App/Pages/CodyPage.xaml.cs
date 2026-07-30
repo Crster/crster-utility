@@ -13,6 +13,7 @@ using App.Models;
 using App.Services;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -29,7 +30,9 @@ namespace App.Pages
     public sealed partial class CodyPage : Page
     {
         private const int MaximumWorkspaceFileBytes = 1_000_000;
+        private const int MaximumCommandFixContextCharacters = 12_000;
         private const int MaximumToolCalls = 50;
+        private sealed record TerminalShell(string Name, string FileName, string Arguments);
         private const string CodyInstruction =
             """
             You are Cody, an agentic coding assistant operating in a selected local workspace.
@@ -59,6 +62,9 @@ namespace App.Pages
         private readonly List<WorkspaceFileItem> _workspaceFiles = [];
         private readonly List<WorkspaceTreeEntry> _workspaceRoots = [];
         private readonly Dictionary<TabViewItem, EditorDocument> _editors = [];
+        private readonly Dictionary<TabViewItem, Process> _terminalCommandProcesses = [];
+        private readonly HashSet<TabViewItem> _terminalCommandTabsOpenedPanel = [];
+        private readonly HashSet<TabViewItem> _terminalCommandTabsClosing = [];
         private readonly List<CodyCommand> _commands = [];
         private readonly global::App.Controls.MonacoEditorControl _sharedEditor = new();
         private ChatSession _session = new();
@@ -67,14 +73,24 @@ namespace App.Pages
         private TechnicianToolService? _tools;
         private TechnicianSessionOrchestrator? _orchestrator;
         private CancellationTokenSource? _agentCancellation;
-        private CancellationTokenSource? _terminalCancellation;
+        private CancellationTokenSource? _workspaceRefreshCancellation;
+        private FileSystemWatcher? _workspaceWatcher;
         private Process? _terminalProcess;
+        private bool _terminalStopRequested;
         private CodyCommand? _selectedCommand;
         private int _searchVersion;
         private bool _loaded;
         private bool _renderingContext;
         private bool _isBusy;
         private bool _filesVisible;
+        private bool _isFilesResizing;
+        private bool _isTerminalResizing;
+        private double _filesPanelWidth = 280;
+        private double _terminalPanelHeight = 230;
+        private double _filesResizeStartX;
+        private double _filesResizeStartWidth;
+        private double _terminalResizeStartY;
+        private double _terminalResizeStartHeight;
         private TabViewItem? _activeEditorTab;
         private TabViewItem? _previewEditorTab;
         private WorkspaceTreeEntry? _contextTreeEntry;
@@ -105,19 +121,23 @@ namespace App.Pages
                 WorkspacePath = _settings.CodyWorkspace
             };
             _orchestrator = new TechnicianSessionOrchestrator(_client, new ChatLogService());
+            LoadAvailableTerminalShells();
             SystemInstructionBox.Text = CodyInstruction;
             ModelText.Text = $"{App.Settings.Current.LowCostModel} · Thinking: adaptive";
             RenderSession();
             RefreshWorkspace();
+            ConfigureWorkspaceWatcher();
             LoadWorkspaceCommands();
             _ = _sharedEditor.PreloadAsync();
-            await RefreshWorkspaceFilesAsync();
+            await RefreshWorkspaceFilesAsync(notifyOnCompletion: true);
         }
 
         private void CodyPage_Unloaded(object sender, RoutedEventArgs e)
         {
             _agentCancellation?.Cancel();
             CancelTerminal();
+            CancelTerminalCommandProcesses();
+            DisposeWorkspaceWatcher();
         }
 
         // Section: Workspace
@@ -135,16 +155,18 @@ namespace App.Pages
 
             _agentCancellation?.Cancel();
             CancelTerminal();
+            CancelTerminalCommandProcesses();
             CloseAllEditorTabs();
             _settings.CodyWorkspace = folder.Path;
             await App.Settings.SaveAsync(_settings);
             if (_tools is not null) _tools.WorkspacePath = folder.Path;
+            ConfigureWorkspaceWatcher();
             _commands.Clear();
             _selectedCommand = null;
             LoadWorkspaceCommands();
             RefreshRunMenu();
             RefreshWorkspace();
-            await RefreshWorkspaceFilesAsync();
+            await RefreshWorkspaceFilesAsync(notifyOnCompletion: true);
         }
 
         private async void WorkspaceSplitButton_Click(SplitButton sender, SplitButtonClickEventArgs args)
@@ -164,18 +186,16 @@ namespace App.Pages
             WorkspaceNameText.Text = available
                 ? Path.GetFileName(workspace.TrimEnd(Path.DirectorySeparatorChar))
                 : "Choose workspace";
-            ComposerWorkspaceText.Text = available
-                ? Path.GetFileName(workspace.TrimEnd(Path.DirectorySeparatorChar))
-                : "No workspace selected";
             ToolTipService.SetToolTip(
                 WorkspaceSplitButton,
                 available ? $"{workspace}\nClick to show or hide workspace files." : "Choose Cody workspace");
             myColorButton.IsEnabled = available && !_isBusy;
             FileSearchBox.IsEnabled = available;
             TerminalInputBox.IsEnabled = available;
+            TerminalTypeBox.IsEnabled = available;
         }
 
-        private async Task RefreshWorkspaceFilesAsync()
+        private async Task RefreshWorkspaceFilesAsync(bool showLoading = true, bool notifyOnCompletion = false)
         {
             _workspaceFiles.Clear();
             _workspaceRoots.Clear();
@@ -186,7 +206,7 @@ namespace App.Pages
                 return;
             }
 
-            FileStatusText.Text = "Loading files…";
+            if (showLoading) FileStatusText.Text = "Loading files…";
             try
             {
                 var snapshot = await Task.Run(() => BuildWorkspaceSnapshot(_settings.CodyWorkspace));
@@ -194,10 +214,86 @@ namespace App.Pages
                 _workspaceRoots.AddRange(snapshot.Roots);
                 ShowWorkspaceTree(_workspaceRoots);
                 FileStatusText.Text = $"{_workspaceFiles.Count:N0} files · Git status included";
+                if (notifyOnCompletion)
+                    CompletionNotificationService.ShowWhenMainWindowIsInactive(
+                        "Project scan complete",
+                        $"Cody indexed {_workspaceFiles.Count:N0} workspace files.");
             }
             catch (Exception exception)
             {
                 FileStatusText.Text = $"Could not load workspace: {exception.Message}";
+            }
+        }
+
+        private void ConfigureWorkspaceWatcher()
+        {
+            DisposeWorkspaceWatcher();
+            if (!HasWorkspace()) return;
+
+            try
+            {
+                _workspaceWatcher = new FileSystemWatcher(_settings.CodyWorkspace)
+                {
+                    IncludeSubdirectories = true,
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
+                    EnableRaisingEvents = true
+                };
+                _workspaceWatcher.Changed += WorkspaceWatcher_Changed;
+                _workspaceWatcher.Created += WorkspaceWatcher_Changed;
+                _workspaceWatcher.Deleted += WorkspaceWatcher_Changed;
+                _workspaceWatcher.Renamed += WorkspaceWatcher_Renamed;
+                _workspaceWatcher.Error += WorkspaceWatcher_Error;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                FileStatusText.Text = $"Could not watch workspace changes: {exception.Message}";
+            }
+        }
+
+        private void DisposeWorkspaceWatcher()
+        {
+            _workspaceRefreshCancellation?.Cancel();
+            _workspaceRefreshCancellation?.Dispose();
+            _workspaceRefreshCancellation = null;
+            _workspaceWatcher?.Dispose();
+            _workspaceWatcher = null;
+        }
+
+        private void WorkspaceWatcher_Changed(object sender, FileSystemEventArgs e) => QueueWorkspaceRefresh();
+
+        private void WorkspaceWatcher_Renamed(object sender, RenamedEventArgs e) => QueueWorkspaceRefresh();
+
+        private void WorkspaceWatcher_Error(object sender, ErrorEventArgs e) => QueueWorkspaceRefresh();
+
+        private void QueueWorkspaceRefresh()
+        {
+            _ = DispatcherQueue.TryEnqueue(ScheduleWorkspaceRefresh);
+        }
+
+        private void ScheduleWorkspaceRefresh()
+        {
+            if (_workspaceRefreshCancellation is not null) return;
+            _workspaceRefreshCancellation = new CancellationTokenSource();
+            _ = RefreshWorkspaceAfterChangesAsync(_workspaceRefreshCancellation.Token);
+        }
+
+        private async Task RefreshWorkspaceAfterChangesAsync(CancellationToken token)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(10), token);
+                if (!token.IsCancellationRequested) await RefreshWorkspaceFilesAsync(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                if (_workspaceRefreshCancellation?.Token == token)
+                {
+                    _workspaceRefreshCancellation.Dispose();
+                    _workspaceRefreshCancellation = null;
+                }
             }
         }
 
@@ -365,9 +461,46 @@ namespace App.Pages
 
         private void SetFilesPanelVisibility(bool show)
         {
+            if (!show && _filesVisible)
+                _filesPanelWidth = FilesColumn.ActualWidth;
+
             _filesVisible = show;
             FilesPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-            FilesColumn.Width = show ? new GridLength(280) : new GridLength(0);
+            FilesSplitter.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            FilesColumn.Width = show ? new GridLength(_filesPanelWidth) : new GridLength(0);
+            FilesSplitterColumn.Width = show ? new GridLength(6) : new GridLength(0);
+        }
+
+        private void FilesSplitter_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+            _isFilesResizing = FilesSplitter.CapturePointer(e.Pointer);
+            _filesResizeStartX = e.GetCurrentPoint(this).Position.X;
+            _filesResizeStartWidth = FilesColumn.ActualWidth;
+            e.Handled = _isFilesResizing;
+        }
+
+        private void FilesSplitter_PointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            if (!_isFilesResizing) return;
+            _filesPanelWidth = Math.Clamp(
+                _filesResizeStartWidth + e.GetCurrentPoint(this).Position.X - _filesResizeStartX,
+                180,
+                500);
+            FilesColumn.Width = new GridLength(_filesPanelWidth);
+            e.Handled = true;
+        }
+
+        private void FilesSplitter_PointerReleased(object sender, PointerRoutedEventArgs e) => EndFilesResize(e);
+
+        private void FilesSplitter_PointerCanceled(object sender, PointerRoutedEventArgs e) => EndFilesResize(e);
+
+        private void EndFilesResize(PointerRoutedEventArgs e)
+        {
+            if (!_isFilesResizing) return;
+            _isFilesResizing = false;
+            FilesSplitter.ReleasePointerCapture(e.Pointer);
+            e.Handled = true;
         }
 
         private void ContextButton_Click(object sender, RoutedEventArgs e)
@@ -375,6 +508,41 @@ namespace App.Pages
             var show = ContextButton.IsChecked == true;
             ContextPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
             ContextColumn.Width = show ? new GridLength(310) : new GridLength(0);
+        }
+
+        private async void ThinkDeepButton_Click(object sender, RoutedEventArgs e) =>
+            await ResubmitLatestPromptAsync(TechnicianRequestMode.Think);
+
+        private async void BeSmartButton_Click(object sender, RoutedEventArgs e) =>
+            await ResubmitLatestPromptAsync(TechnicianRequestMode.Smart);
+
+        private async Task ResubmitLatestPromptAsync(TechnicianRequestMode requestMode)
+        {
+            if (_isBusy) return;
+            var prompt = _session.Messages.LastOrDefault(message => message.Kind == ChatItemKind.User)?.Content;
+            if (!string.IsNullOrWhiteSpace(prompt)) await SendPromptAsync(requestMode, prompt);
+        }
+
+        private void CopySessionButton_Click(object sender, RoutedEventArgs e)
+        {
+            var history = string.Join("\n\n", _session.Messages.Select(message => $"{message.Title}:\n{message.Content}"));
+            if (history.Length == 0) return;
+            var package = new DataPackage();
+            package.SetText(history);
+            Clipboard.SetContent(package);
+            Clipboard.Flush();
+        }
+
+        private void ClearSessionButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isBusy) return;
+            _session = new ChatSession();
+            SaveSession();
+            ContextTextBox.Text = string.Empty;
+            ContextButton.IsChecked = false;
+            ContextPanel.Visibility = Visibility.Collapsed;
+            ContextColumn.Width = new GridLength(0);
+            RenderSession();
         }
 
         // Section: Workspace search
@@ -557,6 +725,12 @@ namespace App.Pages
             var open = new MenuFlyoutItem { Text = "Open", IsEnabled = !_contextTreeEntry.IsDirectory };
             open.Click += async (_, _) => await OpenContextEntryAsync();
             menu.Items.Add(open);
+            if (_contextTreeEntry is { IsDirectory: false, GitState: GitFileState.Modified })
+            {
+                var showDiff = new MenuFlyoutItem { Text = "Show diff" };
+                showDiff.Click += async (_, _) => await ShowContextDiffAsync();
+                menu.Items.Add(showDiff);
+            }
             if (_contextTreeEntry.IsDirectory)
             {
                 menu.Items.Add(new MenuFlyoutSeparator());
@@ -612,6 +786,65 @@ namespace App.Pages
             var entry = _contextTreeEntry;
             if (entry is not { IsDirectory: false }) return;
             await OpenEditorAsync(new WorkspaceFileItem(entry.Name, entry.RelativePath, entry.FullPath), false);
+        }
+
+        private async Task ShowContextDiffAsync()
+        {
+            var entry = _contextTreeEntry;
+            if (entry is not { IsDirectory: false, GitState: GitFileState.Modified }) return;
+
+            var diff = await Task.Run(() => ReadGitDiff(_settings.CodyWorkspace, entry.RelativePath));
+            if (string.IsNullOrWhiteSpace(diff))
+            {
+                await ShowMessageAsync("No diff available", $"Git did not return a diff for {entry.RelativePath}.");
+                return;
+            }
+
+            var viewer = new TextBox
+            {
+                Text = diff,
+                IsReadOnly = true,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.NoWrap,
+                FontFamily = new FontFamily("Cascadia Mono"),
+                FontSize = 12,
+                BorderThickness = new Thickness(0)
+            };
+            var tab = new TabViewItem
+            {
+                Header = $"{entry.Name} diff",
+                Content = viewer
+            };
+            EditorTabs.TabItems.Add(tab);
+            EditorTabs.SelectedItem = tab;
+        }
+
+        private static string ReadGitDiff(string workingDirectory, string relativePath)
+        {
+            try
+            {
+                var startInfo = new ProcessStartInfo("git")
+                {
+                    WorkingDirectory = workingDirectory,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                startInfo.ArgumentList.Add("diff");
+                startInfo.ArgumentList.Add("HEAD");
+                startInfo.ArgumentList.Add("--");
+                startInfo.ArgumentList.Add(relativePath);
+                using var process = Process.Start(startInfo);
+                if (process is null) return string.Empty;
+                var output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit(3000);
+                return process.ExitCode == 0 ? output : string.Empty;
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                return string.Empty;
+            }
         }
 
         private async Task CreateWorkspaceEntryAsync(bool directory)
@@ -1258,7 +1491,12 @@ namespace App.Pages
 
         private async void EditorTabs_TabCloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs args)
         {
-            if (args.Tab is not TabViewItem tab || !_editors.TryGetValue(tab, out var document)) return;
+            if (args.Tab is not TabViewItem tab) return;
+            if (!_editors.TryGetValue(tab, out var document))
+            {
+                sender.TabItems.Remove(tab);
+                return;
+            }
             if (document.IsDirty && !await ConfirmDiscardAsync(document.RelativePath)) return;
             await RemoveEditorTabAsync(tab, document);
         }
@@ -1365,16 +1603,18 @@ namespace App.Pages
         private async void PromptBox_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
         {
             if (e.Key != global::Windows.System.VirtualKey.Enter) return;
-            var controlDown = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(global::Windows.System.VirtualKey.Control)
+            var shiftDown = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(global::Windows.System.VirtualKey.Shift)
                 .HasFlag(global::Windows.UI.Core.CoreVirtualKeyStates.Down);
-            if (!controlDown) return;
+            if (shiftDown) return;
             e.Handled = true;
             await SendPromptAsync();
         }
 
-        private async Task SendPromptAsync()
+        private async Task SendPromptAsync(
+            TechnicianRequestMode requestMode = TechnicianRequestMode.Default,
+            string? promptOverride = null)
         {
-            var prompt = PromptBox.Text.Trim();
+            var prompt = (promptOverride ?? PromptBox.Text).Trim();
             if (prompt.Length == 0 || _client is null || _tools is null || _isBusy) return;
             if (!HasWorkspace())
             {
@@ -1382,24 +1622,30 @@ namespace App.Pages
                 return;
             }
 
-            PromptBox.Text = string.Empty;
+            if (promptOverride is null) PromptBox.Text = string.Empty;
             AddMessage(new ChatMessage(ChatItemKind.User, "You", prompt));
             _agentCancellation = new CancellationTokenSource();
             SetBusy(true);
             try
             {
+                var tier = requestMode switch
+                {
+                    TechnicianRequestMode.Smart => TechnicianModelTier.Escalated,
+                    TechnicianRequestMode.Think => TechnicianModelTier.HighThinking,
+                    _ => TechnicianModelTier.Standard
+                };
                 var nextSteps = new List<JsonObject> { QwenClient.CreateUserStep(prompt, []) };
                 var toolCount = 0;
                 while (true)
                 {
                     var result = await _client.CreateSimpleInteractionAsync(
-                        TechnicianSessionOrchestrator.Model(TechnicianModelTier.Standard),
+                        TechnicianSessionOrchestrator.Model(tier),
                         _session.History,
                         nextSteps,
                         EffectiveInstruction(),
-                        TechnicianToolService.CreateExecutionDeclarations(),
+                        TechnicianToolService.CreateExecutionDeclarations(requestMode == TechnicianRequestMode.Think),
                         _agentCancellation.Token,
-                        TechnicianSessionOrchestrator.Thinking(TechnicianModelTier.Standard));
+                        TechnicianSessionOrchestrator.Thinking(tier));
                     foreach (var step in nextSteps) _session.History.Add((JsonObject)step.DeepClone());
                     foreach (var step in result.Steps) _session.History.Add((JsonObject)step.DeepClone());
                     if (!string.IsNullOrWhiteSpace(result.Thinking))
@@ -1432,6 +1678,9 @@ namespace App.Pages
                     }
                     SaveSession();
                 }
+                CompletionNotificationService.ShowWhenMainWindowIsInactive(
+                    "Cody task complete",
+                    "Cody has finished responding.");
             }
             catch (OperationCanceledException)
             {
@@ -1478,23 +1727,81 @@ namespace App.Pages
             if (CodyEmptyState.Parent is Panel parent) parent.Children.Remove(CodyEmptyState);
             if (message.Kind is ChatItemKind.Tool or ChatItemKind.Thinking)
             {
-                var expander = new Expander
+                var chevron = new FontIcon
                 {
-                    Header = message.Kind == ChatItemKind.Thinking
+                    Glyph = "\uE76C",
+                    FontSize = 10,
+                    Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                var header = new Grid
+                {
+                    MinHeight = 28,
+                    Padding = new Thickness(9, 0, 9, 0),
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Background = (Brush)Application.Current.Resources["ControlFillColorDefaultBrush"],
+                    CornerRadius = new CornerRadius(7, 7, 0, 0)
+                };
+                var headerText = new TextBlock
+                {
+                    Text = message.Kind == ChatItemKind.Thinking
                         ? "Thinking"
                         : $"{(message.ToolSucceeded == true ? "✓" : "×")} {message.Title}",
-                    IsExpanded = _isBusy,
-                    Content = new TextBlock
+                    FontFamily = new FontFamily("Cascadia Mono"),
+                    FontSize = 11,
+                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                header.Children.Add(headerText);
+                chevron.HorizontalAlignment = HorizontalAlignment.Right;
+                header.Children.Add(chevron);
+                var details = new Border
+                {
+                    Visibility = Visibility.Collapsed,
+                    Padding = new Thickness(10),
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Background = (Brush)Application.Current.Resources["ControlFillColorSecondaryBrush"],
+                    CornerRadius = new CornerRadius(0, 0, 7, 7),
+                    Child = new TextBlock
                     {
-                        Text = message.Content,
+                        Text = FormatToolOutput(message.Content),
                         FontFamily = new FontFamily("Cascadia Mono"),
                         FontSize = 11,
                         TextWrapping = TextWrapping.Wrap,
-                        IsTextSelectionEnabled = true,
-                        Margin = new Thickness(10)
+                        IsTextSelectionEnabled = true
                     }
                 };
-                ConversationHost.Children.Add(expander);
+                var console = new StackPanel { HorizontalAlignment = HorizontalAlignment.Stretch };
+                var headerButton = new Button
+                {
+                    Content = header,
+                    Background = new SolidColorBrush(Colors.Transparent),
+                    BorderBrush = new SolidColorBrush(Colors.Transparent),
+                    BorderThickness = new Thickness(0),
+                    Padding = new Thickness(0),
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                    VerticalContentAlignment = VerticalAlignment.Stretch
+                };
+                headerButton.Resources["ButtonBackgroundPointerOver"] = new SolidColorBrush(Colors.Transparent);
+                headerButton.Resources["ButtonBackgroundPressed"] = new SolidColorBrush(Colors.Transparent);
+                headerButton.Click += (_, _) =>
+                {
+                    var isExpanded = details.Visibility == Visibility.Visible;
+                    details.Visibility = isExpanded ? Visibility.Collapsed : Visibility.Visible;
+                    chevron.Glyph = isExpanded ? "\uE76C" : "\uE70D";
+                };
+                console.Children.Add(headerButton);
+                console.Children.Add(details);
+                var consoleWindow = new Border
+                {
+                    Child = console,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(8)
+                };
+                ConversationHost.Children.Add(consoleWindow);
             }
             else
             {
@@ -1525,11 +1832,48 @@ namespace App.Pages
             });
         }
 
+        private static string FormatToolOutput(string output)
+        {
+            try
+            {
+                var root = JsonNode.Parse(output);
+                if (root is not JsonObject result) return output;
+                ExpandEmbeddedJson(result, "content");
+                return result.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            }
+            catch (JsonException)
+            {
+                return output;
+            }
+        }
+
+        private static void ExpandEmbeddedJson(JsonObject result, string propertyName)
+        {
+            if (result[propertyName] is not JsonValue value
+                || !value.TryGetValue<string>(out var embedded)
+                || string.IsNullOrWhiteSpace(embedded))
+                return;
+
+            try
+            {
+                var nested = JsonNode.Parse(embedded);
+                if (nested is not null) result[propertyName] = nested;
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
         private void SetBusy(bool busy)
         {
             _isBusy = busy;
             PromptBox.IsEnabled = !busy;
             SendIcon.Glyph = busy ? "\uE71A" : "\uE724";
+            SendButton.Background = busy
+                ? new SolidColorBrush(Colors.Red)
+                : (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
+            ToolTipService.SetToolTip(SendButton, busy ? "Stop Cody" : "Send prompt");
+            AutomationProperties.SetName(SendButton, busy ? "Stop Cody" : "Send prompt");
             RefreshWorkspace();
         }
 
@@ -1578,21 +1922,32 @@ namespace App.Pages
             {
                 var manifests = _workspaceFiles
                     .Where(file => IsCommandManifest(file.Name))
-                    .Take(80)
+                    .Take(40)
                     .Select(file => $"{file.RelativePath}\n{ReadCommandManifest(file.FullPath)}");
+                var environmentDirectories = new[] { ".venv", "venv", "env", ".env" }
+                    .Where(name => Directory.Exists(Path.Combine(_settings.CodyWorkspace, name)));
+                var scannerInput = string.Join("\n\n", manifests)
+                    + $"\n\nDetected environment directories:\n{string.Join("\n", environmentDirectories)}";
                 var result = await _client.CreateSimpleInteractionAsync(
-                    App.Settings.Current.LowCostModel,
+                    App.Settings.Current.HighCostModel,
                     [],
-                    [QwenClient.CreateUserStep(string.Join("\n\n", manifests), [])],
+                    [QwenClient.CreateUserStep(scannerInput, [])],
                     """
-                    Identify useful project commands that are directly supported by the supplied manifests.
-                    Return only a JSON array of objects with string properties "name" and "command".
-                    Include execute/run, build, test, lint, format, migrations, Prisma, and named scripts only when evidenced.
-                    Commands must be non-interactive and run from the workspace root. Never invent a command.
+                    Extract project commands from the supplied files. Return JSON only:
+                    [{"name":"Build application","command":"npm run build"}]
+
+                    Rules:
+                    - Return at most 20 commands. Every command must be non-interactive and run from the workspace root.
+                    - Use only commands explicitly supported by a script, manifest, lockfile, schema, or detected environment directory.
+                    - Include setup commands when evidenced, such as npm install, Python environment setup, migrations, generators,
+                      containers, formatting, linting, testing, and project-specific tools like Prisma.
+                    - For Prisma, require a Prisma dependency, schema, config, or package script before adding its commands.
+                    - Name each command in 2–5 sentence-case words describing its action and target. Never use generic names like
+                      "Run", "Test", "Build", or "Lint".
                     """,
                     null,
                     CancellationToken.None,
-                    QwenThinkingLevel.Disabled);
+                    QwenThinkingLevel.High);
                 var json = ExtractJsonArray(result.Text);
                 var commands = JsonSerializer.Deserialize<List<CodyCommand>>(json, new JsonSerializerOptions
                 {
@@ -1607,6 +1962,9 @@ namespace App.Pages
                 RefreshRunMenu();
                 ShowTerminal();
                 AppendTerminal($"Discovered {_commands.Count} workspace command(s).\r\n");
+                CompletionNotificationService.ShowWhenMainWindowIsInactive(
+                    "Command scan complete",
+                    $"Cody discovered {_commands.Count} workspace command(s).");
             }
             catch (Exception exception)
             {
@@ -1621,9 +1979,26 @@ namespace App.Pages
 
         private static bool IsCommandManifest(string name) =>
             name.Equals("package.json", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("package-lock.json", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("pnpm-lock.yaml", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("yarn.lock", StringComparison.OrdinalIgnoreCase)
             || name.Equals("pyproject.toml", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("requirements.txt", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Pipfile", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("poetry.lock", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("uv.lock", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("environment.yml", StringComparison.OrdinalIgnoreCase)
             || name.Equals("Cargo.toml", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("go.mod", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("pom.xml", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("build.gradle", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("build.gradle.kts", StringComparison.OrdinalIgnoreCase)
             || name.Equals("Makefile", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Dockerfile", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("docker-compose.yml", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("docker-compose.yaml", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("schema.prisma", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("prisma.config.ts", StringComparison.OrdinalIgnoreCase)
             || name.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
             || name.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
             || name.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase);
@@ -1633,7 +2008,7 @@ namespace App.Pages
             try
             {
                 var text = File.ReadAllText(path);
-                return text.Length <= 12_000 ? text : text[..12_000];
+                return text.Length <= 4_000 ? text : text[..4_000];
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -1680,7 +2055,7 @@ namespace App.Pages
                 ScanCommandsMenuItem_Click(sender, new RoutedEventArgs());
                 return;
             }
-            await RunTerminalCommandAsync(_selectedCommand.Command);
+            await RunCommandInTerminalTabAsync(_selectedCommand);
         }
 
         private void LoadWorkspaceCommands()
@@ -1744,13 +2119,250 @@ namespace App.Pages
         {
             TerminalButton.IsChecked = true;
             TerminalPanel.Visibility = Visibility.Visible;
-            TerminalRow.Height = new GridLength(230);
+            TerminalSplitter.Visibility = Visibility.Visible;
+            TerminalSplitterRow.Height = new GridLength(6);
+            TerminalRow.Height = new GridLength(_terminalPanelHeight);
         }
 
         private void HideTerminal()
         {
+            if (TerminalPanel.Visibility == Visibility.Visible)
+                _terminalPanelHeight = TerminalRow.ActualHeight;
+
             TerminalPanel.Visibility = Visibility.Collapsed;
+            TerminalSplitter.Visibility = Visibility.Collapsed;
+            TerminalSplitterRow.Height = new GridLength(0);
             TerminalRow.Height = new GridLength(0);
+        }
+
+        private void TerminalPanel_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            const double TerminalTabHeaderHeight = 40;
+            InteractiveTerminalGrid.Width = TerminalPanel.ActualWidth;
+            InteractiveTerminalGrid.Height = Math.Max(0, TerminalPanel.ActualHeight - TerminalTabHeaderHeight);
+        }
+
+        private async Task RunCommandInTerminalTabAsync(CodyCommand command)
+        {
+            if (!HasWorkspace()) return;
+            if (IsRiskyCommand(command.Command)
+                && !await ConfirmActionAsync($"Run potentially destructive command '{command.Command}' in '{_settings.CodyWorkspace}'?"))
+                return;
+
+            var terminalWasHidden = TerminalPanel.Visibility != Visibility.Visible;
+            ShowTerminal();
+            var output = new TextBlock
+            {
+                FontFamily = new FontFamily("Cascadia Mono"),
+                FontSize = 12,
+                Foreground = new SolidColorBrush(Colors.LightGray),
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true
+            };
+            var scroller = new ScrollViewer
+            {
+                Content = output,
+                Padding = new Thickness(16, 10, 16, 10),
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+            };
+            var tab = new TabViewItem
+            {
+                Header = command.Name,
+                Content = scroller,
+                ContextFlyout = CreateTerminalCommandTabMenu(command, output)
+            };
+            TerminalTabs.TabItems.Add(tab);
+            TerminalTabs.SelectedItem = tab;
+            if (terminalWasHidden) _terminalCommandTabsOpenedPanel.Add(tab);
+            AppendTerminalCommandOutput(output, scroller, $"> {command.Command}\r\n");
+
+            try
+            {
+                var process = new Process
+                {
+                    StartInfo = TechnicianToolService.CreateCommandStartInfo(command.Command, _settings.CodyWorkspace),
+                    EnableRaisingEvents = true
+                };
+                process.OutputDataReceived += (_, args) =>
+                {
+                    if (args.Data is not null)
+                        _ = DispatcherQueue.TryEnqueue(() => AppendTerminalCommandOutput(output, scroller, $"{args.Data}\r\n"));
+                };
+                process.ErrorDataReceived += (_, args) =>
+                {
+                    if (args.Data is not null)
+                        _ = DispatcherQueue.TryEnqueue(() => AppendTerminalCommandOutput(output, scroller, $"{args.Data}\r\n"));
+                };
+                process.Exited += (_, _) => _ = DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (!_terminalCommandProcesses.Remove(tab)) return;
+                    AppendTerminalCommandOutput(output, scroller, $"[process exited with code {process.ExitCode}]\r\n");
+                    CompletionNotificationService.ShowWhenMainWindowIsInactive(
+                        "Command complete",
+                        $"{command.Name} finished with exit code {process.ExitCode}.");
+                    process.Dispose();
+                    _ = RefreshWorkspaceFilesAsync();
+                });
+                process.Start();
+                _terminalCommandProcesses.Add(tab, process);
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+            }
+            catch (Exception exception)
+            {
+                AppendTerminalCommandOutput(output, scroller, $"[error] {exception.Message}\r\n");
+            }
+        }
+
+        private static void AppendTerminalCommandOutput(TextBlock output, ScrollViewer scroller, string text)
+        {
+            output.Text += text;
+            scroller.UpdateLayout();
+            scroller.ChangeView(null, scroller.ScrollableHeight, null, true);
+        }
+
+        private MenuFlyout CreateTerminalCommandTabMenu(CodyCommand command, TextBlock output)
+        {
+            var menu = new MenuFlyout();
+            var requestFix = new MenuFlyoutItem { Text = "Request a fix" };
+            requestFix.Click += async (_, _) => await RequestFixForCommandAsync(command, output.Text);
+            menu.Items.Add(requestFix);
+            return menu;
+        }
+
+        private async Task RequestFixForCommandAsync(CodyCommand command, string output)
+        {
+            if (_isBusy)
+            {
+                await ShowMessageAsync("Cody is busy", "Wait for the current request to finish before requesting a fix.");
+                return;
+            }
+
+            var supportingOutput = output.Length <= MaximumCommandFixContextCharacters
+                ? output
+                : $"[Earlier console output omitted]\r\n{output[^MaximumCommandFixContextCharacters..]}";
+            PromptBox.Text =
+                $"Fix the issue revealed by the workspace command \"{command.Name}\".\n\n"
+                + $"Command: {command.Command}\n\n"
+                + "Use this console output as supporting context. Inspect the relevant files and make the smallest complete fix.\n\n"
+                + supportingOutput;
+            EditorTabs.SelectedItem = HomeTab;
+            await SendPromptAsync();
+        }
+
+        private async void TerminalTabs_TabCloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs args)
+        {
+            if (!_terminalCommandTabsClosing.Add(args.Tab)) return;
+            var closeTerminalPanel = _terminalCommandTabsOpenedPanel.Remove(args.Tab);
+            try
+            {
+                if (_terminalCommandProcesses.Remove(args.Tab, out var process))
+                    await TerminateProcessTreeAsync(process);
+
+                sender.TabItems.Remove(args.Tab);
+                if (closeTerminalPanel && sender.TabItems.Count == 1)
+                {
+                    HideTerminal();
+                    TerminalButton.IsChecked = false;
+                }
+            }
+            finally
+            {
+                _terminalCommandTabsClosing.Remove(args.Tab);
+            }
+        }
+
+        private static async Task TerminateProcessTreeAsync(Process process)
+        {
+            try
+            {
+                RequestProcessTreeTermination(process);
+                await process.WaitForExitAsync();
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+
+        private static void RequestProcessTreeTermination(Process process)
+        {
+            if (process.HasExited) return;
+
+            try
+            {
+                var taskKill = new ProcessStartInfo("taskkill.exe")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                taskKill.ArgumentList.Add("/PID");
+                taskKill.ArgumentList.Add(process.Id.ToString());
+                taskKill.ArgumentList.Add("/T");
+                taskKill.ArgumentList.Add("/F");
+                using var taskKillProcess = Process.Start(taskKill);
+                taskKillProcess?.WaitForExit(5_000);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+            }
+
+            if (!process.HasExited) process.Kill(true);
+        }
+
+        private void CancelTerminalCommandProcesses()
+        {
+            foreach (var process in _terminalCommandProcesses.Values)
+            {
+                try
+                {
+                    RequestProcessTreeTermination(process);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+                process.Dispose();
+            }
+            _terminalCommandProcesses.Clear();
+            _terminalCommandTabsOpenedPanel.Clear();
+            _terminalCommandTabsClosing.Clear();
+        }
+
+        private void TerminalSplitter_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+            _isTerminalResizing = TerminalSplitter.CapturePointer(e.Pointer);
+            _terminalResizeStartY = e.GetCurrentPoint(this).Position.Y;
+            _terminalResizeStartHeight = TerminalRow.ActualHeight;
+            e.Handled = _isTerminalResizing;
+        }
+
+        private void TerminalSplitter_PointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            if (!_isTerminalResizing) return;
+            _terminalPanelHeight = Math.Clamp(
+                _terminalResizeStartHeight - (e.GetCurrentPoint(this).Position.Y - _terminalResizeStartY),
+                160,
+                600);
+            TerminalRow.Height = new GridLength(_terminalPanelHeight);
+            e.Handled = true;
+        }
+
+        private void TerminalSplitter_PointerReleased(object sender, PointerRoutedEventArgs e) => EndTerminalResize(e);
+
+        private void TerminalSplitter_PointerCanceled(object sender, PointerRoutedEventArgs e) => EndTerminalResize(e);
+
+        private void EndTerminalResize(PointerRoutedEventArgs e)
+        {
+            if (!_isTerminalResizing) return;
+            _isTerminalResizing = false;
+            TerminalSplitter.ReleasePointerCapture(e.Pointer);
+            e.Handled = true;
         }
 
         private async void TerminalRunButton_Click(object sender, RoutedEventArgs e)
@@ -1773,18 +2385,30 @@ namespace App.Pages
 
         private async Task RunTerminalCommandAsync(string command)
         {
-            if (_terminalProcess is not null || !HasWorkspace()) return;
+            if (!HasWorkspace()) return;
             if (IsRiskyCommand(command)
                 && !await ConfirmActionAsync($"Run potentially destructive command '{command}' in '{_settings.CodyWorkspace}'?"))
                 return;
             ShowTerminal();
             AppendTerminal($"> {command}\r\n");
-            _terminalCancellation = new CancellationTokenSource();
             try
             {
-                var startInfo = TechnicianToolService.CreateCommandStartInfo(command, _settings.CodyWorkspace);
-                var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-                _terminalProcess = process;
+                if (!EnsureTerminalSession()) return;
+                _terminalProcess!.StandardInput.WriteLine(command);
+                _terminalProcess.StandardInput.Flush();
+            }
+            catch (Exception exception)
+            {
+                AppendTerminal($"[error] {exception.Message}\r\n");
+            }
+        }
+
+        private bool EnsureTerminalSession()
+        {
+            if (_terminalProcess is { HasExited: false }) return true;
+            try
+            {
+                var process = new Process { StartInfo = CreateTerminalStartInfo(), EnableRaisingEvents = true };
                 process.OutputDataReceived += (_, args) =>
                 {
                     if (args.Data is not null) _ = DispatcherQueue.TryEnqueue(() => AppendTerminal($"{args.Data}\r\n"));
@@ -1793,27 +2417,131 @@ namespace App.Pages
                 {
                     if (args.Data is not null) _ = DispatcherQueue.TryEnqueue(() => AppendTerminal($"{args.Data}\r\n"));
                 };
+                process.Exited += (_, _) => _ = DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (_terminalProcess != process) return;
+                    var exitCode = process.ExitCode;
+                    var wasStopRequested = _terminalStopRequested;
+                    _terminalStopRequested = false;
+                    AppendTerminal($"[terminal exited with code {exitCode}]\r\n");
+                    process.Dispose();
+                    _terminalProcess = null;
+                    if (!wasStopRequested)
+                        CompletionNotificationService.ShowWhenMainWindowIsInactive(
+                            "Terminal session finished",
+                            $"{GetTerminalTypeName()} exited with code {exitCode}.");
+                    _ = RefreshWorkspaceFilesAsync();
+                });
                 process.Start();
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
-                await process.WaitForExitAsync(_terminalCancellation.Token);
-                AppendTerminal($"[process exited with code {process.ExitCode}]\r\n");
-            }
-            catch (OperationCanceledException)
-            {
-                AppendTerminal("[process cancelled]\r\n");
+                _terminalProcess = process;
+                return true;
             }
             catch (Exception exception)
             {
-                AppendTerminal($"[error] {exception.Message}\r\n");
+                AppendTerminal($"[error] Could not start {GetTerminalTypeName()}: {exception.Message}\r\n");
+                return false;
             }
-            finally
+        }
+
+        private ProcessStartInfo CreateTerminalStartInfo()
+        {
+            var shell = GetSelectedTerminalShell();
+            return new ProcessStartInfo
             {
-                _terminalProcess?.Dispose();
-                _terminalProcess = null;
-                _terminalCancellation?.Dispose();
-                _terminalCancellation = null;
-                await RefreshWorkspaceFilesAsync();
+                FileName = shell.FileName,
+                Arguments = shell.Arguments,
+                WorkingDirectory = _settings.CodyWorkspace,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardInputEncoding = Encoding.UTF8,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+        }
+
+        private TerminalShell GetSelectedTerminalShell() =>
+            TerminalTypeBox.SelectedItem as TerminalShell
+            ?? new TerminalShell("Command Prompt", "cmd.exe", "/Q /K");
+
+        private string GetTerminalTypeName() => GetSelectedTerminalShell().Name;
+
+        private void LoadAvailableTerminalShells()
+        {
+            var shells = new List<TerminalShell>();
+            AddTerminalShell(shells, "PowerShell", FindWindowsPowerShell(), "-NoLogo -NoProfile -NoExit");
+            AddTerminalShell(shells, "PowerShell 7", FindExecutable("pwsh.exe"), "-NoLogo -NoProfile -NoExit");
+            AddTerminalShell(shells, "Command Prompt", FindExecutable("cmd.exe"), "/Q /K");
+            AddTerminalShell(shells, "WSL", FindExecutable("wsl.exe"), string.Empty);
+            AddTerminalShell(shells, "Git Bash", FindGitBash(), "--login -i");
+            AddTerminalShell(shells, "Bash", FindExecutable("bash.exe"), "--login -i");
+            AddTerminalShell(shells, "Zsh", FindExecutable("zsh.exe"), "-i");
+            AddTerminalShell(shells, "Fish", FindExecutable("fish.exe"), "-i");
+            AddTerminalShell(shells, "Nushell", FindExecutable("nu.exe"), "-i");
+
+            TerminalTypeBox.Items.Clear();
+            foreach (var shell in shells)
+                TerminalTypeBox.Items.Add(shell);
+
+            TerminalTypeBox.SelectedItem = shells.FirstOrDefault(shell => shell.Name == "PowerShell")
+                ?? shells.FirstOrDefault();
+        }
+
+        private static void AddTerminalShell(List<TerminalShell> shells, string name, string? fileName, string arguments)
+        {
+            if (string.IsNullOrWhiteSpace(fileName)
+                || shells.Any(shell => string.Equals(shell.FileName, fileName, StringComparison.OrdinalIgnoreCase)))
+                return;
+
+            shells.Add(new TerminalShell(name, fileName, arguments));
+        }
+
+        private static string? FindExecutable(string executableName)
+        {
+            var systemPath = Path.Combine(Environment.SystemDirectory, executableName);
+            if (File.Exists(systemPath)) return systemPath;
+
+            var pathEntries = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            foreach (var directory in pathEntries)
+            {
+                var candidate = Path.Combine(directory, executableName);
+                if (File.Exists(candidate)) return candidate;
+            }
+
+            return null;
+        }
+
+        private static string? FindWindowsPowerShell()
+        {
+            var windowsDirectory = Path.GetDirectoryName(Environment.SystemDirectory);
+            if (string.IsNullOrWhiteSpace(windowsDirectory)) return FindExecutable("powershell.exe");
+
+            var powerShellPath = Path.Combine(windowsDirectory, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+            return File.Exists(powerShellPath) ? powerShellPath : FindExecutable("powershell.exe");
+        }
+
+        private static string? FindGitBash()
+        {
+            var candidates = new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "bin", "bash.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Git", "bin", "bash.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Git", "bin", "bash.exe")
+            };
+            return candidates.FirstOrDefault(File.Exists);
+        }
+
+        private void TerminalTypeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_terminalProcess is not null)
+            {
+                CancelTerminal();
+                AppendTerminal($"[switched to {GetTerminalTypeName()}]\r\n");
             }
         }
 
@@ -1824,14 +2552,15 @@ namespace App.Pages
             TerminalScroller.ChangeView(null, TerminalScroller.ScrollableHeight, null, true);
         }
 
-        private void CancelTerminalButton_Click(object sender, RoutedEventArgs e) => CancelTerminal();
-
         private void CancelTerminal()
         {
-            _terminalCancellation?.Cancel();
             try
             {
-                if (_terminalProcess is { HasExited: false }) _terminalProcess.Kill(true);
+                if (_terminalProcess is { HasExited: false })
+                {
+                    _terminalStopRequested = true;
+                    RequestProcessTreeTermination(_terminalProcess);
+                }
             }
             catch (InvalidOperationException)
             {

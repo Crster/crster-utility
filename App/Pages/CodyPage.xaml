@@ -1,11 +1,13 @@
 <Page
     x:Class="App.Pages.CodyPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:App.Controls">
     <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
+            <RowDefinition x:Name="TerminalSplitterRow" Height="0"/>
             <RowDefinition x:Name="TerminalRow" Height="0"/>
         </Grid.RowDefinitions>
 
@@ -63,13 +65,28 @@
                             <TextBlock Text="Terminal"/>
                         </StackPanel>
                     </ToggleButton>
-                    <ToggleButton x:Name="ContextButton" Height="34" Padding="10,0"
-                                  Click="ContextButton_Click" ToolTipService.ToolTip="Show agent context">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE8A5;" FontSize="13"/>
-                            <TextBlock Text="Context"/>
-                        </StackPanel>
+                    <Button x:Name="ThinkDeepButton" Width="34" Height="34" Padding="0"
+                            Click="ThinkDeepButton_Click" ToolTipService.ToolTip="Think deep">
+                        <FontIcon Glyph="&#xE945;" FontSize="13"/>
+                    </Button>
+                    <Button x:Name="BeSmartButton" Width="34" Height="34" Padding="0"
+                            Click="BeSmartButton_Click" ToolTipService.ToolTip="Be smart">
+                        <FontIcon Glyph="&#xE7BE;" FontSize="13"/>
+                    </Button>
+                    <Button x:Name="CopySessionButton" Width="34" Height="34" Padding="0"
+                            Click="CopySessionButton_Click" ToolTipService.ToolTip="Copy Cody session">
+                        <FontIcon Glyph="&#xE8C8;" FontSize="13"/>
+                    </Button>
+                    <ToggleButton x:Name="ContextButton" Width="34" Height="34" Padding="0"
+                                  Click="ContextButton_Click" ToolTipService.ToolTip="Show agent context"
+                                  AutomationProperties.Name="Show agent context">
+                        <FontIcon Glyph="&#xF133;" FontSize="13"/>
                     </ToggleButton>
+                    <Button x:Name="ClearSessionButton" Width="34" Height="34" Padding="0"
+                            Click="ClearSessionButton_Click" ToolTipService.ToolTip="Clear Cody session"
+                            AutomationProperties.Name="Clear Cody session">
+                        <FontIcon Glyph="&#xEA99;" FontSize="13"/>
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>
@@ -78,6 +95,7 @@
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="FilesColumn" Width="0"/>
+                <ColumnDefinition x:Name="FilesSplitterColumn" Width="0"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition x:Name="ContextColumn" Width="0"/>
             </Grid.ColumnDefinitions>
@@ -147,12 +165,27 @@
                 </Grid>
             </Border>
 
-            <TabView x:Name="EditorTabs" Grid.Column="1" IsAddTabButtonVisible="False"
+            <controls:ResizeHandle x:Name="FilesSplitter" Grid.Column="1" Width="6"
+                                  Visibility="Collapsed" PointerPressed="FilesSplitter_PointerPressed"
+                                  PointerMoved="FilesSplitter_PointerMoved"
+                                  PointerReleased="FilesSplitter_PointerReleased"
+                                  PointerCanceled="FilesSplitter_PointerCanceled"
+                                  ToolTipService.ToolTip="Resize file sidebar"
+                                  AutomationProperties.Name="Resize file sidebar"/>
+
+            <TabView x:Name="EditorTabs" Grid.Column="2" IsAddTabButtonVisible="False"
                      HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                      HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
                      SelectionChanged="EditorTabs_SelectionChanged"
                      TabCloseRequested="EditorTabs_TabCloseRequested">
-                <TabViewItem x:Name="HomeTab" Header="Cody" IsClosable="False">
+                <TabViewItem x:Name="HomeTab" IsClosable="False">
+                    <TabViewItem.Header>
+                        <Border Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                Width="230" Height="32" CornerRadius="0" Padding="10,0">
+                            <TextBlock Text="Cody" VerticalAlignment="Center" FontWeight="SemiBold"
+                                       Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"/>
+                        </Border>
+                    </TabViewItem.Header>
                     <Grid Padding="20,16" RowSpacing="12">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
@@ -175,16 +208,16 @@
                                 </StackPanel>
                             </StackPanel>
                         </ScrollViewer>
-                        <Border Grid.Row="1" BorderThickness="1" CornerRadius="14" Padding="6,6,6,5"
+                        <Border Grid.Row="1" BorderThickness="1" CornerRadius="14" Padding="6"
                                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                 Translation="0,0,8">
-                            <Grid RowSpacing="2">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <TextBox x:Name="PromptBox" MinHeight="58" MaxHeight="160"
+                            <Grid ColumnSpacing="6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="PromptBox" MinHeight="38" MaxHeight="140"
                                          Padding="10,8" AcceptsReturn="True"
                                          TextWrapping="Wrap" BorderThickness="0" Background="Transparent"
                                          PlaceholderText="Ask Cody to inspect, change, or run your project..."
@@ -204,37 +237,24 @@
                                         <Thickness x:Key="TextControlBorderThemeThicknessFocused">0</Thickness>
                                     </TextBox.Resources>
                                 </TextBox>
-                                <Grid Grid.Row="1" Padding="8,0,2,1">
-                                    <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
-                                        <FontIcon Glyph="&#xE8B7;" FontSize="11"
-                                                  Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                                        <TextBlock x:Name="ComposerWorkspaceText" Text="No workspace selected"
-                                                   FontSize="11" TextTrimming="CharacterEllipsis"
-                                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                                    </StackPanel>
-                                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal"
-                                                Spacing="10" VerticalAlignment="Center">
-                                        <TextBlock Text="Ctrl+Enter to send" FontSize="10"
-                                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                                        <Button x:Name="SendButton" Width="34" Height="34" Padding="0"
-                                                CornerRadius="9" Style="{StaticResource AccentButtonStyle}"
-                                                Click="SendButton_Click" ToolTipService.ToolTip="Send prompt">
-                                            <FontIcon x:Name="SendIcon" Glyph="&#xE724;" FontSize="13"/>
-                                        </Button>
-                                    </StackPanel>
-                                </Grid>
+                                <Button x:Name="SendButton" Grid.Column="1" Width="34" Height="34" Padding="0"
+                                        Margin="0,0,2,2" VerticalAlignment="Bottom" CornerRadius="9"
+                                        Style="{StaticResource AccentButtonStyle}" Click="SendButton_Click"
+                                        ToolTipService.ToolTip="Send prompt">
+                                    <FontIcon x:Name="SendIcon" Glyph="&#xE724;" FontSize="13"/>
+                                </Button>
                             </Grid>
                         </Border>
                     </Grid>
                 </TabViewItem>
             </TabView>
 
-            <Grid x:Name="MonacoPreloadHost" Grid.Column="1" Margin="0,42,0,0"
+            <Grid x:Name="MonacoPreloadHost" Grid.Column="2" Margin="0,42,0,0"
                   Opacity="0" IsHitTestVisible="False" Canvas.ZIndex="10"
                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                   Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"/>
 
-            <Border x:Name="ContextPanel" Grid.Column="2" Visibility="Collapsed"
+            <Border x:Name="ContextPanel" Grid.Column="3" Visibility="Collapsed"
                     BorderThickness="1,0,0,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     Padding="14">
                 <ScrollViewer>
@@ -255,24 +275,50 @@
         </Grid>
 
         <!-- Section: Terminal -->
-        <Border x:Name="TerminalPanel" Grid.Row="2" Visibility="Collapsed" BorderThickness="0,1,0,0"
+        <controls:ResizeHandle x:Name="TerminalSplitter" Grid.Row="2" Height="6"
+                              IsVerticalResize="True" Visibility="Collapsed"
+                              PointerPressed="TerminalSplitter_PointerPressed"
+                              PointerMoved="TerminalSplitter_PointerMoved"
+                              PointerReleased="TerminalSplitter_PointerReleased"
+                              PointerCanceled="TerminalSplitter_PointerCanceled"
+                              ToolTipService.ToolTip="Resize terminal"
+                              AutomationProperties.Name="Resize terminal"/>
+
+        <Border x:Name="TerminalPanel" Grid.Row="3" Visibility="Collapsed" BorderThickness="0,1,0,0"
+                SizeChanged="TerminalPanel_SizeChanged"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" Background="#FF0C0C0C">
-                <Grid Padding="16,10" RowSpacing="8">
+            <TabView x:Name="TerminalTabs" IsAddTabButtonVisible="False"
+                     HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                     TabCloseRequested="TerminalTabs_TabCloseRequested">
+                <TabViewItem x:Name="InteractiveTerminalTab" IsClosable="False"
+                             HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+                    <TabViewItem.Header>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE756;" FontSize="13"/>
+                            <ComboBox x:Name="TerminalTypeBox" Width="205" Height="30" Padding="4,0"
+                                      Background="Transparent" BorderBrush="Transparent" BorderThickness="0"
+                                      DisplayMemberPath="Name"
+                                      SelectionChanged="TerminalTypeBox_SelectionChanged"
+                                      ToolTipService.ToolTip="Choose terminal shell">
+                                <ComboBox.Resources>
+                                    <SolidColorBrush x:Key="ComboBoxBackground" Color="Transparent"/>
+                                    <SolidColorBrush x:Key="ComboBoxBackgroundPointerOver" Color="Transparent"/>
+                                    <SolidColorBrush x:Key="ComboBoxBackgroundPressed" Color="Transparent"/>
+                                    <SolidColorBrush x:Key="ComboBoxBackgroundFocused" Color="Transparent"/>
+                                    <SolidColorBrush x:Key="ComboBoxBorderBrush" Color="Transparent"/>
+                                    <SolidColorBrush x:Key="ComboBoxBorderBrushPointerOver" Color="Transparent"/>
+                                    <SolidColorBrush x:Key="ComboBoxBorderBrushPressed" Color="Transparent"/>
+                                    <SolidColorBrush x:Key="ComboBoxBorderBrushFocused" Color="Transparent"/>
+                                </ComboBox.Resources>
+                            </ComboBox>
+                        </StackPanel>
+                    </TabViewItem.Header>
+                <Grid x:Name="InteractiveTerminalGrid" Padding="16,10" RowSpacing="8">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-                <Grid>
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <FontIcon Glyph="&#xE756;" Foreground="#FFBDBDBD" FontSize="13"/>
-                        <TextBlock Text="PowerShell" Foreground="#FFF0F0F0" FontWeight="SemiBold"/>
-                    </StackPanel>
-                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="6">
-                        <Button Content="Cancel" Padding="8,2" Click="CancelTerminalButton_Click"/>
-                        <Button Content="Clear" Padding="8,2" Click="ClearTerminalButton_Click"/>
-                    </StackPanel>
-                </Grid>
                 <ScrollViewer x:Name="TerminalScroller" Grid.Row="1" VerticalScrollBarVisibility="Auto">
                     <TextBlock x:Name="TerminalOutputText" Foreground="#FFD7D7D7"
                                FontFamily="Cascadia Mono" FontSize="12"
@@ -283,14 +329,18 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="PS&gt;" Foreground="#FF58D68D" VerticalAlignment="Center"
+                    <TextBlock Text="&gt;" Foreground="#FF58D68D" VerticalAlignment="Center"
                                FontFamily="Cascadia Mono"/>
                     <TextBox x:Name="TerminalInputBox" Grid.Column="1" FontFamily="Cascadia Mono"
                              KeyDown="TerminalInputBox_KeyDown"/>
                     <Button Grid.Column="2" Content="Run" Click="TerminalRunButton_Click"/>
+                    <Button Grid.Column="3" Content="Clear" Click="ClearTerminalButton_Click"/>
                 </Grid>
-            </Grid>
+                </Grid>
+                </TabViewItem>
+            </TabView>
         </Border>
     </Grid>
 </Page>
