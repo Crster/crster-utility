@@ -289,13 +289,14 @@
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" Background="#FF0C0C0C">
             <TabView x:Name="TerminalTabs" IsAddTabButtonVisible="False"
                      HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                     SelectionChanged="TerminalTabs_SelectionChanged"
                      TabCloseRequested="TerminalTabs_TabCloseRequested">
                 <TabViewItem x:Name="InteractiveTerminalTab" IsClosable="False"
                              HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
                     <TabViewItem.Header>
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <FontIcon Glyph="&#xE756;" FontSize="13"/>
-                            <ComboBox x:Name="TerminalTypeBox" Width="205" Height="30" Padding="4,0"
+                            <ComboBox x:Name="TerminalTypeBox" Width="145" Height="30" Padding="4,0"
                                       Background="Transparent" BorderBrush="Transparent" BorderThickness="0"
                                       DisplayMemberPath="Name"
                                       SelectionChanged="TerminalTypeBox_SelectionChanged"
@@ -311,34 +312,15 @@
                                     <SolidColorBrush x:Key="ComboBoxBorderBrushFocused" Color="Transparent"/>
                                 </ComboBox.Resources>
                             </ComboBox>
+                            <Button Padding="8,0" Click="TerminalActionsButton_Click"
+                                    ToolTipService.ToolTip="Terminal actions"
+                                    AutomationProperties.Name="Terminal actions">
+                                <FontIcon Glyph="&#xE712;" FontSize="12"/>
+                            </Button>
                         </StackPanel>
                     </TabViewItem.Header>
-                <Grid x:Name="InteractiveTerminalGrid" Padding="16,10" RowSpacing="8">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <ScrollViewer x:Name="TerminalScroller" Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                    <TextBlock x:Name="TerminalOutputText" Foreground="#FFD7D7D7"
-                               FontFamily="Cascadia Mono" FontSize="12"
-                               TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
-                </ScrollViewer>
-                <Grid Grid.Row="2" ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Text="&gt;" Foreground="#FF58D68D" VerticalAlignment="Center"
-                               FontFamily="Cascadia Mono"/>
-                    <TextBox x:Name="TerminalInputBox" Grid.Column="1" FontFamily="Cascadia Mono"
-                             KeyDown="TerminalInputBox_KeyDown"/>
-                    <Button Grid.Column="2" Content="Run" Click="TerminalRunButton_Click"/>
-                    <Button Grid.Column="3" Content="Clear" Click="ClearTerminalButton_Click"/>
-                </Grid>
-                </Grid>
+                <Grid x:Name="InteractiveTerminalHost" MinHeight="120"
+                      HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
                 </TabViewItem>
             </TabView>
         </Border>

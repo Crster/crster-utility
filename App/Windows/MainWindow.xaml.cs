@@ -59,7 +59,12 @@ namespace App.Windows
 
         private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
         {
-            if (_allowClose || !App.Settings.Current.StartWithWindows) return;
+            if (_allowClose || !App.Settings.Current.StartWithWindows)
+            {
+                if (NavigationPresenter.Content is Pages.CodyPage codyPage)
+                    codyPage.PrepareForWindowClose();
+                return;
+            }
 
             args.Cancel = true;
             HideToTray();

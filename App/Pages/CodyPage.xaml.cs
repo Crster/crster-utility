@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using App.Models;
 using App.Services;
+using EasyWindowsTerminalControl;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -19,6 +20,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.Terminal.Wpf;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 using Windows.Storage.Pickers;
@@ -43,7 +45,7 @@ namespace App.Pages
             """;
         private static readonly HashSet<string> IgnoredDirectories = new(StringComparer.OrdinalIgnoreCase)
         {
-            ".git", ".vs", ".idea", ".vscode", "bin", "obj", "node_modules", "dist", "build",
+            ".git", ".vs", ".idea", "bin", "obj", "node_modules", "dist", "build",
             "coverage", ".next", ".nuxt", "target", "packages", ".crster"
         };
         private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -75,8 +77,9 @@ namespace App.Pages
         private CancellationTokenSource? _agentCancellation;
         private CancellationTokenSource? _workspaceRefreshCancellation;
         private FileSystemWatcher? _workspaceWatcher;
-        private Process? _terminalProcess;
-        private bool _terminalStopRequested;
+        private readonly object _terminalOutputLock = new();
+        private readonly StringBuilder _pendingTerminalOutput = new();
+        private EasyTerminalControl? _terminalControl;
         private CodyCommand? _selectedCommand;
         private int _searchVersion;
         private bool _loaded;
@@ -85,6 +88,8 @@ namespace App.Pages
         private bool _filesVisible;
         private bool _isFilesResizing;
         private bool _isTerminalResizing;
+        private bool _loadingTerminalShells;
+        private string? _savedTerminalShellName;
         private double _filesPanelWidth = 280;
         private double _terminalPanelHeight = 230;
         private double _filesResizeStartX;
@@ -121,18 +126,23 @@ namespace App.Pages
                 WorkspacePath = _settings.CodyWorkspace
             };
             _orchestrator = new TechnicianSessionOrchestrator(_client, new ChatLogService());
+            LoadWorkspaceCommands();
             LoadAvailableTerminalShells();
             SystemInstructionBox.Text = CodyInstruction;
             ModelText.Text = $"{App.Settings.Current.LowCostModel} · Thinking: adaptive";
             RenderSession();
             RefreshWorkspace();
             ConfigureWorkspaceWatcher();
-            LoadWorkspaceCommands();
             _ = _sharedEditor.PreloadAsync();
             await RefreshWorkspaceFilesAsync(notifyOnCompletion: true);
         }
 
         private void CodyPage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            PrepareForWindowClose();
+        }
+
+        internal void PrepareForWindowClose()
         {
             _agentCancellation?.Cancel();
             CancelTerminal();
@@ -164,6 +174,7 @@ namespace App.Pages
             _commands.Clear();
             _selectedCommand = null;
             LoadWorkspaceCommands();
+            LoadAvailableTerminalShells();
             RefreshRunMenu();
             RefreshWorkspace();
             await RefreshWorkspaceFilesAsync(notifyOnCompletion: true);
@@ -191,7 +202,6 @@ namespace App.Pages
                 available ? $"{workspace}\nClick to show or hide workspace files." : "Choose Cody workspace");
             myColorButton.IsEnabled = available && !_isBusy;
             FileSearchBox.IsEnabled = available;
-            TerminalInputBox.IsEnabled = available;
             TerminalTypeBox.IsEnabled = available;
         }
 
@@ -1746,10 +1756,11 @@ namespace App.Pages
                 {
                     Text = message.Kind == ChatItemKind.Thinking
                         ? "Thinking"
-                        : $"{(message.ToolSucceeded == true ? "✓" : "×")} {message.Title}",
+                        : $"{(message.ToolSucceeded == true ? "✓" : "×")} {HumanizeToolName(message.Title)}{FormatFirstToolArgument(message.ToolArguments)}",
                     FontFamily = new FontFamily("Cascadia Mono"),
                     FontSize = 11,
                     FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 header.Children.Add(headerText);
@@ -1831,6 +1842,41 @@ namespace App.Pages
                 ConversationScroller.ChangeView(null, ConversationScroller.ScrollableHeight, null, true);
             });
         }
+
+        private static string HumanizeToolName(string name) => name switch
+        {
+            "read_workspace_file" => "Read workspace file",
+            "write_workspace_file" => "Write workspace file",
+            "patch_workspace_file" => "Patch workspace file",
+            "delete_workspace_entry" => "Delete workspace entry",
+            "search_workspace_files" => "Search workspace files",
+            "list_workspace_entries" => "List workspace entries",
+            "run_workspace_command" => "Run workspace command",
+            "run_elevated_workspace_command" => "Run elevated command",
+            _ => string.Join(' ', name.Split('_', StringSplitOptions.RemoveEmptyEntries).Select(HumanizeToolWord))
+        };
+
+        private static string FormatFirstToolArgument(JsonObject? arguments)
+        {
+            if (arguments is null || arguments.Count == 0) return string.Empty;
+            var argument = arguments["workspace_path"] ?? arguments["absolute_file_path"] ?? arguments["absolute_directory_path"]
+                ?? arguments["search_pattern"] ?? arguments["name_pattern"] ?? arguments["command_line"] ?? arguments.First().Value;
+            return $" ({FormatJsonValue(argument)})";
+        }
+
+        private static string HumanizeToolWord(string word) => word.Length == 0
+            ? word
+            : char.ToUpperInvariant(word[0]) + word[1..].ToLowerInvariant();
+
+        private static string FormatJsonValue(JsonNode? value) => value is null
+            ? "null"
+            : value is JsonObject jsonObject
+                ? $"Object ({jsonObject.Count} fields)"
+                : value is JsonArray jsonArray
+                    ? $"Array ({jsonArray.Count} items)"
+                    : value.GetValueKind() == JsonValueKind.String
+                        ? value.GetValue<string>()
+                        : value.ToJsonString();
 
         private static string FormatToolOutput(string output)
         {
@@ -1920,25 +1966,58 @@ namespace App.Pages
             myColorButton.Content = "Scanning…";
             try
             {
-                var manifests = _workspaceFiles
-                    .Where(file => IsCommandManifest(file.Name))
+                var rootManifestPaths = Directory.EnumerateFiles(
+                        _settings.CodyWorkspace,
+                        "*",
+                        SearchOption.TopDirectoryOnly)
+                    .Where(path => IsCommandManifest(Path.GetFileName(path)))
                     .Take(40)
-                    .Select(file => $"{file.RelativePath}\n{ReadCommandManifest(file.FullPath)}");
-                var environmentDirectories = new[] { ".venv", "venv", "env", ".env" }
-                    .Where(name => Directory.Exists(Path.Combine(_settings.CodyWorkspace, name)));
-                var scannerInput = string.Join("\n\n", manifests)
-                    + $"\n\nDetected environment directories:\n{string.Join("\n", environmentDirectories)}";
+                    .ToList();
+                var commandConfigurationPaths = rootManifestPaths
+                    .Concat(GetIdeCommandConfigurationPaths(_settings.CodyWorkspace))
+                    .ToList();
+                var manifests = commandConfigurationPaths
+                    .Select(path => $"{Path.GetRelativePath(_settings.CodyWorkspace, path)}\n{ReadCommandManifest(path)}");
+                var virtualEnvironmentDirectories = DetectVirtualEnvironments(_settings.CodyWorkspace);
+                var projectTypes = DetectProjectTypes(rootManifestPaths.Select(Path.GetFileName));
+                if (virtualEnvironmentDirectories.Count > 0
+                    && !projectTypes.Contains("Python", StringComparison.OrdinalIgnoreCase))
+                    projectTypes = projectTypes == "Unknown" ? "Python" : $"{projectTypes}, Python";
+                var activationInstructions = BuildActivationInstructions(
+                    GetTerminalTypeName(),
+                    _settings.CodyWorkspace,
+                    virtualEnvironmentDirectories);
+                var availableExecutables = DetectAvailableProjectExecutables();
+                var scannerInput = $"Detected project type(s): {projectTypes}\n\n"
+                    + "Project manifests and IDE launch/task settings:\n"
+                    + string.Join("\n\n", manifests)
+                    + $"\n\nDetected root Python virtual environments:\n{string.Join("\n", virtualEnvironmentDirectories)}"
+                    + $"\n\nTerminal shell: {GetTerminalTypeName()}"
+                    + $"\nActivation instructions:\n{activationInstructions}"
+                    + $"\n\nAvailable project executables:\n{availableExecutables}";
                 var result = await _client.CreateSimpleInteractionAsync(
-                    App.Settings.Current.HighCostModel,
+                    App.Settings.Current.LowCostModel,
                     [],
                     [QwenClient.CreateUserStep(scannerInput, [])],
                     """
-                    Extract project commands from the supplied files. Return JSON only:
+                    Identify every project type, package manager, runtime, toolchain, and environment profile evidenced by the supplied files, then extract its supported commands. Return JSON only:
                     [{"name":"Build application","command":"npm run build"}]
 
                     Rules:
+                    - Only use the supplied root-level files, IDE launch/task settings, and detected root environment directories. Do not assume or search nested projects.
                     - Return at most 20 commands. Every command must be non-interactive and run from the workspace root.
-                    - Use only commands explicitly supported by a script, manifest, lockfile, schema, or detected environment directory.
+                    - Use only commands explicitly supported by a root script, manifest, lockfile, schema, toolchain file, IDE launch/task setting, or detected environment directory.
+                    - Cross-check commands against the available project executables. Do not return a command requiring a missing executable unless the command is an install or setup step explicitly supported by the root files.
+                    - Account for the appropriate project ecosystem when present: .NET, Node.js, Python, Rust, Go, Java, Kotlin, Ruby, PHP, R, Julia, Perl, Elixir, Haskell, C/C++, Dart, and containerized projects.
+                    - Account for dependency and environment managers when evidenced: npm, pnpm, Yarn, Bun, nvm, Volta, fnm, venv, virtualenv, Conda, Poetry, Pipenv, uv, Cargo, Bundler, rbenv, RVM, Composer, renv, Julia environments, Perlbrew, Mix, Stack, Maven, Gradle, CMake, Conan, vcpkg, and Docker Compose.
+                    - For runtime or toolchain managers, include setup or selection commands only when the root files prove they are used; never invent a manager from the language alone.
+                    - If a Python virtual environment is detected, include an "Activate Python environment" command using the exact activation instruction for the selected shell.
+                    - For non-interactive Python commands, prefer the detected environment's Python executable when that is more reliable than activation.
+                    - For Node.js, prefer project-local package-manager scripts and include the evidenced package-manager install or run commands; do not add global installs.
+                    - For Ruby, PHP, R, Julia, Perl, Elixir, Haskell, and C/C++, use the project manifest and lockfile to choose dependency, build, test, format, and run commands.
+                    - For .NET, Go, Rust, Java, Kotlin, and container projects, identify the root build tool and use its manifest, solution, or compose file rather than guessing generic commands.
+                    - For Docker, include Dockerfile commands such as build or run only when Docker is available and the Dockerfile is present; include Docker Compose commands only when a compose file is present. Use "docker compose", not the legacy "docker-compose", when the available executable supports it.
+                    - Consider all evidenced executable-backed workflows, including build, test, lint, format, package, migration, generation, container, and local development commands. Do not limit discovery to package scripts.
                     - Include setup commands when evidenced, such as npm install, Python environment setup, migrations, generators,
                       containers, formatting, linting, testing, and project-specific tools like Prisma.
                     - For Prisma, require a Prisma dependency, schema, config, or package script before adding its commands.
@@ -1947,12 +2026,19 @@ namespace App.Pages
                     """,
                     null,
                     CancellationToken.None,
-                    QwenThinkingLevel.High);
+                    QwenThinkingLevel.Disabled);
                 var json = ExtractJsonArray(result.Text);
                 var commands = JsonSerializer.Deserialize<List<CodyCommand>>(json, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true
                 }) ?? [];
+                AddNodePackageCommands(commands, _settings.CodyWorkspace);
+                var activationCommand = CreateActivationCommand(
+                    GetTerminalTypeName(),
+                    _settings.CodyWorkspace,
+                    virtualEnvironmentDirectories.FirstOrDefault());
+                if (activationCommand is not null)
+                    commands.Insert(0, activationCommand);
                 _commands.Clear();
                 _commands.AddRange(commands.Where(command =>
                     !string.IsNullOrWhiteSpace(command.Name) && !string.IsNullOrWhiteSpace(command.Command))
@@ -1961,6 +2047,7 @@ namespace App.Pages
                 SaveWorkspaceCommands();
                 RefreshRunMenu();
                 ShowTerminal();
+                AppendTerminal($"Detected project type(s): {projectTypes}\r\n");
                 AppendTerminal($"Discovered {_commands.Count} workspace command(s).\r\n");
                 CompletionNotificationService.ShowWhenMainWindowIsInactive(
                     "Command scan complete",
@@ -1999,9 +2086,167 @@ namespace App.Pages
             || name.Equals("docker-compose.yaml", StringComparison.OrdinalIgnoreCase)
             || name.Equals("schema.prisma", StringComparison.OrdinalIgnoreCase)
             || name.Equals("prisma.config.ts", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Gemfile", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Gemfile.lock", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("composer.json", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("composer.lock", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("renv.lock", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Project.toml", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Manifest.toml", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("cpanfile", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("package.yaml", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("stack.yaml", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("mix.exs", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("pnpm-workspace.yaml", StringComparison.OrdinalIgnoreCase)
+            || name.Equals(".nvmrc", StringComparison.OrdinalIgnoreCase)
+            || name.Equals(".node-version", StringComparison.OrdinalIgnoreCase)
+            || name.Equals(".ruby-version", StringComparison.OrdinalIgnoreCase)
+            || name.Equals(".tool-versions", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("CMakeLists.txt", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("meson.build", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("vcpkg.json", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("conanfile.txt", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("conanfile.py", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("go.work", StringComparison.OrdinalIgnoreCase)
             || name.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
             || name.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
             || name.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase);
+
+        private static IEnumerable<string> GetIdeCommandConfigurationPaths(string workspacePath)
+        {
+            var vscodePath = Path.Combine(workspacePath, ".vscode");
+            return new[] { "launch.json", "tasks.json", "settings.json" }
+                .Select(fileName => Path.Combine(vscodePath, fileName))
+                .Where(File.Exists);
+        }
+
+        private static void AddNodePackageCommands(List<CodyCommand> commands, string workspacePath)
+        {
+            var packagePath = Path.Combine(workspacePath, "package.json");
+            if (!File.Exists(packagePath)) return;
+
+            commands.Add(new CodyCommand("Install Node dependencies", "npm install"));
+            try
+            {
+                var package = JsonNode.Parse(File.ReadAllText(packagePath));
+                if (package?["scripts"] is not JsonObject scripts) return;
+                foreach (var script in scripts)
+                {
+                    if (string.IsNullOrWhiteSpace(script.Key)
+                        || script.Value is not JsonValue scriptValue
+                        || !scriptValue.TryGetValue<string>(out var scriptCommand)
+                        || string.IsNullOrWhiteSpace(scriptCommand)) continue;
+                    commands.Add(new CodyCommand($"Run {script.Key} script", $"npm run {script.Key}"));
+                }
+            }
+            catch (Exception exception) when (exception is IOException or JsonException)
+            {
+            }
+        }
+
+        private static string DetectProjectTypes(IEnumerable<string> rootFileNames)
+        {
+            var names = rootFileNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var types = new List<string>();
+            if (names.Contains("package.json")) types.Add("Node.js");
+            if (names.Any(name => name.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))) types.Add(".NET");
+            if (names.Contains("pyproject.toml") || names.Contains("requirements.txt")
+                || names.Contains("Pipfile") || names.Contains("environment.yml")) types.Add("Python");
+            if (names.Contains("Cargo.toml")) types.Add("Rust");
+            if (names.Contains("go.mod")) types.Add("Go");
+            if (names.Contains("pom.xml") || names.Contains("build.gradle") || names.Contains("build.gradle.kts")) types.Add("Java");
+            if (names.Contains("Makefile")) types.Add("Make");
+            if (names.Contains("Dockerfile") || names.Contains("docker-compose.yml") || names.Contains("docker-compose.yaml")) types.Add("Docker");
+            if (names.Contains("schema.prisma") || names.Contains("prisma.config.ts")) types.Add("Prisma");
+            if (names.Contains("Gemfile") || names.Contains("Gemfile.lock")) types.Add("Ruby");
+            if (names.Contains("composer.json") || names.Contains("composer.lock")) types.Add("PHP");
+            if (names.Contains("renv.lock")) types.Add("R");
+            if (names.Contains("Project.toml") || names.Contains("Manifest.toml")) types.Add("Julia");
+            if (names.Contains("cpanfile")) types.Add("Perl");
+            if (names.Contains("mix.exs")) types.Add("Elixir");
+            if (names.Contains("package.yaml") || names.Contains("stack.yaml")) types.Add("Haskell");
+            return types.Count == 0 ? "Unknown" : string.Join(", ", types.Distinct(StringComparer.OrdinalIgnoreCase));
+        }
+
+        private static string DetectAvailableProjectExecutables()
+        {
+            var executables = new[]
+            {
+                "docker.exe", "docker-compose.exe", "git.exe",
+                "node.exe", "npm.cmd", "pnpm.cmd", "yarn.cmd", "bun.exe", "npx.cmd",
+                "python.exe", "py.exe", "pip.exe", "uv.exe", "poetry.exe", "conda.exe",
+                "dotnet.exe", "msbuild.exe", "cargo.exe", "rustc.exe", "go.exe",
+                "java.exe", "javac.exe", "mvn.cmd", "gradle.bat", "gradlew.bat",
+                "ruby.exe", "bundle.bat", "gem.exe", "php.exe", "composer.bat",
+                "Rscript.exe", "julia.exe", "perl.exe", "mix.bat", "stack.exe",
+                "cmake.exe", "ninja.exe", "make.exe", "conan.exe", "vcpkg.exe", "dart.exe"
+            };
+            return string.Join(
+                "\n",
+                executables.Select(executable =>
+                    $"{Path.GetFileNameWithoutExtension(executable)}: {(FindExecutable(executable) is null ? "missing" : "available")}"));
+        }
+
+        private static List<string> DetectVirtualEnvironments(string root)
+        {
+            return new[] { ".venv", "venv", "env" }
+                .Where(name => File.Exists(Path.Combine(root, name, "Scripts", "Activate.ps1"))
+                    || File.Exists(Path.Combine(root, name, "Scripts", "activate.bat"))
+                    || File.Exists(Path.Combine(root, name, "bin", "activate")))
+                .ToList();
+        }
+
+        private static string BuildActivationInstructions(
+            string shellName,
+            string root,
+            IEnumerable<string> environmentDirectories)
+        {
+            var instructions = environmentDirectories.Select(directory =>
+            {
+                var hasPowerShellActivation = File.Exists(Path.Combine(root, directory, "Scripts", "Activate.ps1"));
+                var hasCommandPromptActivation = File.Exists(Path.Combine(root, directory, "Scripts", "activate.bat"));
+                var hasPosixActivation = File.Exists(Path.Combine(root, directory, "bin", "activate"));
+                var powershell = hasPowerShellActivation
+                    ? $".\\{directory}\\Scripts\\Activate.ps1"
+                    : $"source {directory}/bin/activate";
+                var commandPrompt = hasCommandPromptActivation
+                    ? $".\\{directory}\\Scripts\\activate.bat"
+                    : "unavailable";
+                var posix = hasPosixActivation
+                    ? $"source {directory}/bin/activate"
+                    : $"source {directory}/Scripts/activate";
+                var selected = shellName.Contains("PowerShell", StringComparison.OrdinalIgnoreCase)
+                    ? powershell
+                    : shellName.Equals("Command Prompt", StringComparison.OrdinalIgnoreCase)
+                        ? commandPrompt
+                        : posix;
+                return $"{directory}: selected shell = {selected}; PowerShell = {powershell}; cmd = {commandPrompt}; POSIX = {posix}";
+            });
+            return string.Join("\n", instructions.DefaultIfEmpty("None detected."));
+        }
+
+        private static CodyCommand? CreateActivationCommand(
+            string shellName,
+            string root,
+            string? environmentDirectory)
+        {
+            if (environmentDirectory is null) return null;
+            var scriptsPath = Path.Combine(root, environmentDirectory, "Scripts");
+            var posixPath = Path.Combine(root, environmentDirectory, "bin");
+            if (shellName.Contains("PowerShell", StringComparison.OrdinalIgnoreCase)
+                && File.Exists(Path.Combine(scriptsPath, "Activate.ps1")))
+                return new CodyCommand("Activate Python environment", $".\\{environmentDirectory}\\Scripts\\Activate.ps1");
+            if (shellName.Equals("Command Prompt", StringComparison.OrdinalIgnoreCase)
+                && File.Exists(Path.Combine(scriptsPath, "activate.bat")))
+                return new CodyCommand("Activate Python environment", $".\\{environmentDirectory}\\Scripts\\activate.bat");
+            if (File.Exists(Path.Combine(posixPath, "activate")))
+                return new CodyCommand("Activate Python environment", $"source {environmentDirectory}/bin/activate");
+            if (File.Exists(Path.Combine(scriptsPath, "activate")))
+                return new CodyCommand("Activate Python environment", $"source {environmentDirectory}/Scripts/activate");
+            return null;
+        }
 
         private static string ReadCommandManifest(string path)
         {
@@ -2030,14 +2275,20 @@ namespace App.Pages
             foreach (var command in _commands)
             {
                 var item = new MenuFlyoutItem { Text = command.Name, Tag = command };
+                ToolTipService.SetToolTip(item, command.Command);
+                AutomationProperties.SetName(item, $"{command.Name}: {command.Command}");
                 item.Click += CommandMenuItem_Click;
                 RunMenu.Items.Add(item);
             }
             if (_commands.Count > 0) RunMenu.Items.Add(new MenuFlyoutSeparator());
             var scan = new MenuFlyoutItem { Text = "Scan project commands" };
+            ToolTipService.SetToolTip(scan, "Scan root-level project files for supported commands");
             scan.Click += ScanCommandsMenuItem_Click;
             RunMenu.Items.Add(scan);
             myColorButton.Content = _selectedCommand?.Name ?? "Scan commands";
+            ToolTipService.SetToolTip(
+                myColorButton,
+                _selectedCommand?.Command ?? "Scan root-level project files for supported commands");
         }
 
         private void CommandMenuItem_Click(object sender, RoutedEventArgs e)
@@ -2045,6 +2296,7 @@ namespace App.Pages
             if (sender is not MenuFlyoutItem { Tag: CodyCommand command }) return;
             _selectedCommand = command;
             myColorButton.Content = command.Name;
+            ToolTipService.SetToolTip(myColorButton, command.Command);
             SaveWorkspaceCommands();
         }
 
@@ -2062,6 +2314,7 @@ namespace App.Pages
         {
             _commands.Clear();
             _selectedCommand = null;
+            _savedTerminalShellName = null;
             if (!HasWorkspace()) { RefreshRunMenu(); return; }
             var path = WorkspaceSettingsPath();
             if (!File.Exists(path)) { RefreshRunMenu(); return; }
@@ -2072,6 +2325,7 @@ namespace App.Pages
                     new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 if (settings is not null)
                 {
+                    _savedTerminalShellName = settings.SelectedTerminalShell;
                     _commands.AddRange(settings.Commands.Where(command =>
                         !string.IsNullOrWhiteSpace(command.Name) && !string.IsNullOrWhiteSpace(command.Command)));
                     _selectedCommand = _commands.FirstOrDefault(command =>
@@ -2095,7 +2349,10 @@ namespace App.Pages
                 File.WriteAllText(
                     path,
                     JsonSerializer.Serialize(
-                        new CodyWorkspaceSettings(_commands, _selectedCommand?.Command),
+                        new CodyWorkspaceSettings(
+                            _commands,
+                            _selectedCommand?.Command,
+                            GetSelectedTerminalShell().Name),
                         new JsonSerializerOptions { WriteIndented = true }),
                     new UTF8Encoding(false));
             }
@@ -2115,13 +2372,19 @@ namespace App.Pages
             else HideTerminal();
         }
 
-        private void ShowTerminal()
+        private void ShowTerminal(bool startInteractiveSession = true)
         {
             TerminalButton.IsChecked = true;
             TerminalPanel.Visibility = Visibility.Visible;
             TerminalSplitter.Visibility = Visibility.Visible;
             TerminalSplitterRow.Height = new GridLength(6);
             TerminalRow.Height = new GridLength(_terminalPanelHeight);
+            if (startInteractiveSession && EnsureTerminalSession())
+            {
+                UpdateInteractiveTerminalVisibility();
+                if (ReferenceEquals(TerminalTabs.SelectedItem, InteractiveTerminalTab))
+                    _terminalControl!.Focus(FocusState.Programmatic);
+            }
         }
 
         private void HideTerminal()
@@ -2133,24 +2396,38 @@ namespace App.Pages
             TerminalSplitter.Visibility = Visibility.Collapsed;
             TerminalSplitterRow.Height = new GridLength(0);
             TerminalRow.Height = new GridLength(0);
+            if (_terminalControl is not null)
+                _terminalControl.Visibility = Visibility.Collapsed;
         }
 
-        private void TerminalPanel_SizeChanged(object sender, SizeChangedEventArgs e)
+        private void TerminalTabs_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+            UpdateInteractiveTerminalVisibility();
+
+        private void UpdateInteractiveTerminalVisibility()
         {
-            const double TerminalTabHeaderHeight = 40;
-            InteractiveTerminalGrid.Width = TerminalPanel.ActualWidth;
-            InteractiveTerminalGrid.Height = Math.Max(0, TerminalPanel.ActualHeight - TerminalTabHeaderHeight);
+            if (_terminalControl is null) return;
+            _terminalControl.Visibility =
+                TerminalPanel.Visibility == Visibility.Visible
+                && ReferenceEquals(TerminalTabs.SelectedItem, InteractiveTerminalTab)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
         }
 
         private async Task RunCommandInTerminalTabAsync(CodyCommand command)
         {
             if (!HasWorkspace()) return;
+            if (command.Name.Equals("Activate Python environment", StringComparison.OrdinalIgnoreCase))
+            {
+                ShowTerminal();
+                EnsureTerminalSession();
+                return;
+            }
             if (IsRiskyCommand(command.Command)
                 && !await ConfirmActionAsync($"Run potentially destructive command '{command.Command}' in '{_settings.CodyWorkspace}'?"))
                 return;
 
             var terminalWasHidden = TerminalPanel.Visibility != Visibility.Visible;
-            ShowTerminal();
+            ShowTerminal(startInteractiveSession: false);
             var output = new TextBlock
             {
                 FontFamily = new FontFamily("Cascadia Mono"),
@@ -2178,9 +2455,12 @@ namespace App.Pages
 
             try
             {
+                var executionCommand = ResolvePythonCommand(command.Command);
+                var startInfo = TechnicianToolService.CreateCommandStartInfo(executionCommand, _settings.CodyWorkspace);
+                ConfigurePythonEnvironment(startInfo, executionCommand);
                 var process = new Process
                 {
-                    StartInfo = TechnicianToolService.CreateCommandStartInfo(command.Command, _settings.CodyWorkspace),
+                    StartInfo = startInfo,
                     EnableRaisingEvents = true
                 };
                 process.OutputDataReceived += (_, args) =>
@@ -2363,79 +2643,83 @@ namespace App.Pages
             _isTerminalResizing = false;
             TerminalSplitter.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
-        }
-
-        private async void TerminalRunButton_Click(object sender, RoutedEventArgs e)
-        {
-            var command = TerminalInputBox.Text.Trim();
-            if (command.Length == 0) return;
-            TerminalInputBox.Text = string.Empty;
-            await RunTerminalCommandAsync(command);
-        }
-
-        private async void TerminalInputBox_KeyDown(object sender, KeyRoutedEventArgs e)
-        {
-            if (e.Key != global::Windows.System.VirtualKey.Enter) return;
-            e.Handled = true;
-            var command = TerminalInputBox.Text.Trim();
-            if (command.Length == 0) return;
-            TerminalInputBox.Text = string.Empty;
-            await RunTerminalCommandAsync(command);
-        }
-
-        private async Task RunTerminalCommandAsync(string command)
-        {
-            if (!HasWorkspace()) return;
-            if (IsRiskyCommand(command)
-                && !await ConfirmActionAsync($"Run potentially destructive command '{command}' in '{_settings.CodyWorkspace}'?"))
-                return;
-            ShowTerminal();
-            AppendTerminal($"> {command}\r\n");
-            try
+            var terminal = _terminalControl;
+            if (terminal is null || terminal.Visibility != Visibility.Visible) return;
+            terminal.InvalidateMeasure();
+            terminal.UpdateLayout();
+            _ = DispatcherQueue.TryEnqueue(() =>
             {
-                if (!EnsureTerminalSession()) return;
-                _terminalProcess!.StandardInput.WriteLine(command);
-                _terminalProcess.StandardInput.Flush();
-            }
-            catch (Exception exception)
-            {
-                AppendTerminal($"[error] {exception.Message}\r\n");
-            }
+                if (ReferenceEquals(_terminalControl, terminal))
+                {
+                    ResizeInteractiveTerminal();
+                    terminal.Focus(FocusState.Programmatic);
+                }
+            });
+        }
+
+        private void TerminalPanel_SizeChanged(object sender, SizeChangedEventArgs e) =>
+            _ = DispatcherQueue.TryEnqueue(ResizeInteractiveTerminal);
+
+        private void ResizeInteractiveTerminal()
+        {
+            var terminal = _terminalControl;
+            if (terminal is null) return;
+            var width = InteractiveTerminalHost.ActualWidth;
+            var hostTop = InteractiveTerminalHost.TransformToVisual(TerminalPanel)
+                .TransformPoint(new global::Windows.Foundation.Point()).Y;
+            var height = Math.Max(0, TerminalPanel.ActualHeight - hostTop);
+            if (width <= 0 || height <= 0) return;
+            InteractiveTerminalHost.Height = height;
+            terminal.Width = width;
+            terminal.Height = height;
+            terminal.UpdateLayout();
         }
 
         private bool EnsureTerminalSession()
         {
-            if (_terminalProcess is { HasExited: false }) return true;
+            if (!HasWorkspace()) return false;
+            if (_terminalControl is not null) return true;
             try
             {
-                var process = new Process { StartInfo = CreateTerminalStartInfo(), EnableRaisingEvents = true };
-                process.OutputDataReceived += (_, args) =>
+                var shell = GetSelectedTerminalShell();
+                var terminal = new EasyTerminalControl
                 {
-                    if (args.Data is not null) _ = DispatcherQueue.TryEnqueue(() => AppendTerminal($"{args.Data}\r\n"));
+                    StartupCommandLine = CreateTerminalCommandLine(shell),
+                    WorkingDirectory = _settings.CodyWorkspace,
+                    FontFamilyWhenSettingTheme = new FontFamily("Consolas"),
+                    FontSizeWhenSettingTheme = 10,
+                    LogConPTYOutput = true,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    VerticalAlignment = VerticalAlignment.Stretch,
+                    Win32InputMode = true,
+                    InputCapture = EasyTerminalControl.INPUT_CAPTURE.TabKey
+                        | EasyTerminalControl.INPUT_CAPTURE.DirectionKeys,
+                    Theme = CreateTerminalTheme(),
+                    ContextFlyout = CreateInteractiveTerminalContextMenu()
                 };
-                process.ErrorDataReceived += (_, args) =>
+                InteractiveTerminalHost.ContextFlyout = CreateInteractiveTerminalContextMenu();
+                var activationCommand = CreateActivationCommand(
+                    GetTerminalTypeName(),
+                    _settings.CodyWorkspace,
+                    DetectVirtualEnvironments(_settings.CodyWorkspace).FirstOrDefault());
+                var terminalSession = terminal.ConPTYTerm;
+                terminalSession.TermReady += (_, _) =>
                 {
-                    if (args.Data is not null) _ = DispatcherQueue.TryEnqueue(() => AppendTerminal($"{args.Data}\r\n"));
+                    if (activationCommand is not null)
+                        terminalSession.WriteToTerm($"{activationCommand.Command}\r");
+
+                    string pendingOutput;
+                    lock (_terminalOutputLock)
+                    {
+                        pendingOutput = _pendingTerminalOutput.ToString();
+                        _pendingTerminalOutput.Clear();
+                    }
+                    if (pendingOutput.Length > 0)
+                        terminalSession.WriteToUITerminal(pendingOutput);
                 };
-                process.Exited += (_, _) => _ = DispatcherQueue.TryEnqueue(() =>
-                {
-                    if (_terminalProcess != process) return;
-                    var exitCode = process.ExitCode;
-                    var wasStopRequested = _terminalStopRequested;
-                    _terminalStopRequested = false;
-                    AppendTerminal($"[terminal exited with code {exitCode}]\r\n");
-                    process.Dispose();
-                    _terminalProcess = null;
-                    if (!wasStopRequested)
-                        CompletionNotificationService.ShowWhenMainWindowIsInactive(
-                            "Terminal session finished",
-                            $"{GetTerminalTypeName()} exited with code {exitCode}.");
-                    _ = RefreshWorkspaceFilesAsync();
-                });
-                process.Start();
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-                _terminalProcess = process;
+                _terminalControl = terminal;
+                InteractiveTerminalHost.Children.Add(terminal);
+                ResizeInteractiveTerminal();
                 return true;
             }
             catch (Exception exception)
@@ -2445,24 +2729,127 @@ namespace App.Pages
             }
         }
 
-        private ProcessStartInfo CreateTerminalStartInfo()
+        private MenuFlyout CreateInteractiveTerminalContextMenu()
         {
-            var shell = GetSelectedTerminalShell();
-            return new ProcessStartInfo
-            {
-                FileName = shell.FileName,
-                Arguments = shell.Arguments,
-                WorkingDirectory = _settings.CodyWorkspace,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardInputEncoding = Encoding.UTF8,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8
-            };
+            var menu = new MenuFlyout();
+            var terminate = new MenuFlyoutItem { Text = "Terminate" };
+            terminate.Click += (_, _) => RestartInteractiveTerminal();
+            menu.Items.Add(terminate);
+
+            var clear = new MenuFlyoutItem { Text = "Clear" };
+            clear.Click += (_, _) => _terminalControl?.ConPTYTerm.ClearUITerminal();
+            menu.Items.Add(clear);
+
+            menu.Items.Add(new MenuFlyoutSeparator());
+
+            var copy = new MenuFlyoutItem { Text = "Copy" };
+            copy.Click += (_, _) => CopyInteractiveTerminalText();
+            menu.Items.Add(copy);
+
+            var paste = new MenuFlyoutItem { Text = "Paste" };
+            paste.Click += async (_, _) => await PasteIntoInteractiveTerminalAsync();
+            menu.Items.Add(paste);
+            return menu;
         }
+
+        private void RestartInteractiveTerminal()
+        {
+            CancelTerminal();
+            AppendTerminal("[terminal session terminated]\r\n");
+            if (EnsureTerminalSession())
+                _terminalControl!.Focus(FocusState.Programmatic);
+        }
+
+        private void TerminalActionsButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is FrameworkElement element)
+                CreateInteractiveTerminalContextMenu().ShowAt(element);
+        }
+
+        private void CopyInteractiveTerminalText()
+        {
+            var text = _terminalControl?.ConPTYTerm.GetConsoleText();
+            if (string.IsNullOrWhiteSpace(text)) return;
+            var package = new DataPackage();
+            package.SetText(text);
+            Clipboard.SetContent(package);
+            Clipboard.Flush();
+        }
+
+        private async Task PasteIntoInteractiveTerminalAsync()
+        {
+            var clipboard = Clipboard.GetContent();
+            if (!clipboard.Contains(StandardDataFormats.Text)) return;
+            var text = await clipboard.GetTextAsync();
+            if (!string.IsNullOrEmpty(text)) _terminalControl?.ConPTYTerm.WriteToTerm(text);
+        }
+
+        private static TerminalTheme CreateTerminalTheme() => new()
+        {
+            DefaultBackground = 0x0C0C0C,
+            DefaultForeground = 0xCCCCCC,
+            DefaultSelectionBackground = 0xCCCCCC,
+            CursorStyle = CursorStyle.BlinkingBar,
+            ColorTable =
+            [
+                0x0C0C0C, 0x1F0FC5, 0x0EA113, 0x009CC1,
+                0xDA3700, 0x981788, 0xDD963A, 0xCCCCCC,
+                0x767676, 0x5648E7, 0x0CC616, 0xA5F1F9,
+                0xFF783B, 0x9E00B4, 0xD6D661, 0xF2F2F2
+            ]
+        };
+
+        private static string CreateTerminalCommandLine(TerminalShell shell)
+        {
+            var executable = $"\"{shell.FileName.Replace("\"", "\\\"")}\"";
+            return string.IsNullOrWhiteSpace(shell.Arguments)
+                ? executable
+                : $"{executable} {shell.Arguments}";
+        }
+
+        private void ConfigurePythonEnvironment(ProcessStartInfo startInfo, string command)
+        {
+            if (!NeedsPythonEnvironment(command)) return;
+            var environmentDirectory = DetectVirtualEnvironments(_settings.CodyWorkspace).FirstOrDefault();
+            var activationPath = environmentDirectory is null
+                ? null
+                : Path.Combine(_settings.CodyWorkspace, environmentDirectory, "Scripts", "activate.bat");
+            if (activationPath is null || !File.Exists(activationPath)) return;
+
+            var scriptsDirectory = Path.GetDirectoryName(activationPath)!;
+            var currentPath = startInfo.Environment.TryGetValue("PATH", out var path)
+                ? path
+                : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            var virtualEnvironmentDirectory = Path.GetDirectoryName(scriptsDirectory)!;
+            startInfo.Environment["VIRTUAL_ENV"] = virtualEnvironmentDirectory;
+            startInfo.Environment["PATH"] = $"{scriptsDirectory}{Path.PathSeparator}{currentPath}";
+            var uvExists = File.Exists(Path.Combine(scriptsDirectory, "uv.exe"));
+            var executionPath = startInfo.Environment["PATH"];
+            Debug.WriteLine(
+                $"[Cody] Python command environment: command='{command}', virtualEnvironment='{virtualEnvironmentDirectory}', "
+                + $"scripts='{scriptsDirectory}', uvExists={uvExists}, path='{executionPath}'");
+        }
+
+        private string ResolvePythonCommand(string command)
+        {
+            var uvRunMatch = Regex.Match(command, @"^uv\s+run\s+(.+)$", RegexOptions.IgnoreCase);
+            if (!uvRunMatch.Success) return command;
+
+            var environmentDirectory = DetectVirtualEnvironments(_settings.CodyWorkspace).FirstOrDefault();
+            var pythonPath = environmentDirectory is null
+                ? null
+                : Path.Combine(_settings.CodyWorkspace, environmentDirectory, "Scripts", "python.exe");
+            if (pythonPath is null || !File.Exists(pythonPath)) return command;
+
+            var relativePythonPath = $".\\{environmentDirectory}\\Scripts\\python.exe";
+            return $"{relativePythonPath} -m {uvRunMatch.Groups[1].Value}";
+        }
+
+        private static bool NeedsPythonEnvironment(string command) =>
+            Regex.IsMatch(
+                command,
+                @"(^|[\s&|;/])(?:python(?:\.exe)?|py(?:\.exe)?|pip(?:\.exe)?|pipenv|poetry|uv|pytest|ruff|mypy|black|isort|pylint|flake8|mypy|django-admin|flask|alembic|jupyter)(?:[\s&|;/]|$)",
+                RegexOptions.IgnoreCase);
 
         private TerminalShell GetSelectedTerminalShell() =>
             TerminalTypeBox.SelectedItem as TerminalShell
@@ -2483,12 +2870,23 @@ namespace App.Pages
             AddTerminalShell(shells, "Fish", FindExecutable("fish.exe"), "-i");
             AddTerminalShell(shells, "Nushell", FindExecutable("nu.exe"), "-i");
 
-            TerminalTypeBox.Items.Clear();
-            foreach (var shell in shells)
-                TerminalTypeBox.Items.Add(shell);
+            _loadingTerminalShells = true;
+            try
+            {
+                TerminalTypeBox.Items.Clear();
+                foreach (var shell in shells)
+                    TerminalTypeBox.Items.Add(shell);
 
-            TerminalTypeBox.SelectedItem = shells.FirstOrDefault(shell => shell.Name == "PowerShell")
-                ?? shells.FirstOrDefault();
+                TerminalTypeBox.SelectedItem = shells.FirstOrDefault(shell =>
+                        string.Equals(shell.Name, _savedTerminalShellName, StringComparison.OrdinalIgnoreCase))
+                    ?? shells.FirstOrDefault(shell => shell.Name == "PowerShell 7")
+                    ?? shells.FirstOrDefault(shell => shell.Name == "PowerShell")
+                    ?? shells.FirstOrDefault();
+            }
+            finally
+            {
+                _loadingTerminalShells = false;
+            }
         }
 
         private static void AddTerminalShell(List<TerminalShell> shells, string name, string? fileName, string arguments)
@@ -2538,36 +2936,67 @@ namespace App.Pages
 
         private void TerminalTypeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (_terminalProcess is not null)
+            if (_loadingTerminalShells) return;
+            if (_terminalControl is not null)
             {
                 CancelTerminal();
                 AppendTerminal($"[switched to {GetTerminalTypeName()}]\r\n");
+                if (TerminalPanel.Visibility == Visibility.Visible)
+                    EnsureTerminalSession();
             }
+            SaveWorkspaceCommands();
         }
 
         private void AppendTerminal(string text)
         {
-            TerminalOutputText.Text += text;
-            TerminalScroller.UpdateLayout();
-            TerminalScroller.ChangeView(null, TerminalScroller.ScrollableHeight, null, true);
+            var terminal = _terminalControl;
+            if (terminal?.ConPTYTerm.TermProcIsStarted == true)
+            {
+                terminal.ConPTYTerm.WriteToUITerminal(text);
+                return;
+            }
+
+            lock (_terminalOutputLock)
+                _pendingTerminalOutput.Append(text);
         }
 
         private void CancelTerminal()
         {
+            var terminal = _terminalControl;
+            _terminalControl = null;
+            if (terminal is null) return;
+
+            TermPTY? session = null;
             try
             {
-                if (_terminalProcess is { HasExited: false })
-                {
-                    _terminalStopRequested = true;
-                    RequestProcessTreeTermination(_terminalProcess);
-                }
+                session = terminal.DisconnectConPTYTerm();
             }
-            catch (InvalidOperationException)
+            catch (Exception exception) when (IsExpectedTerminalShutdownException(exception))
             {
             }
+
+            try
+            {
+                session?.CloseStdinToApp();
+            }
+            catch (Exception exception) when (IsExpectedTerminalShutdownException(exception))
+            {
+            }
+
+            try
+            {
+                session?.StopExternalTermOnly();
+            }
+            catch (Exception exception) when (IsExpectedTerminalShutdownException(exception))
+            {
+            }
+
+            // Disconnect while the native terminal is still hosted; removing it first races WinUI teardown.
+            InteractiveTerminalHost.Children.Clear();
         }
 
-        private void ClearTerminalButton_Click(object sender, RoutedEventArgs e) => TerminalOutputText.Text = string.Empty;
+        private static bool IsExpectedTerminalShutdownException(Exception exception) =>
+            exception is InvalidOperationException or ArgumentException;
 
         private static bool IsRiskyCommand(string command) =>
             Regex.IsMatch(
@@ -2628,7 +3057,10 @@ namespace App.Pages
         }
         private enum GitFileState { None, Created, Modified, Ignored }
         private sealed record CodyCommand(string Name, string Command);
-        private sealed record CodyWorkspaceSettings(IReadOnlyList<CodyCommand> Commands, string? SelectedCommand);
+        private sealed record CodyWorkspaceSettings(
+            IReadOnlyList<CodyCommand> Commands,
+            string? SelectedCommand,
+            string? SelectedTerminalShell);
         private enum WorkspaceDocumentKind { Text, Image, Binary }
 
         private sealed class EditorDocument(
