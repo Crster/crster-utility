@@ -98,6 +98,7 @@ namespace App.Pages
         private TabViewItem? _previewEditorTab;
         private WorkspaceTreeEntry? _contextTreeEntry;
         private string? _copiedWorkspacePath;
+        private string? _contentSearchQuery;
 
         public CodyPage()
         {
@@ -583,7 +584,9 @@ namespace App.Pages
         private async void FileSearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
         {
             if (args.Reason != AutoSuggestionBoxTextChangeReason.UserInput) return;
+            _contentSearchQuery = null;
             var query = sender.Text.Trim();
+            sender.ItemsSource = query.Length == 0 ? null : GetLoadedWorkspaceSuggestions(query);
             var version = ++_searchVersion;
             if (query.Length == 0)
             {
@@ -603,7 +606,37 @@ namespace App.Pages
             var query = args.QueryText.Trim();
             if (query.Length == 0) return;
             _searchVersion++;
+            _contentSearchQuery = query;
             ShowSearchResults(await Task.Run(() => SearchWorkspaceText(query)));
+        }
+
+        private void FileSearchBox_SuggestionChosen(
+            AutoSuggestBox sender,
+            AutoSuggestBoxSuggestionChosenEventArgs args)
+        {
+            if (args.SelectedItem is WorkspaceTreeEntry entry)
+                sender.Text = entry.RelativePath;
+        }
+
+        private IReadOnlyList<WorkspaceTreeEntry> GetLoadedWorkspaceSuggestions(string query)
+        {
+            return EnumerateLoadedWorkspaceEntries(WorkspaceTree.RootNodes)
+                .Where(entry => !IsExcludedFromPathSearch(entry.FullPath, entry.IsDirectory))
+                .Where(entry => entry.RelativePath.Contains(query, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(entry => entry.IsDirectory)
+                .ThenBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase)
+                .Take(5)
+                .ToList();
+        }
+
+        private static IEnumerable<WorkspaceTreeEntry> EnumerateLoadedWorkspaceEntries(
+            IEnumerable<TreeViewNode> nodes)
+        {
+            foreach (var node in nodes)
+            {
+                if (node.Content is WorkspaceTreeEntry entry) yield return entry;
+                foreach (var child in EnumerateLoadedWorkspaceEntries(node.Children)) yield return child;
+            }
         }
 
         private List<WorkspaceFileItem> SearchWorkspacePaths(string query)
@@ -633,8 +666,20 @@ namespace App.Pages
                 .ToList();
         }
 
-        private bool IsExcludedFromPathSearch(string path)
+        private bool IsExcludedFromPathSearch(string path, bool isDirectory = false)
         {
+            if (!isDirectory)
+            {
+                try
+                {
+                    if (new FileInfo(path).Length > MaximumWorkspaceFileBytes) return true;
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    return true;
+                }
+            }
+
             var currentPath = path;
             while (true)
             {
@@ -665,8 +710,7 @@ namespace App.Pages
             {
                 try
                 {
-                    var info = new FileInfo(item.FullPath);
-                    if (info.Length > MaximumWorkspaceFileBytes || !IsTextFile(item.FullPath)) continue;
+                    if (IsExcludedFromPathSearch(item.FullPath)) continue;
                     var content = File.ReadAllText(item.FullPath);
                     var score = 0;
                     foreach (var term in terms)
@@ -754,6 +798,7 @@ namespace App.Pages
             var query = FileSearchBox.Text.Trim();
             if (query.Length == 0 || !HasWorkspace()) return;
             _searchVersion++;
+            _contentSearchQuery = query;
             FileStatusText.Text = "Fuzzy-searching workspace text…";
             try
             {
@@ -833,7 +878,15 @@ namespace App.Pages
                 {
                     Content: WorkspaceTreeEntry { IsDirectory: false } entry
                 })
+            {
+                if (ChangesButton.IsChecked == true && entry.GitState == GitFileState.Modified)
+                {
+                    _contextTreeEntry = entry;
+                    await ShowContextDiffAsync();
+                    return;
+                }
                 await OpenEditorAsync(new WorkspaceFileItem(entry.Name, entry.RelativePath, entry.FullPath), true);
+            }
         }
 
         private async void WorkspaceTree_Expanding(TreeView sender, TreeViewExpandingEventArgs args)
@@ -884,6 +937,12 @@ namespace App.Pages
                 if (node is not null) node.IsExpanded = !node.IsExpanded;
                 return;
             }
+            if (ChangesButton.IsChecked == true && entry.GitState == GitFileState.Modified)
+            {
+                _contextTreeEntry = entry;
+                await ShowContextDiffAsync();
+                return;
+            }
             await OpenEditorAsync(new WorkspaceFileItem(entry.Name, entry.RelativePath, entry.FullPath), false);
         }
 
@@ -894,6 +953,28 @@ namespace App.Pages
 
         private async void RefreshWorkspaceButton_Click(object sender, RoutedEventArgs e) =>
             await RefreshWorkspaceFilesAsync();
+
+        private async void ChangesButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (!HasWorkspace()) return;
+            _searchVersion++;
+            _contentSearchQuery = null;
+            FileSearchBox.Text = string.Empty;
+            if (ChangesButton.IsChecked != true)
+            {
+                _loadedWorkspaceDirectories.Clear();
+                ShowWorkspaceTree(_workspaceRoots);
+                FileStatusText.Text = $"{_workspaceFiles.Count:N0} files · Git status included";
+                return;
+            }
+            _workspaceGitStates = await Task.Run(() => ReadGitStates(_settings.CodyWorkspace));
+            var changes = await Task.Run(() => EnumerateWorkspaceFiles(_settings.CodyWorkspace)
+                .Where(item => !IsExcludedFromPathSearch(item.FullPath))
+                .Where(item => ResolveGitState(item.RelativePath, _workspaceGitStates) is GitFileState.Created or GitFileState.Modified)
+                .ToList());
+            ShowSearchResults(changes);
+            FileStatusText.Text = changes.Count == 0 ? "No new or modified files." : $"{changes.Count:N0} changed files.";
+        }
 
         private static void CollapseTreeNode(TreeViewNode node)
         {
@@ -1027,23 +1108,15 @@ namespace App.Pages
             var entry = _contextTreeEntry;
             if (entry is not { IsDirectory: false, GitState: GitFileState.Modified }) return;
 
-            var diff = await Task.Run(() => ReadGitDiff(_settings.CodyWorkspace, entry.RelativePath));
-            if (string.IsNullOrWhiteSpace(diff))
+            var original = await Task.Run(() => ReadGitHeadFile(_settings.CodyWorkspace, entry.RelativePath));
+            if (original is null)
             {
                 await ShowMessageAsync("No diff available", $"Git did not return a diff for {entry.RelativePath}.");
                 return;
             }
 
-            var viewer = new TextBox
-            {
-                Text = diff,
-                IsReadOnly = true,
-                AcceptsReturn = true,
-                TextWrapping = TextWrapping.NoWrap,
-                FontFamily = new FontFamily("Cascadia Mono"),
-                FontSize = 12,
-                BorderThickness = new Thickness(0)
-            };
+            var workingCopy = await File.ReadAllTextAsync(entry.FullPath);
+            var viewer = new global::App.Controls.MonacoEditorControl();
             var tab = new TabViewItem
             {
                 Header = $"{entry.Name} diff",
@@ -1051,9 +1124,10 @@ namespace App.Pages
             };
             EditorTabs.TabItems.Add(tab);
             EditorTabs.SelectedItem = tab;
+            await viewer.OpenDiffAsync(entry.RelativePath, original, workingCopy, MonacoLanguage(entry.FullPath));
         }
 
-        private static string ReadGitDiff(string workingDirectory, string relativePath)
+        private static string? ReadGitHeadFile(string workingDirectory, string relativePath)
         {
             try
             {
@@ -1065,19 +1139,17 @@ namespace App.Pages
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
-                startInfo.ArgumentList.Add("diff");
-                startInfo.ArgumentList.Add("HEAD");
-                startInfo.ArgumentList.Add("--");
-                startInfo.ArgumentList.Add(relativePath);
+                startInfo.ArgumentList.Add("show");
+                startInfo.ArgumentList.Add($"HEAD:{relativePath.Replace('\\', '/')}");
                 using var process = Process.Start(startInfo);
-                if (process is null) return string.Empty;
+                if (process is null) return null;
                 var output = process.StandardOutput.ReadToEnd();
                 process.WaitForExit(3000);
-                return process.ExitCode == 0 ? output : string.Empty;
+                return process.ExitCode == 0 ? output : null;
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
             {
-                return string.Empty;
+                return null;
             }
         }
 
@@ -1261,6 +1333,7 @@ namespace App.Pages
 
         private async Task OpenEditorAsync(WorkspaceFileItem file, bool preview)
         {
+            var searchQuery = _contentSearchQuery;
             var fileInfo = new FileInfo(file.FullPath);
             if (fileInfo.Length > MaximumWorkspaceFileBytes)
             {
@@ -1279,6 +1352,12 @@ namespace App.Pages
                         await PromotePreviewToPermanentAsync(existing.Key, existing.Value);
                     else
                         PromoteStaticPreview(existing.Key, existing.Value);
+                    var promoted = _editors.FirstOrDefault(pair =>
+                        string.Equals(pair.Value.FullPath, file.FullPath, StringComparison.OrdinalIgnoreCase));
+                    if (promoted.Key is not null
+                        && promoted.Value.Kind == WorkspaceDocumentKind.Text
+                        && !string.IsNullOrWhiteSpace(searchQuery))
+                        await (promoted.Value.Editor ?? _sharedEditor).RevealMatchAsync(promoted.Value.DocumentId, searchQuery);
                     return;
                 }
                 EditorTabs.SelectedItem = existing.Key;
@@ -1291,6 +1370,8 @@ namespace App.Pages
                 {
                     AttachSharedEditor(null);
                 }
+                if (existing.Value.Kind == WorkspaceDocumentKind.Text && !string.IsNullOrWhiteSpace(searchQuery))
+                    await (existing.Value.Editor ?? _sharedEditor).RevealMatchAsync(existing.Value.DocumentId, searchQuery);
                 return;
             }
 
@@ -1344,11 +1425,15 @@ namespace App.Pages
                 {
                     AttachSharedEditor(tab);
                     await _sharedEditor.OpenDocumentAsync(document.DocumentId, text, MonacoLanguage(file.FullPath));
+                    if (!string.IsNullOrWhiteSpace(searchQuery))
+                        await _sharedEditor.RevealMatchAsync(document.DocumentId, searchQuery);
                 }
                 else if (kind == WorkspaceDocumentKind.Text)
                 {
                     AttachSharedEditor(null);
                     await editor!.OpenDocumentAsync(document.DocumentId, text, MonacoLanguage(file.FullPath));
+                    if (!string.IsNullOrWhiteSpace(searchQuery))
+                        await editor.RevealMatchAsync(document.DocumentId, searchQuery);
                 }
                 else
                 {

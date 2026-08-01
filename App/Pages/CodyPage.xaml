@@ -109,36 +109,41 @@
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <Grid ColumnSpacing="2">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <AutoSuggestBox x:Name="FileSearchBox" Height="32"
-                                        PlaceholderText="Search files and content"
-                                        TextChanged="FileSearchBox_TextChanged"
-                                        QuerySubmitted="FileSearchBox_QuerySubmitted"/>
-                        <Button Grid.Column="1" Width="32" Height="32" Padding="0"
-                                Click="AgentSearchButton_Click" ToolTipService.ToolTip="Fuzzy-search workspace text"
-                                AutomationProperties.Name="Fuzzy-search workspace text">
-                            <FontIcon Glyph="&#xE721;" FontSize="13"/>
-                        </Button>
-                    </Grid>
+                    <AutoSuggestBox x:Name="FileSearchBox" Height="32"
+                                    PlaceholderText="Search files and content"
+                                    QueryIcon="Find" TextMemberPath="RelativePath"
+                                    TextChanged="FileSearchBox_TextChanged"
+                                    QuerySubmitted="FileSearchBox_QuerySubmitted"
+                                    SuggestionChosen="FileSearchBox_SuggestionChosen">
+                        <AutoSuggestBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Padding="8,4" Text="{Binding RelativePath}"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </DataTemplate>
+                        </AutoSuggestBox.ItemTemplate>
+                    </AutoSuggestBox>
                     <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="2">
-                        <Button Width="32" Height="32" Padding="0"
+                        <Button Width="32" Height="32" Padding="0" Background="Transparent" BorderThickness="0"
                                 Click="CollapseWorkspaceButton_Click" ToolTipService.ToolTip="Collapse all folders"
                                 AutomationProperties.Name="Collapse all folders">
                             <FontIcon Glyph="&#xE70E;" FontSize="12"/>
                         </Button>
-                        <Button x:Name="AddWorkspaceEntryButton" Width="32" Height="32" Padding="0"
-                                Click="AddWorkspaceEntryButton_Click" ToolTipService.ToolTip="New file or folder"
-                                AutomationProperties.Name="New file or folder">
-                            <FontIcon Glyph="&#xE710;" FontSize="12"/>
-                        </Button>
-                        <Button Width="32" Height="32" Padding="0"
+                        <Button Width="32" Height="32" Padding="0" Background="Transparent" BorderThickness="0"
                                 Click="RefreshWorkspaceButton_Click" ToolTipService.ToolTip="Refresh workspace files"
                                 AutomationProperties.Name="Refresh workspace files">
                             <FontIcon Glyph="&#xE72C;" FontSize="12"/>
+                        </Button>
+                        <ToggleButton x:Name="ChangesButton" Width="32" Height="32" Padding="0"
+                                      Background="Transparent" BorderThickness="0" Click="ChangesButton_Click"
+                                      ToolTipService.ToolTip="Show new and modified files"
+                                      AutomationProperties.Name="Changes">
+                            <FontIcon Glyph="&#xE70F;" FontSize="12"/>
+                        </ToggleButton>
+                        <Button x:Name="AddWorkspaceEntryButton" Width="32" Height="32" Padding="0"
+                                Background="Transparent" BorderThickness="0" Click="AddWorkspaceEntryButton_Click"
+                                ToolTipService.ToolTip="New file or folder"
+                                AutomationProperties.Name="New file or folder">
+                            <FontIcon Glyph="&#xE710;" FontSize="12"/>
                         </Button>
                     </StackPanel>
                     <TreeView x:Name="WorkspaceTree" Grid.Row="2"

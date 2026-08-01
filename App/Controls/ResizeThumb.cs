@@ -29,10 +29,6 @@ namespace App.Controls
                 IsVerticalResize ? InputSystemCursorShape.SizeNorthSouth : InputSystemCursorShape.SizeWestEast);
             _surface.Background = Application.Current.Resources["AccentFillColorDefaultBrush"] as Brush
                 ?? new SolidColorBrush(Microsoft.UI.Colors.DodgerBlue);
-            _surface.Width = IsVerticalResize ? double.NaN : 2;
-            _surface.Height = IsVerticalResize ? 2 : double.NaN;
-            _surface.HorizontalAlignment = IsVerticalResize ? HorizontalAlignment.Stretch : HorizontalAlignment.Center;
-            _surface.VerticalAlignment = IsVerticalResize ? VerticalAlignment.Center : VerticalAlignment.Stretch;
         }
 
         private void HideResizeAffordance()

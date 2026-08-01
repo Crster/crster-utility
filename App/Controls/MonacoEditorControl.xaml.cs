@@ -50,6 +50,27 @@ namespace App.Controls
             PostMessage(new { type = "activateModel", documentId });
         }
 
+        public async Task OpenDiffAsync(string documentId, string original, string modified, string language)
+        {
+            await _ready.Task;
+            PostMessage(new
+            {
+                type = "openDiff",
+                documentId,
+                original,
+                modified,
+                language,
+                theme = ActualTheme == ElementTheme.Light ? "vs" : "vs-dark"
+            });
+        }
+
+        public async Task RevealMatchAsync(string documentId, string query)
+        {
+            if (string.IsNullOrWhiteSpace(query)) return;
+            await _ready.Task;
+            PostMessage(new { type = "revealMatch", documentId, query });
+        }
+
         public async Task CloseDocumentAsync(string documentId)
         {
             await _ready.Task;

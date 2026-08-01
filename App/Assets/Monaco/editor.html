@@ -34,14 +34,14 @@
         let changingModel = false;
         window.chrome.webview.addEventListener('message', function (event) {
             const message = event.data;
-            if (!window.codyEditor) {
+            if (!window.codyEditor && !window.codyDiffEditor) {
                 pendingHostMessage = message;
                 return;
             }
             applyHostMessage(message);
         });
         function applyHostMessage(message) {
-            if (!message || !window.codyEditor) return;
+            if (!message || (!window.codyEditor && !window.codyDiffEditor)) return;
             if (message.type === 'openModel') {
                 window.chrome.webview.postMessage(
                     'debug:Applying model language=' + (message.language || 'plaintext') +
@@ -66,6 +66,31 @@
                         ' layout=' + String(layout.width) + 'x' + String(layout.height));
                     window.chrome.webview.postMessage('modelApplied');
                 });
+            } else if (message.type === 'openDiff') {
+                if (window.codyEditor) {
+                    window.codyEditor.dispose();
+                    window.codyEditor = null;
+                }
+                if (window.codyDiffEditor) window.codyDiffEditor.dispose();
+                const originalUri = monaco.Uri.parse('cody://workspace/original/' + encodeURIComponent(message.documentId));
+                const modifiedUri = monaco.Uri.parse('cody://workspace/modified/' + encodeURIComponent(message.documentId));
+                const originalModel = monaco.editor.createModel(message.original || '', message.language || 'plaintext', originalUri);
+                const modifiedModel = monaco.editor.createModel(message.modified || '', message.language || 'plaintext', modifiedUri);
+                window.codyDiffEditor = monaco.editor.createDiffEditor(document.getElementById('editor'), {
+                    automaticLayout: true,
+                    fontFamily: 'Cascadia Mono, Consolas, monospace',
+                    fontSize: 13,
+                    renderSideBySide: true,
+                    readOnly: true,
+                    scrollBeyondLastLine: false,
+                    minimap: { enabled: false }
+                });
+                window.codyDiffEditor.setModel({ original: originalModel, modified: modifiedModel });
+                monaco.editor.setTheme(message.theme || 'vs-dark');
+                requestAnimationFrame(function () {
+                    window.codyDiffEditor.layout();
+                    window.chrome.webview.postMessage('modelApplied');
+                });
             } else if (message.type === 'activateModel') {
                 const model = monaco.editor.getModel(documentUri(message.documentId));
                 if (model) {
@@ -73,16 +98,26 @@
                     window.codyEditor.layout();
                     window.codyEditor.focus();
                 }
+            } else if (message.type === 'revealMatch') {
+                const model = monaco.editor.getModel(documentUri(message.documentId));
+                if (!model) return;
+                window.codyEditor.setModel(model);
+                const match = model.findMatches(message.query || '', false, false, false, null, true)[0];
+                if (!match) return;
+                window.codyEditor.setSelection(match.range);
+                window.codyEditor.revealRangeInCenter(match.range);
+                window.codyEditor.focus();
             } else if (message.type === 'closeModel') {
                 const model = monaco.editor.getModel(documentUri(message.documentId));
                 if (model) model.dispose();
             } else if (message.type === 'setTheme') {
                 monaco.editor.setTheme(message.theme || 'vs-dark');
             } else if (message.type === 'layout') {
-                window.codyEditor.layout();
+                (window.codyDiffEditor || window.codyEditor).layout();
             } else if (message.type === 'focus') {
-                window.codyEditor.layout();
-                window.codyEditor.focus();
+                const editor = window.codyDiffEditor || window.codyEditor;
+                editor.layout();
+                editor.focus();
             }
         }
         function documentUri(documentId) {
