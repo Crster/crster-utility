@@ -216,7 +216,6 @@ namespace App.Windows
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine($"Global search failed: {exception.Message}");
                 if (searchVersion == _searchVersion) sender.ItemsSource = null;
             }
         }
@@ -255,7 +254,6 @@ namespace App.Windows
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine($"Semantic search failed: {exception.Message}");
                 if (searchVersion == _searchVersion) sender.ItemsSource = null;
             }
         }

@@ -191,7 +191,7 @@ namespace App.Services
             var todo = _todos.Create(value, category, "secretary", notify);
             try { await new TodoSearchService().RefreshEmbeddingAsync(todo, token); }
             catch (OperationCanceledException) { throw; }
-            catch (Exception exception) { System.Diagnostics.Debug.WriteLine($"Todo embedding failed: {exception.Message}"); }
+            catch (Exception) { }
             return Ok("Saved the todo.", new JsonObject { ["item"] = TodoJson(todo) });
         }
 

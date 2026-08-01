@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -32,7 +31,6 @@ namespace App.Controls
 
         public async Task OpenDocumentAsync(string documentId, string text, string language)
         {
-            Debug.WriteLine($"[Cody.Monaco] Open document requested. Id={documentId}, Language={language}, Characters={text.Length}, ControlInitialized={_initialized}");
             await _ready.Task;
             PostMessage(new
             {
@@ -80,7 +78,6 @@ namespace App.Controls
         public async Task<string> GetTextAsync(string documentId)
         {
             await _ready.Task;
-            Debug.WriteLine($"[Cody.Monaco] Reading editor text. Id={documentId}");
             var json = await EditorWebView.ExecuteScriptAsync(
                 $"window.getDocumentValue({JsonSerializer.Serialize(documentId)})");
             return JsonSerializer.Deserialize<string>(json) ?? string.Empty;
@@ -90,34 +87,22 @@ namespace App.Controls
         {
             if (_initialized) return;
             _initialized = true;
-            Debug.WriteLine("[Cody.Monaco] Control loaded. Initializing WebView2.");
             try
             {
                 ApplyNativeBackground();
                 await EditorWebView.EnsureCoreWebView2Async();
                 ApplyNativeBackground();
-                Debug.WriteLine($"[Cody.Monaco] WebView2 initialized. Runtime={EditorWebView.CoreWebView2.Environment.BrowserVersionString}");
                 var assets = Path.Combine(AppContext.BaseDirectory, "Assets", "Monaco");
-                Debug.WriteLine($"[Cody.Monaco] Asset root={assets}");
-                Debug.WriteLine($"[Cody.Monaco] editor.html exists={File.Exists(Path.Combine(assets, "editor.html"))}");
-                Debug.WriteLine($"[Cody.Monaco] loader.js exists={File.Exists(Path.Combine(assets, "vs", "loader.js"))}");
                 EditorWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
                     "monaco.local",
                     assets,
                     CoreWebView2HostResourceAccessKind.Allow);
                 EditorWebView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
-                EditorWebView.CoreWebView2.ProcessFailed += (_, args) =>
-                    Debug.WriteLine($"[Cody.Monaco] WebView2 process failed. Kind={args.ProcessFailedKind}");
-                EditorWebView.NavigationStarting += (_, args) =>
-                    Debug.WriteLine($"[Cody.Monaco] Navigation starting. Uri={args.Uri}");
-                EditorWebView.NavigationCompleted += (_, args) =>
-                    Debug.WriteLine($"[Cody.Monaco] Navigation completed. Success={args.IsSuccess}, Error={args.WebErrorStatus}");
                 var theme = ActualTheme == ElementTheme.Light ? "light" : "dark";
                 EditorWebView.Source = new Uri($"https://monaco.local/editor.html?theme={theme}");
             }
             catch (Exception exception)
             {
-                Debug.WriteLine($"[Cody.Monaco] Initialization failed: {exception}");
                 LoadingRing.IsActive = false;
                 EditorWebView.Visibility = Visibility.Collapsed;
                 Content = new TextBlock
@@ -134,14 +119,12 @@ namespace App.Controls
             CoreWebView2WebMessageReceivedEventArgs args)
         {
             var message = args.TryGetWebMessageAsString();
-            if (message != "changed") Debug.WriteLine($"[Cody.Monaco] Web message: {message}");
             if (message == "ready")
             {
                 _ready.TrySetResult();
             }
             else if (message == "modelApplied")
             {
-                Debug.WriteLine($"[Cody.Monaco] Model applied. Control={ActualWidth:0}x{ActualHeight:0}, Host={EditorHost.ActualWidth:0}x{EditorHost.ActualHeight:0}, WebView={EditorWebView.ActualWidth:0}x{EditorWebView.ActualHeight:0}");
                 EditorWebView.Opacity = 1;
                 EditorWebView.InvalidateMeasure();
                 EditorWebView.InvalidateArrange();
@@ -151,14 +134,12 @@ namespace App.Controls
                 LoadingRing.Visibility = Visibility.Collapsed;
                 _ = DispatcherQueue.TryEnqueue(() =>
                 {
-                    var focused = EditorWebView.Focus(FocusState.Programmatic);
-                    Debug.WriteLine($"[Cody.Monaco] WebView focus requested after model apply. Focused={focused}");
+                    EditorWebView.Focus(FocusState.Programmatic);
                     PostMessage(new { type = "focus" });
                 });
             }
             else if (message.StartsWith("error:", StringComparison.Ordinal))
             {
-                Debug.WriteLine($"[Cody.Monaco] JavaScript error: {message[6..]}");
                 LoadingRing.IsActive = false;
                 LoadingRing.Visibility = Visibility.Collapsed;
                 EditorWebView.Visibility = Visibility.Collapsed;
@@ -185,7 +166,6 @@ namespace App.Controls
             ApplyNativeBackground();
             if (_ready.Task.IsCompletedSuccessfully)
             {
-                Debug.WriteLine($"[Cody.Monaco] Applying theme. Theme={ActualTheme}");
                 PostMessage(new
                 {
                     type = "setTheme",
@@ -204,7 +184,6 @@ namespace App.Controls
         private void MonacoEditorControl_SizeChanged(object sender, SizeChangedEventArgs e)
         {
             if (!_ready.Task.IsCompletedSuccessfully) return;
-            Debug.WriteLine($"[Cody.Monaco] Size changed. Width={e.NewSize.Width:0}, Height={e.NewSize.Height:0}");
             PostMessage(new { type = "layout" });
         }
     }

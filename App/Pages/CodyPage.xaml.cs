@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -78,6 +80,8 @@ namespace App.Pages
         private readonly object _terminalOutputLock = new();
         private readonly StringBuilder _pendingTerminalOutput = new();
         private EasyTerminalControl? _terminalControl;
+        private IntPtr _terminalWindowHandle;
+        private TerminalWindowSubclassProcedure? _terminalWindowSubclassProcedure;
         private CodyCommand? _selectedCommand;
         private int _searchVersion;
         private bool _loaded;
@@ -2843,6 +2847,14 @@ namespace App.Pages
 
         private async void TerminalTabs_TabCloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs args)
         {
+            if (ReferenceEquals(args.Tab, InteractiveTerminalTab))
+            {
+                CancelTerminal();
+                HideTerminal();
+                TerminalButton.IsChecked = false;
+                return;
+            }
+
             if (!_terminalCommandTabsClosing.Add(args.Tab)) return;
             var closeTerminalPanel = _terminalCommandTabsOpenedPanel.Remove(args.Tab);
             try
@@ -2976,9 +2988,17 @@ namespace App.Pages
             var terminal = _terminalControl;
             if (terminal is null) return;
             var width = InteractiveTerminalHost.ActualWidth;
-            var hostTop = InteractiveTerminalHost.TransformToVisual(TerminalPanel)
-                .TransformPoint(new global::Windows.Foundation.Point()).Y;
-            var height = Math.Max(0, TerminalPanel.ActualHeight - hostTop);
+            var height = InteractiveTerminalHost.ActualHeight;
+            try
+            {
+                var hostTop = InteractiveTerminalHost.TransformToVisual(TerminalPanel)
+                    .TransformPoint(new global::Windows.Foundation.Point()).Y;
+                height = Math.Max(0, TerminalPanel.ActualHeight - hostTop);
+            }
+            catch (ArgumentException)
+            {
+                // The terminal can be detached while its tab is closing.
+            }
             if (width <= 0 || height <= 0) return;
             InteractiveTerminalHost.Height = height;
             terminal.Width = width;
@@ -3005,15 +3025,25 @@ namespace App.Pages
                     Win32InputMode = true,
                     InputCapture = EasyTerminalControl.INPUT_CAPTURE.TabKey
                         | EasyTerminalControl.INPUT_CAPTURE.DirectionKeys,
-                    Theme = CreateTerminalTheme(),
-                    ContextFlyout = CreateInteractiveTerminalContextMenu()
+                    Theme = CreateTerminalTheme()
                 };
-                InteractiveTerminalHost.ContextFlyout = CreateInteractiveTerminalContextMenu();
                 var activationCommand = CreateActivationCommand(
                     GetTerminalTypeName(),
                     _settings.CodyWorkspace,
                     DetectVirtualEnvironments(_settings.CodyWorkspace).FirstOrDefault());
                 var terminalSession = terminal.ConPTYTerm;
+                terminal.Terminal.AddHandler(
+                    UIElement.PointerReleasedEvent,
+                    new PointerEventHandler((_, args) =>
+                    {
+                        var updateKind = args.GetCurrentPoint(terminal.Terminal).Properties.PointerUpdateKind;
+                        if (updateKind == global::Microsoft.UI.Input.PointerUpdateKind.LeftButtonReleased)
+                            CopyInteractiveTerminalSelection(terminal);
+                        else if (updateKind == global::Microsoft.UI.Input.PointerUpdateKind.RightButtonReleased)
+                            ShowInteractiveTerminalContextMenu(terminal);
+                    }),
+                    true);
+                terminal.Terminal.Loaded += (_, _) => AttachTerminalContextMenuHook(terminal);
                 terminalSession.TermReady += (_, _) =>
                 {
                     if (activationCommand is not null)
@@ -3040,59 +3070,81 @@ namespace App.Pages
             }
         }
 
-        private MenuFlyout CreateInteractiveTerminalContextMenu()
+        private static void CopyInteractiveTerminalSelection(EasyTerminalControl terminal)
         {
-            var menu = new MenuFlyout();
-            var terminate = new MenuFlyoutItem { Text = "Terminate" };
-            terminate.Click += (_, _) => RestartInteractiveTerminal();
-            menu.Items.Add(terminate);
+            var text = terminal.Terminal.GetSelectedText();
+            if (string.IsNullOrEmpty(text)) return;
 
-            var clear = new MenuFlyoutItem { Text = "Clear" };
-            clear.Click += (_, _) => _terminalControl?.ConPTYTerm.ClearUITerminal();
-            menu.Items.Add(clear);
-
-            menu.Items.Add(new MenuFlyoutSeparator());
-
-            var copy = new MenuFlyoutItem { Text = "Copy" };
-            copy.Click += (_, _) => CopyInteractiveTerminalText();
-            menu.Items.Add(copy);
-
-            var paste = new MenuFlyoutItem { Text = "Paste" };
-            paste.Click += async (_, _) => await PasteIntoInteractiveTerminalAsync();
-            menu.Items.Add(paste);
-            return menu;
-        }
-
-        private void RestartInteractiveTerminal()
-        {
-            CancelTerminal();
-            AppendTerminal("[terminal session terminated]\r\n");
-            if (EnsureTerminalSession())
-                _terminalControl!.Focus(FocusState.Programmatic);
-        }
-
-        private void TerminalActionsButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (sender is FrameworkElement element)
-                CreateInteractiveTerminalContextMenu().ShowAt(element);
-        }
-
-        private void CopyInteractiveTerminalText()
-        {
-            var text = _terminalControl?.ConPTYTerm.GetConsoleText();
-            if (string.IsNullOrWhiteSpace(text)) return;
             var package = new DataPackage();
             package.SetText(text);
             Clipboard.SetContent(package);
             Clipboard.Flush();
         }
 
-        private async Task PasteIntoInteractiveTerminalAsync()
+        private void ShowInteractiveTerminalContextMenu(EasyTerminalControl terminal)
         {
-            var clipboard = Clipboard.GetContent();
-            if (!clipboard.Contains(StandardDataFormats.Text)) return;
-            var text = await clipboard.GetTextAsync();
-            if (!string.IsNullOrEmpty(text)) _terminalControl?.ConPTYTerm.WriteToTerm(text);
+            var menu = new MenuFlyout();
+            var copyAll = new MenuFlyoutItem { Text = "Copy all" };
+            copyAll.Click += (_, _) => CopyInteractiveTerminalText(terminal);
+            menu.Items.Add(copyAll);
+            menu.ShowAt(TerminalPanel);
+        }
+
+        private void AttachTerminalContextMenuHook(EasyTerminalControl terminal)
+        {
+            var container = terminal.Terminal.GetType()
+                .GetField("termContainer", BindingFlags.Instance | BindingFlags.NonPublic)?
+                .GetValue(terminal.Terminal);
+            var handle = container?.GetType()
+                .GetProperty("Hwnd", BindingFlags.Instance | BindingFlags.Public)?
+                .GetValue(container);
+            if (handle is not IntPtr windowHandle || windowHandle == IntPtr.Zero || _terminalWindowHandle != IntPtr.Zero) return;
+
+            _terminalWindowSubclassProcedure = TerminalWindowSubclass;
+            if (!SetWindowSubclass(windowHandle, _terminalWindowSubclassProcedure, UIntPtr.Zero, IntPtr.Zero)) return;
+            _terminalWindowHandle = windowHandle;
+        }
+
+        private IntPtr TerminalWindowSubclass(IntPtr windowHandle, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr subclassId, IntPtr referenceData)
+        {
+            if (_terminalControl is { } terminal)
+            {
+                if (message == 0x0202)
+                    _ = DispatcherQueue.TryEnqueue(() => CopyInteractiveTerminalSelection(terminal));
+                else if (message == 0x0205)
+                    _ = DispatcherQueue.TryEnqueue(() => ShowInteractiveTerminalContextMenu(terminal));
+            }
+            return DefSubclassProc(windowHandle, message, wParam, lParam);
+        }
+
+        private void DetachTerminalContextMenuHook()
+        {
+            if (_terminalWindowHandle != IntPtr.Zero && _terminalWindowSubclassProcedure is not null)
+                RemoveWindowSubclass(_terminalWindowHandle, _terminalWindowSubclassProcedure, UIntPtr.Zero);
+            _terminalWindowHandle = IntPtr.Zero;
+            _terminalWindowSubclassProcedure = null;
+        }
+
+        private delegate IntPtr TerminalWindowSubclassProcedure(IntPtr windowHandle, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr subclassId, IntPtr referenceData);
+
+        [DllImport("comctl32.dll", SetLastError = true)]
+        private static extern bool SetWindowSubclass(IntPtr windowHandle, TerminalWindowSubclassProcedure procedure, UIntPtr subclassId, IntPtr referenceData);
+
+        [DllImport("comctl32.dll", SetLastError = true)]
+        private static extern bool RemoveWindowSubclass(IntPtr windowHandle, TerminalWindowSubclassProcedure procedure, UIntPtr subclassId);
+
+        [DllImport("comctl32.dll")]
+        private static extern IntPtr DefSubclassProc(IntPtr windowHandle, uint message, UIntPtr wParam, IntPtr lParam);
+
+        private static void CopyInteractiveTerminalText(EasyTerminalControl terminal)
+        {
+            var text = terminal.ConPTYTerm.GetConsoleText();
+            if (string.IsNullOrWhiteSpace(text)) return;
+
+            var package = new DataPackage();
+            package.SetText(text);
+            Clipboard.SetContent(package);
+            Clipboard.Flush();
         }
 
         private static TerminalTheme CreateTerminalTheme() => new()
@@ -3134,11 +3186,6 @@ namespace App.Pages
             var virtualEnvironmentDirectory = Path.GetDirectoryName(scriptsDirectory)!;
             startInfo.Environment["VIRTUAL_ENV"] = virtualEnvironmentDirectory;
             startInfo.Environment["PATH"] = $"{scriptsDirectory}{Path.PathSeparator}{currentPath}";
-            var uvExists = File.Exists(Path.Combine(scriptsDirectory, "uv.exe"));
-            var executionPath = startInfo.Environment["PATH"];
-            Debug.WriteLine(
-                $"[Cody] Python command environment: command='{command}', virtualEnvironment='{virtualEnvironmentDirectory}', "
-                + $"scripts='{scriptsDirectory}', uvExists={uvExists}, path='{executionPath}'");
         }
 
         private string ResolvePythonCommand(string command)
@@ -3275,6 +3322,7 @@ namespace App.Pages
         {
             var terminal = _terminalControl;
             _terminalControl = null;
+            DetachTerminalContextMenuHook();
             if (terminal is null) return;
 
             TermPTY? session = null;

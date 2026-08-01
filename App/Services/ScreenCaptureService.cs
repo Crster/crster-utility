@@ -59,7 +59,6 @@ namespace App.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error capturing screen: {ex.Message}");
                 return null;
             }
         }
@@ -71,7 +70,6 @@ namespace App.Services
                 var accessResult = await AppCapability.Create("graphicsCaptureProgrammatic").RequestAccessAsync();
                 if (accessResult != AppCapabilityAccessStatus.Allowed)
                 {
-                    Debug.WriteLine("Graphics capture access was not granted.");
                     return null;
                 }
 
@@ -81,7 +79,6 @@ namespace App.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error creating capture item: {ex.Message}");
                 return null;
             }
         }

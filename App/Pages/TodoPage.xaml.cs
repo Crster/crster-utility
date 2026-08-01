@@ -258,7 +258,7 @@ namespace App.Pages
                     group.Children.Add(CreateGroupActions(group, category, todos, _expandedGroups.Contains(category)));
                 }
                 try { await _search.RefreshEmbeddingAsync(todo); }
-                catch (Exception exception) { System.Diagnostics.Debug.WriteLine($"Todo embedding failed: {exception.Message}"); }
+                catch (Exception) { }
             }
             _cancelOperation = Cancel;
             cancel.Click += (_, _) => Cancel();
@@ -608,7 +608,7 @@ namespace App.Pages
                 _repository.Update(todo);
                 ReplaceTodoItems(todo);
                 try { await _search.RefreshEmbeddingAsync(todo); }
-                catch (Exception exception) { System.Diagnostics.Debug.WriteLine($"Todo embedding failed: {exception.Message}"); }
+                catch (Exception) { }
             }
             _cancelOperation = Cancel;
             cancel.Click += (_, _) => Cancel();

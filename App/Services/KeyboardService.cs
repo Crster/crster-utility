@@ -41,7 +41,6 @@ namespace App.Services
         {
             if (_hook != IntPtr.Zero) return;
             _hook = SetWindowsHookEx(WhKeyboardLl, _callback, GetModuleHandle(null), 0);
-            if (_hook == IntPtr.Zero) Debug.WriteLine($"Failed to install keyboard hook. Error: {Marshal.GetLastWin32Error()}");
         }
         private IntPtr HookCallback(int code, IntPtr message, IntPtr data)
         {

@@ -45,7 +45,6 @@ namespace App.Services
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Debug.WriteLine($"Embedding rebuild failed: {exception.Message}");
             }
             finally { Interlocked.Exchange(ref _isRunning, 0); }
         }

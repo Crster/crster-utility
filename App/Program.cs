@@ -82,7 +82,6 @@ namespace App
                 }
                 catch (Exception exception)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Activation redirection failed: {exception}");
                 }
                 finally
                 {
@@ -94,10 +93,8 @@ namespace App
             var handles = new[] { redirectCompleted.SafeWaitHandle.DangerousGetHandle() };
             var waitResult = CoWaitForMultipleObjects(0, infinite, 1, handles, out _);
             if (waitResult < 0)
-                System.Diagnostics.Debug.WriteLine($"Activation redirection wait failed: 0x{waitResult:X8}");
 
             if (!AllowSetForegroundWindow(mainInstance.ProcessId))
-                System.Diagnostics.Debug.WriteLine($"Foreground permission transfer failed: {Marshal.GetLastWin32Error()}");
 
             Thread.Sleep(250);
         }
@@ -123,7 +120,6 @@ namespace App
         private static void EnqueueActivation(DispatcherQueue dispatcherQueue, App application)
         {
             if (!dispatcherQueue.TryEnqueue(application.ActivateFromRedirectedLaunch))
-                System.Diagnostics.Debug.WriteLine("Activation could not be queued on the UI thread.");
         }
     }
 }
