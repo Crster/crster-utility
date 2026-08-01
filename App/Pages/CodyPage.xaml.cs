@@ -38,6 +38,23 @@ namespace App.Pages
         private const int MaximumWorkspaceFileBytes = 1_000_000;
         private const int MaximumCommandFixContextCharacters = 12_000;
         private sealed record TerminalShell(string Name, string FileName, string Arguments);
+        private sealed record AgentCliClient(string Name, string DisplayName, string ExecutablePath, string Glyph);
+        private sealed record AgentCliDefinition(
+            string Name,
+            string DisplayName,
+            string Glyph,
+            IReadOnlyList<string> ExecutableNames);
+        private static readonly AgentCliDefinition[] AgentCliDefinitions =
+        [
+            new("Codex", "Codex", "\uE943", ["codex.cmd", "codex.exe"]),
+            new("Claude", "Claude Code", "\uE8BD", ["claude.cmd", "claude.exe"]),
+            new("Qwen", "Qwen Code", "\uE7C1", ["qwen.cmd", "qwen.exe"]),
+            new("Gemini", "Gemini CLI", "\uE945", ["gemini.cmd", "gemini.exe"]),
+            new("Copilot", "GitHub Copilot CLI", "\uE8A5", ["copilot.cmd", "copilot.exe"]),
+            new("OpenCode", "OpenCode", "\uE756", ["opencode.cmd", "opencode.exe"]),
+            new("Aider", "Aider", "\uE70F", ["aider.exe", "aider.cmd"]),
+            new("Goose", "Goose", "\uE7C5", ["goose.exe", "goose.cmd"])
+        ];
         private sealed record AgentModelOption(
             string Id,
             int CapabilityRank,
@@ -95,6 +112,7 @@ namespace App.Pages
         private readonly List<CodyCommand> _commands = [];
         private readonly List<AgentModelOption> _rankedAgentModels = [];
         private readonly List<AgentProviderOption> _agentProviders = [];
+        private readonly List<AgentCliClient> _availableAgentClients = [];
         private readonly HashSet<string> _shownMissingAgentInstructions = new(StringComparer.OrdinalIgnoreCase);
         private readonly global::App.Controls.MonacoEditorControl _sharedEditor = new();
         private ChatSession _session = new();
@@ -106,6 +124,7 @@ namespace App.Pages
         private FileSystemWatcher? _workspaceWatcher;
         private readonly object _terminalOutputLock = new();
         private readonly StringBuilder _pendingTerminalOutput = new();
+        private EasyTerminalControl? _agentCliTerminal;
         private EasyTerminalControl? _terminalControl;
         private IntPtr _terminalWindowHandle;
         private TerminalWindowSubclassProcedure? _terminalWindowSubclassProcedure;
@@ -149,8 +168,7 @@ namespace App.Pages
             EditorTabs.SelectedItem = HomeTab;
             SetCodyChatDocked(false);
             _settings = await App.Settings.LoadAsync();
-            _session = _sessionStorage.Load()[ChatPersonality.Cody];
-            _agentProviders.AddRange(Enum.GetNames<AgentCliProviderKind>().Select(name => new AgentProviderOption(name)));
+            _agentProviders.AddRange(AgentCliDefinitions.Select(agent => new AgentProviderOption(agent.Name)));
             AgentProviderBox.DisplayMemberPath = nameof(AgentProviderOption.DisplayName);
             AgentProviderBox.ItemsSource = _agentProviders;
             AgentProviderBox.SelectedItem = _agentProviders.FirstOrDefault(option =>
@@ -159,8 +177,8 @@ namespace App.Pages
             SelectAgentProvider(_settings.CodyAgentProvider);
             UpdateAgentActionButtons();
             LoadAvailableTerminalShells();
-            RenderSession();
             RefreshWorkspace();
+            ShowAgentSelection();
             _ = _sharedEditor.PreloadAsync();
             await RefreshWorkspaceFilesAsync(notifyOnCompletion: true);
         }
@@ -173,6 +191,7 @@ namespace App.Pages
         internal void PrepareForWindowClose()
         {
             _agentCancellation?.Cancel();
+            CancelAgentCliSession();
             CancelTerminal();
             CancelTerminalCommandProcesses();
             DisposeWorkspaceWatcher();
@@ -192,6 +211,7 @@ namespace App.Pages
             if (folder is null) return;
 
             _agentCancellation?.Cancel();
+            CancelAgentCliSession();
             CancelTerminal();
             CancelTerminalCommandProcesses();
             CloseAllEditorTabs();
@@ -201,6 +221,7 @@ namespace App.Pages
             LoadAvailableTerminalShells();
             RefreshRunMenu();
             RefreshWorkspace();
+            ShowAgentSelection();
             await RefreshWorkspaceFilesAsync(notifyOnCompletion: true);
         }
 
@@ -1817,7 +1838,7 @@ namespace App.Pages
             if (CodyChatHost.Content is null)
             {
                 HomeTab.Content = null;
-                CodyChatHost.Content = CodyChatContent;
+                CodyChatHost.Content = AgentCliSurface;
             }
 
             CodyChatDock.Visibility = Visibility.Visible;
@@ -2083,13 +2104,16 @@ namespace App.Pages
             App.Settings.Save(changed);
             _settings = changed;
             UpdateAgentActionButtons();
-            _session.AgentProvider = string.Empty;
-            _session.AgentSessionId = string.Empty;
-            SaveSession();
+            CancelAgentCliSession();
+            ShowAgentSelection();
         }
 
-        private void SelectAgentProvider(string provider) =>
-            _agentProvider = AgentCliProviderFactory.Create(provider);
+        private void SelectAgentProvider(string provider)
+        {
+            _agentProvider = Enum.TryParse<AgentCliProviderKind>(provider, true, out _)
+                ? AgentCliProviderFactory.Create(provider)
+                : null;
+        }
 
         private void UpdateAgentActionButtons()
         {
@@ -2902,13 +2926,13 @@ namespace App.Pages
             var supportingOutput = output.Length <= MaximumCommandFixContextCharacters
                 ? output
                 : $"[Earlier console output omitted]\r\n{output[^MaximumCommandFixContextCharacters..]}";
-            PromptBox.Text =
+            var prompt =
                 $"Fix the issue revealed by the workspace command \"{command.Name}\".\n\n"
                 + $"Command: {command.Command}\n\n"
                 + "Use this console output as supporting context. Inspect the relevant files and make the smallest complete fix.\n\n"
                 + supportingOutput;
             EditorTabs.SelectedItem = HomeTab;
-            await SendPromptAsync();
+            SendPromptToAgentCli(prompt);
         }
 
         private async void TerminalTabs_TabCloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs args)
@@ -3049,6 +3073,171 @@ namespace App.Pages
         private void TerminalPanel_SizeChanged(object sender, SizeChangedEventArgs e) =>
             _ = DispatcherQueue.TryEnqueue(ResizeInteractiveTerminal);
 
+        // Section: Agent CLI terminal
+        private void AgentCliHost_SizeChanged(object sender, SizeChangedEventArgs e) => ResizeAgentCliTerminal();
+
+        private void ShowAgentSelection()
+        {
+            LoadAvailableAgentClients();
+            AgentCliWelcome.Visibility = Visibility.Visible;
+            AgentCliHost.Visibility = Visibility.Collapsed;
+        }
+
+        private void LoadAvailableAgentClients()
+        {
+            _availableAgentClients.Clear();
+            foreach (var definition in AgentCliDefinitions)
+                AddAvailableAgentClient(definition);
+            AvailableAgentsRepeater.ItemsSource = _availableAgentClients.ToArray();
+            AgentSelectionStatusText.Text = _availableAgentClients.Count == 0
+                ? "No supported coding agents were found. Install Codex or Claude Code, then reopen Cody."
+                : HasWorkspace()
+                    ? $"{_availableAgentClients.Count} installed agent{(_availableAgentClients.Count == 1 ? string.Empty : "s")} available."
+                    : "Choose a workspace before starting an agent.";
+        }
+
+        private void AddAvailableAgentClient(AgentCliDefinition definition)
+        {
+            var executable = FindAgentCliExecutable(definition);
+            if (executable is not null)
+                _availableAgentClients.Add(new AgentCliClient(
+                    definition.Name,
+                    definition.DisplayName,
+                    executable,
+                    definition.Glyph));
+        }
+
+        private async void LaunchAgentButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button { Tag: AgentCliClient client }) return;
+            if (!HasWorkspace())
+            {
+                await ChangeWorkspaceAsync();
+                if (!HasWorkspace()) return;
+            }
+
+            AgentProviderBox.SelectedItem = _agentProviders.First(option =>
+                string.Equals(option.Name, client.Name, StringComparison.OrdinalIgnoreCase));
+            AgentCliWelcome.Visibility = Visibility.Collapsed;
+            AgentCliHost.Visibility = Visibility.Visible;
+            EnsureAgentCliSession();
+        }
+
+        private void EnsureAgentCliSession()
+        {
+            if (!HasWorkspace() || _agentCliTerminal is not null) return;
+
+            try
+            {
+                var executable = ResolveSelectedAgentCliExecutable();
+                var terminal = new EasyTerminalControl
+                {
+                    StartupCommandLine = $"\"{executable.Replace("\"", "\\\"")}\"",
+                    WorkingDirectory = _settings.CodyWorkspace,
+                    FontFamilyWhenSettingTheme = new FontFamily("Consolas"),
+                    FontSizeWhenSettingTheme = 10,
+                    LogConPTYOutput = true,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    VerticalAlignment = VerticalAlignment.Stretch,
+                    Win32InputMode = true,
+                    InputCapture = EasyTerminalControl.INPUT_CAPTURE.TabKey
+                        | EasyTerminalControl.INPUT_CAPTURE.DirectionKeys,
+                    Theme = CreateTerminalTheme()
+                };
+                _agentCliTerminal = terminal;
+                AgentCliHost.Children.Add(terminal);
+                ResizeAgentCliTerminal();
+                _ = DispatcherQueue.TryEnqueue(() => terminal.Terminal.Focus(FocusState.Programmatic));
+            }
+            catch (Exception exception)
+            {
+                Debug.WriteLine($"[Cody][Agent CLI] Could not start: {exception.Message}");
+            }
+        }
+
+        private string ResolveSelectedAgentCliExecutable()
+        {
+            var provider = AgentProviderBox.SelectedItem as AgentProviderOption;
+            var definition = AgentCliDefinitions.FirstOrDefault(agent =>
+                string.Equals(agent.Name, provider?.Name, StringComparison.OrdinalIgnoreCase))
+                ?? AgentCliDefinitions[0];
+            return FindAgentCliExecutable(definition)
+                ?? throw new FileNotFoundException($"{definition.DisplayName} is not installed or is not available on PATH.");
+        }
+
+        private static string? FindAgentCliExecutable(AgentCliDefinition definition)
+        {
+            if (string.Equals(definition.Name, "Codex", StringComparison.OrdinalIgnoreCase))
+            {
+                var runtimeDirectory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "OpenAI",
+                    "Codex",
+                    "bin");
+                var bundledCodex = Directory.Exists(runtimeDirectory)
+                    ? Directory.EnumerateDirectories(runtimeDirectory)
+                        .Select(directory => Path.Combine(directory, "codex.exe"))
+                        .Where(File.Exists)
+                        .OrderByDescending(File.GetLastWriteTimeUtc)
+                        .FirstOrDefault()
+                    : null;
+                if (bundledCodex is not null) return bundledCodex;
+            }
+
+            return definition.ExecutableNames.Select(FindExecutable).FirstOrDefault(path => path is not null);
+        }
+
+        private void ResizeAgentCliTerminal()
+        {
+            if (_agentCliTerminal is not { } terminal
+                || AgentCliHost.ActualWidth <= 0
+                || AgentCliHost.ActualHeight <= 0)
+                return;
+
+            terminal.Width = AgentCliHost.ActualWidth;
+            terminal.Height = AgentCliHost.ActualHeight;
+            terminal.UpdateLayout();
+        }
+
+        private void SendPromptToAgentCli(string prompt)
+        {
+            AgentCliWelcome.Visibility = Visibility.Collapsed;
+            AgentCliHost.Visibility = Visibility.Visible;
+            EnsureAgentCliSession();
+            if (_agentCliTerminal is not { } terminal) return;
+
+            var singleLinePrompt = Regex.Replace(prompt, @"\s+", " ").Trim();
+            terminal.ConPTYTerm.WriteToTerm($"{singleLinePrompt}\r");
+            _ = DispatcherQueue.TryEnqueue(() => terminal.Terminal.Focus(FocusState.Programmatic));
+        }
+
+        private void CancelAgentCliSession()
+        {
+            var terminal = _agentCliTerminal;
+            _agentCliTerminal = null;
+            if (terminal is null) return;
+
+            TermPTY? session = null;
+            try
+            {
+                session = terminal.DisconnectConPTYTerm();
+            }
+            catch (Exception exception) when (IsExpectedTerminalShutdownException(exception))
+            {
+            }
+
+            try
+            {
+                session?.CloseStdinToApp();
+                session?.StopExternalTermOnly();
+            }
+            catch (Exception exception) when (IsExpectedTerminalShutdownException(exception))
+            {
+            }
+            AgentCliHost.Children.Clear();
+        }
+
+        // Section: Utility terminal
         private void ResizeInteractiveTerminal()
         {
             var terminal = _terminalControl;
@@ -3203,12 +3392,12 @@ namespace App.Pages
             var supportingOutput = output.Length <= MaximumCommandFixContextCharacters
                 ? output
                 : $"[Earlier terminal output omitted]\r\n{output[^MaximumCommandFixContextCharacters..]}";
-            PromptBox.Text =
+            var prompt =
                 "Fix the issue shown in this terminal session. Inspect the relevant workspace files and make the smallest complete fix.\n\n"
                 + "Use this terminal output as supporting context:\n\n"
                 + supportingOutput;
             EditorTabs.SelectedItem = HomeTab;
-            await SendPromptAsync();
+            SendPromptToAgentCli(prompt);
         }
 
         private void AttachTerminalContextMenuHook(EasyTerminalControl terminal)

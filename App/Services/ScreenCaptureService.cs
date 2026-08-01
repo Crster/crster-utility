@@ -57,7 +57,7 @@ namespace App.Services
                 }
                 return null;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 return null;
             }
@@ -77,7 +77,7 @@ namespace App.Services
                 var graphicsDisplayId = new DisplayId(primaryDisplay.DisplayId.Value);
                 return GraphicsCaptureItem.TryCreateFromDisplayId(graphicsDisplayId);
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 return null;
             }

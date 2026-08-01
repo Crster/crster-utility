@@ -214,7 +214,7 @@ namespace App.Windows
                 if (searchVersion == _searchVersion && string.Equals(sender.Text.Trim(), query, StringComparison.Ordinal))
                     sender.ItemsSource = results;
             }
-            catch (Exception exception)
+            catch (Exception)
             {
                 if (searchVersion == _searchVersion) sender.ItemsSource = null;
             }
@@ -252,7 +252,7 @@ namespace App.Windows
                     .Concat(notebookResults)
                     .ToList();
             }
-            catch (Exception exception)
+            catch (Exception)
             {
                 if (searchVersion == _searchVersion) sender.ItemsSource = null;
             }

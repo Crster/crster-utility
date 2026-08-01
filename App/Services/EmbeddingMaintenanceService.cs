@@ -43,7 +43,7 @@ namespace App.Services
                     database.Todos.Update(todo);
                 }
             }
-            catch (Exception exception)
+            catch (Exception)
             {
             }
             finally { Interlocked.Exchange(ref _isRunning, 0); }

@@ -80,7 +80,7 @@ namespace App
                 {
                     await mainInstance.RedirectActivationToAsync(activationArguments);
                 }
-                catch (Exception exception)
+                catch (Exception)
                 {
                 }
                 finally
