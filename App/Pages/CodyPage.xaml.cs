@@ -82,6 +82,7 @@ namespace App.Pages
         private EasyTerminalControl? _terminalControl;
         private IntPtr _terminalWindowHandle;
         private TerminalWindowSubclassProcedure? _terminalWindowSubclassProcedure;
+        private long _lastTerminalContextMenuRequest;
         private CodyCommand? _selectedCommand;
         private int _searchVersion;
         private bool _loaded;
@@ -119,6 +120,8 @@ namespace App.Pages
         {
             if (_loaded) return;
             _loaded = true;
+            EditorTabs.SelectedItem = HomeTab;
+            SetCodyChatDocked(false);
             _settings = await App.Settings.LoadAsync();
             _session = _sessionStorage.Load()[ChatPersonality.Cody];
             _client = new QwenClient(_settings.QwenApiKey);
@@ -1124,6 +1127,7 @@ namespace App.Pages
             var tab = new TabViewItem
             {
                 Header = $"{entry.Name} diff",
+                ContentTransitions = null,
                 Content = viewer
             };
             EditorTabs.TabItems.Add(tab);
@@ -1365,7 +1369,7 @@ namespace App.Pages
                     return;
                 }
                 EditorTabs.SelectedItem = existing.Key;
-                if (existing.Value.IsPreview && existing.Value.Kind == WorkspaceDocumentKind.Text)
+                if (existing.Value.Kind == WorkspaceDocumentKind.Text && existing.Value.Editor is null)
                 {
                     AttachSharedEditor(existing.Key);
                     await _sharedEditor.ActivateDocumentAsync(existing.Value.DocumentId);
@@ -1395,19 +1399,17 @@ namespace App.Pages
                 var text = kind == WorkspaceDocumentKind.Text
                     ? DecodeText(bytes)
                     : string.Empty;
-                var editor = kind == WorkspaceDocumentKind.Text && !preview
-                    ? CreatePermanentEditor()
-                    : null;
                 FrameworkElement content = kind switch
                 {
                     WorkspaceDocumentKind.Image => await CreateImageViewerAsync(file.FullPath),
                     WorkspaceDocumentKind.Binary => CreateBinaryViewer(bytes),
-                    _ => editor is null ? new Grid() : editor
+                    _ => new Grid()
                 };
                 var tab = new TabViewItem
                 {
                     Header = CreateEditorTabHeader(file.FullPath, preview, false),
                     IsClosable = true,
+                    ContentTransitions = null,
                     HorizontalContentAlignment = HorizontalAlignment.Stretch,
                     VerticalContentAlignment = VerticalAlignment.Stretch,
                     Content = content
@@ -1418,26 +1420,19 @@ namespace App.Pages
                     text,
                     File.GetLastWriteTimeUtc(file.FullPath),
                     preview,
-                    editor,
+                    null,
                     kind);
                 _editors[tab] = document;
                 tab.ContextFlyout = CreateEditorTabMenu(tab);
                 EditorTabs.TabItems.Add(tab);
                 if (preview) _previewEditorTab = tab;
                 EditorTabs.SelectedItem = tab;
-                if (preview && kind == WorkspaceDocumentKind.Text)
+                if (kind == WorkspaceDocumentKind.Text)
                 {
                     AttachSharedEditor(tab);
                     await _sharedEditor.OpenDocumentAsync(document.DocumentId, text, MonacoLanguage(file.FullPath));
                     if (!string.IsNullOrWhiteSpace(searchQuery))
                         await _sharedEditor.RevealMatchAsync(document.DocumentId, searchQuery);
-                }
-                else if (kind == WorkspaceDocumentKind.Text)
-                {
-                    AttachSharedEditor(null);
-                    await editor!.OpenDocumentAsync(document.DocumentId, text, MonacoLanguage(file.FullPath));
-                    if (!string.IsNullOrWhiteSpace(searchQuery))
-                        await editor.RevealMatchAsync(document.DocumentId, searchQuery);
                 }
                 else
                 {
@@ -1610,14 +1605,6 @@ namespace App.Pages
             AttachSharedEditor(null);
         }
 
-        private global::App.Controls.MonacoEditorControl CreatePermanentEditor()
-        {
-            var editor = new global::App.Controls.MonacoEditorControl();
-            editor.ContentChanged += SharedEditor_ContentChanged;
-            editor.SaveRequested += SharedEditor_SaveRequested;
-            return editor;
-        }
-
         private void SharedEditor_ContentChanged(object? sender, string documentId)
         {
             var pair = _editors.FirstOrDefault(item =>
@@ -1639,55 +1626,18 @@ namespace App.Pages
             if (pair.Key is not null) await SaveEditorAsync(pair.Key, pair.Value);
         }
 
-        private async Task PromotePreviewToPermanentAsync(TabViewItem tab, EditorDocument document)
+        private Task PromotePreviewToPermanentAsync(TabViewItem tab, EditorDocument document)
         {
-            if (!document.IsPreview) return;
+            if (!document.IsPreview) return Task.CompletedTask;
             document.IsPreview = false;
-            var text = await _sharedEditor.GetTextAsync(document.DocumentId);
-            var wasDirty = document.IsDirty;
-            await _sharedEditor.CloseDocumentAsync(document.DocumentId);
-            AttachSharedEditor(null);
-            _previewEditorTab = null;
-            _editors.Remove(tab);
-            EditorTabs.TabItems.Remove(tab);
-
-            var editor = CreatePermanentEditor();
-            var permanentTab = new TabViewItem
-            {
-                Header = CreateEditorTabHeader(
-                    document.FullPath,
-                    false,
-                    wasDirty),
-                IsClosable = true,
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                VerticalContentAlignment = VerticalAlignment.Stretch,
-                Content = editor
-            };
-            var permanentDocument = new EditorDocument(
-                document.FullPath,
-                document.RelativePath,
-                document.SavedText,
-                document.LastWriteUtc,
-                false,
-                editor,
-                WorkspaceDocumentKind.Text)
-            {
-                IsDirty = wasDirty
-            };
-            _editors[permanentTab] = permanentDocument;
-            permanentTab.ContextFlyout = CreateEditorTabMenu(permanentTab);
-            EditorTabs.TabItems.Add(permanentTab);
-            EditorTabs.SelectedItem = permanentTab;
-            EditorTabs.UpdateLayout();
-            editor.UpdateLayout();
-            await editor.OpenDocumentAsync(
-                permanentDocument.DocumentId,
-                text,
-                MonacoLanguage(permanentDocument.FullPath));
-            permanentTab.Header = CreateEditorTabHeader(
+            if (ReferenceEquals(_previewEditorTab, tab)) _previewEditorTab = null;
+            tab.Header = CreateEditorTabHeader(
                 document.FullPath,
                 false,
-                permanentDocument.IsDirty);
+                document.IsDirty);
+            EditorTabs.SelectedItem = tab;
+            AttachSharedEditor(tab);
+            return Task.CompletedTask;
         }
 
         private MenuFlyout CreateEditorTabMenu(TabViewItem tab)
@@ -1849,7 +1799,8 @@ namespace App.Pages
         {
             if (EditorTabs.SelectedItem is TabViewItem tab && _editors.TryGetValue(tab, out var document))
             {
-                if (document.IsPreview && document.Kind == WorkspaceDocumentKind.Text)
+                SetCodyChatDocked(true);
+                if (document.Kind == WorkspaceDocumentKind.Text && document.Editor is null)
                 {
                     AttachSharedEditor(tab);
                     await _sharedEditor.ActivateDocumentAsync(document.DocumentId);
@@ -1862,7 +1813,29 @@ namespace App.Pages
                 }
                 return;
             }
+            SetCodyChatDocked(false);
             AttachSharedEditor(null);
+        }
+
+        private void SetCodyChatDocked(bool docked)
+        {
+            if (CodyChatHost.Content is null)
+            {
+                HomeTab.Content = null;
+                CodyChatHost.Content = CodyChatContent;
+            }
+
+            CodyChatDock.Visibility = Visibility.Visible;
+            if (docked)
+            {
+                EditorColumn.Width = new GridLength(1, GridUnitType.Star);
+                var availableWidth = ActualWidth > 0 ? ActualWidth : 1100;
+                CodyChatColumn.Width = new GridLength(Math.Clamp(availableWidth * 0.32, 300, 400));
+                return;
+            }
+
+            EditorColumn.Width = new GridLength(0);
+            CodyChatColumn.Width = new GridLength(1, GridUnitType.Star);
         }
 
         private void AttachSharedEditor(TabViewItem? tab)
@@ -2698,7 +2671,10 @@ namespace App.Pages
             {
                 UpdateInteractiveTerminalVisibility();
                 if (ReferenceEquals(TerminalTabs.SelectedItem, InteractiveTerminalTab))
-                    _terminalControl!.Focus(FocusState.Programmatic);
+                {
+                    var terminal = _terminalControl!;
+                    _ = DispatcherQueue.TryEnqueue(() => terminal.Terminal.Focus(FocusState.Programmatic));
+                }
             }
         }
 
@@ -3037,10 +3013,9 @@ namespace App.Pages
                     new PointerEventHandler((_, args) =>
                     {
                         var updateKind = args.GetCurrentPoint(terminal.Terminal).Properties.PointerUpdateKind;
-                        if (updateKind == global::Microsoft.UI.Input.PointerUpdateKind.LeftButtonReleased)
-                            CopyInteractiveTerminalSelection(terminal);
-                        else if (updateKind == global::Microsoft.UI.Input.PointerUpdateKind.RightButtonReleased)
-                            ShowInteractiveTerminalContextMenu(terminal);
+                        Debug.WriteLine($"[Cody][Terminal] Pointer released: {updateKind}.");
+                        if (updateKind == global::Microsoft.UI.Input.PointerUpdateKind.RightButtonReleased)
+                            ShowInteractiveTerminalContextMenu(terminal, args.GetCurrentPoint(TerminalPanel).Position);
                     }),
                     true);
                 terminal.Terminal.Loaded += (_, _) => AttachTerminalContextMenuHook(terminal);
@@ -3070,49 +3045,149 @@ namespace App.Pages
             }
         }
 
-        private static void CopyInteractiveTerminalSelection(EasyTerminalControl terminal)
+        private void ShowInteractiveTerminalContextMenu(
+            EasyTerminalControl terminal,
+            global::Windows.Foundation.Point position)
         {
-            var text = terminal.Terminal.GetSelectedText();
-            if (string.IsNullOrEmpty(text)) return;
+            var requestTime = Environment.TickCount64;
+            var elapsed = requestTime - _lastTerminalContextMenuRequest;
+            if (elapsed is >= 0 and < 250)
+            {
+                Debug.WriteLine($"[Cody][Terminal] Ignored duplicate context-menu request after {elapsed} ms.");
+                return;
+            }
 
-            var package = new DataPackage();
-            package.SetText(text);
-            Clipboard.SetContent(package);
-            Clipboard.Flush();
-        }
-
-        private void ShowInteractiveTerminalContextMenu(EasyTerminalControl terminal)
-        {
+            _lastTerminalContextMenuRequest = requestTime;
+            Debug.WriteLine("[Cody][Terminal] Showing context menu.");
             var menu = new MenuFlyout();
             var copyAll = new MenuFlyoutItem { Text = "Copy all" };
             copyAll.Click += (_, _) => CopyInteractiveTerminalText(terminal);
             menu.Items.Add(copyAll);
-            menu.ShowAt(TerminalPanel);
+
+            var paste = new MenuFlyoutItem { Text = "Paste" };
+            paste.Click += async (_, _) => await PasteIntoInteractiveTerminalAsync(terminal);
+            menu.Items.Add(paste);
+
+            menu.Items.Add(new MenuFlyoutSeparator());
+            var sendToCody = new MenuFlyoutItem { Text = "Send to Cody" };
+            sendToCody.Click += async (_, _) => await SendTerminalContextToCodyAsync(terminal);
+            menu.Items.Add(sendToCody);
+            menu.ShowAt(TerminalPanel, new FlyoutShowOptions { Position = position });
+        }
+
+        private async Task PasteIntoInteractiveTerminalAsync(EasyTerminalControl terminal)
+        {
+            try
+            {
+                var clipboard = Clipboard.GetContent();
+                if (!clipboard.Contains(StandardDataFormats.Text)) return;
+
+                var text = await clipboard.GetTextAsync();
+                if (!string.IsNullOrEmpty(text)) terminal.ConPTYTerm.WriteToTerm(text);
+            }
+            catch (COMException exception)
+            {
+                Debug.WriteLine($"[Cody][Terminal] Paste failed: {exception.Message}");
+            }
+            finally
+            {
+                _ = DispatcherQueue.TryEnqueue(() => terminal.Terminal.Focus(FocusState.Programmatic));
+            }
+        }
+
+        private async Task SendTerminalContextToCodyAsync(EasyTerminalControl terminal)
+        {
+            if (_isBusy)
+            {
+                await ShowMessageAsync("Cody is busy", "Wait for the current request to finish before sending terminal context.");
+                return;
+            }
+
+            var output = terminal.ConPTYTerm.GetConsoleText();
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                await ShowMessageAsync("No terminal context", "Run the failing command before sending the terminal context to Cody.");
+                return;
+            }
+
+            var supportingOutput = output.Length <= MaximumCommandFixContextCharacters
+                ? output
+                : $"[Earlier terminal output omitted]\r\n{output[^MaximumCommandFixContextCharacters..]}";
+            PromptBox.Text =
+                "Fix the issue shown in this terminal session. Inspect the relevant workspace files and make the smallest complete fix.\n\n"
+                + "Use this terminal output as supporting context:\n\n"
+                + supportingOutput;
+            EditorTabs.SelectedItem = HomeTab;
+            await SendPromptAsync();
         }
 
         private void AttachTerminalContextMenuHook(EasyTerminalControl terminal)
         {
+            Debug.WriteLine("[Cody][Terminal] Attaching native context-menu hook.");
             var container = terminal.Terminal.GetType()
                 .GetField("termContainer", BindingFlags.Instance | BindingFlags.NonPublic)?
                 .GetValue(terminal.Terminal);
-            var handle = container?.GetType()
-                .GetProperty("Hwnd", BindingFlags.Instance | BindingFlags.Public)?
+            if (container is null)
+            {
+                Debug.WriteLine("[Cody][Terminal] Native hook unavailable: termContainer was not found.");
+                return;
+            }
+
+            var containerType = container.GetType();
+            Debug.WriteLine($"[Cody][Terminal] Native container type: {containerType.FullName}.");
+            var handle = containerType
+                .GetProperty("Hwnd", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?
                 .GetValue(container);
-            if (handle is not IntPtr windowHandle || windowHandle == IntPtr.Zero || _terminalWindowHandle != IntPtr.Zero) return;
+            if (handle is not IntPtr windowHandle || windowHandle == IntPtr.Zero)
+            {
+                Debug.WriteLine($"[Cody][Terminal] Native hook unavailable: terminal HWND value was '{handle ?? "null"}'.");
+                return;
+            }
+
+            if (_terminalWindowHandle != IntPtr.Zero)
+            {
+                Debug.WriteLine($"[Cody][Terminal] Native hook already attached to 0x{_terminalWindowHandle:X}.");
+                return;
+            }
 
             _terminalWindowSubclassProcedure = TerminalWindowSubclass;
-            if (!SetWindowSubclass(windowHandle, _terminalWindowSubclassProcedure, UIntPtr.Zero, IntPtr.Zero)) return;
+            if (!SetWindowSubclass(windowHandle, _terminalWindowSubclassProcedure, UIntPtr.Zero, IntPtr.Zero))
+            {
+                Debug.WriteLine($"[Cody][Terminal] SetWindowSubclass failed for 0x{windowHandle:X}; error={Marshal.GetLastWin32Error()}.");
+                _terminalWindowSubclassProcedure = null;
+                return;
+            }
+
             _terminalWindowHandle = windowHandle;
+            Debug.WriteLine($"[Cody][Terminal] Native hook attached to 0x{windowHandle:X}.");
         }
 
         private IntPtr TerminalWindowSubclass(IntPtr windowHandle, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr subclassId, IntPtr referenceData)
         {
             if (_terminalControl is { } terminal)
             {
-                if (message == 0x0202)
-                    _ = DispatcherQueue.TryEnqueue(() => CopyInteractiveTerminalSelection(terminal));
+                if (message == 0x0204 || message == 0x0206 || message == 0x007B)
+                {
+                    Debug.WriteLine($"[Cody][Terminal] Suppressed native context-menu message 0x{message:X4}.");
+                    return IntPtr.Zero;
+                }
                 else if (message == 0x0205)
-                    _ = DispatcherQueue.TryEnqueue(() => ShowInteractiveTerminalContextMenu(terminal));
+                {
+                    Debug.WriteLine("[Cody][Terminal] Native right-button release received.");
+                    var terminalPosition = new global::Windows.Foundation.Point(
+                        (short)(lParam.ToInt64() & 0xFFFF),
+                        (short)((lParam.ToInt64() >> 16) & 0xFFFF));
+                    _ = DispatcherQueue.TryEnqueue(() =>
+                    {
+                        var terminalOffset = terminal.Terminal.TransformToVisual(TerminalPanel)
+                            .TransformPoint(new global::Windows.Foundation.Point());
+                        var panelPosition = new global::Windows.Foundation.Point(
+                            terminalOffset.X + terminalPosition.X,
+                            terminalOffset.Y + terminalPosition.Y);
+                        ShowInteractiveTerminalContextMenu(terminal, panelPosition);
+                    });
+                    return IntPtr.Zero;
+                }
             }
             return DefSubclassProc(windowHandle, message, wParam, lParam);
         }

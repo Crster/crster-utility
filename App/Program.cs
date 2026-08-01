@@ -120,6 +120,7 @@ namespace App
         private static void EnqueueActivation(DispatcherQueue dispatcherQueue, App application)
         {
             if (!dispatcherQueue.TryEnqueue(application.ActivateFromRedirectedLaunch))
+                System.Diagnostics.Debug.WriteLine("Activation could not be queued on the UI thread.");
         }
     }
 }

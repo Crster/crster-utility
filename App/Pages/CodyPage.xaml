@@ -96,7 +96,8 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="FilesColumn" Width="0"/>
                 <ColumnDefinition x:Name="FilesSplitterColumn" Width="0"/>
-                <ColumnDefinition Width="*"/>
+                <ColumnDefinition x:Name="EditorColumn" Width="0"/>
+                <ColumnDefinition x:Name="CodyChatColumn" Width="0"/>
                 <ColumnDefinition x:Name="ContextColumn" Width="0"/>
             </Grid.ColumnDefinitions>
 
@@ -188,15 +189,12 @@
                      HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
                      SelectionChanged="EditorTabs_SelectionChanged"
                      TabCloseRequested="EditorTabs_TabCloseRequested">
-                <TabViewItem x:Name="HomeTab" IsClosable="False">
+                <TabViewItem x:Name="HomeTab" IsClosable="False" Visibility="Collapsed"
+                             ContentTransitions="{x:Null}">
                     <TabViewItem.Header>
-                        <Border Background="{ThemeResource AccentFillColorDefaultBrush}"
-                                Width="230" Height="32" CornerRadius="0" Padding="10,0">
-                            <TextBlock Text="Cody" VerticalAlignment="Center" FontWeight="SemiBold"
-                                       Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"/>
-                        </Border>
+                        <TextBlock Text="Cody"/>
                     </TabViewItem.Header>
-                    <Grid Padding="20,16" RowSpacing="12">
+                    <Grid x:Name="CodyChatContent" Padding="20,16" RowSpacing="12">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
@@ -264,7 +262,15 @@
                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                   Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"/>
 
-            <Border x:Name="ContextPanel" Grid.Column="3" Visibility="Collapsed"
+            <Border x:Name="CodyChatDock" Grid.Column="3" Visibility="Collapsed"
+                    BorderThickness="1,0,0,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+                <ContentControl x:Name="CodyChatHost"
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Stretch"/>
+            </Border>
+
+            <Border x:Name="ContextPanel" Grid.Column="4" Visibility="Collapsed"
                     BorderThickness="1,0,0,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     Padding="14">
                 <ScrollViewer>
