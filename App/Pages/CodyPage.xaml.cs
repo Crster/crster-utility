@@ -187,6 +187,7 @@ namespace App.Pages
             EditorTabs.SelectedItem = HomeTab;
             SetCodyChatDocked(false);
             _settings = await App.Settings.LoadAsync();
+            UseQwenApiKeyForCliBox.IsChecked = _settings.UseQwenApiKeyForCli;
             _agentProviders.AddRange(AgentCliDefinitions.Select(agent => new AgentProviderOption(agent.Name)));
             AgentProviderBox.DisplayMemberPath = nameof(AgentProviderOption.DisplayName);
             AgentProviderBox.ItemsSource = _agentProviders;
@@ -3111,8 +3112,17 @@ namespace App.Pages
         private void ShowAgentSelection()
         {
             LoadAvailableAgentClients();
+            AgentSelectionButton.Visibility = Visibility.Collapsed;
             AgentCliWelcome.Visibility = Visibility.Visible;
             AgentCliHost.Visibility = Visibility.Collapsed;
+        }
+
+        private void UseQwenApiKeyForCliBox_Click(object sender, RoutedEventArgs e)
+        {
+            var settings = _settings.Clone();
+            settings.UseQwenApiKeyForCli = UseQwenApiKeyForCliBox.IsChecked == true;
+            App.Settings.Save(settings);
+            _settings = settings;
         }
 
         private async Task<bool> InstallQwenCodeAsync()
@@ -3230,6 +3240,7 @@ namespace App.Pages
 
             AgentProviderBox.SelectedItem = _agentProviders.First(option =>
                 string.Equals(option.Name, client.Name, StringComparison.OrdinalIgnoreCase));
+            AgentSelectionButton.Visibility = Visibility.Visible;
             AgentCliWelcome.Visibility = Visibility.Collapsed;
             AgentCliHost.Visibility = Visibility.Visible;
             EnsureAgentCliSession();
@@ -3344,6 +3355,7 @@ namespace App.Pages
 
         private void SendPromptToAgentCli(string prompt)
         {
+            AgentSelectionButton.Visibility = Visibility.Visible;
             AgentCliWelcome.Visibility = Visibility.Collapsed;
             AgentCliHost.Visibility = Visibility.Visible;
             EnsureAgentCliSession();

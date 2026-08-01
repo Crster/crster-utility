@@ -80,7 +80,8 @@
                             </MenuFlyout>
                         </SplitButton.Flyout>
                     </SplitButton>
-                    <Button Height="34" Padding="10,0" Click="AgentSelectionButton_Click"
+                    <Button x:Name="AgentSelectionButton" Height="34" Padding="10,0" Visibility="Collapsed"
+                            Click="AgentSelectionButton_Click"
                             ToolTipService.ToolTip="End the current agent and choose another"
                             AutomationProperties.Name="Choose a coding agent">
                         <StackPanel Orientation="Horizontal" Spacing="7">
@@ -224,6 +225,11 @@
                                        TextAlignment="Center" TextWrapping="Wrap" Opacity="0.7"/>
                             <TextBlock x:Name="AgentSelectionStatusText" TextAlignment="Center"
                                        TextWrapping="Wrap" Opacity="0.7"/>
+                            <CheckBox x:Name="UseQwenApiKeyForCliBox"
+                                      Content="Use Qwen with compatible agents"
+                                      HorizontalAlignment="Center"
+                                      Click="UseQwenApiKeyForCliBox_Click"
+                                      ToolTipService.ToolTip="Configures Qwen Code and Claude Code sessions launched from Cody."/>
                             <ItemsRepeater x:Name="AvailableAgentsRepeater" Margin="0,12,0,0">
                                 <ItemsRepeater.Layout>
                                     <StackLayout Orientation="Vertical" Spacing="10"/>
