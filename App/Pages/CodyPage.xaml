@@ -105,6 +105,7 @@
                 <Grid RowSpacing="8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
@@ -112,36 +113,37 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <AutoSuggestBox x:Name="FileSearchBox" PlaceholderText="Search files and content"
+                        <AutoSuggestBox x:Name="FileSearchBox" Height="32"
+                                        PlaceholderText="Search files and content"
                                         TextChanged="FileSearchBox_TextChanged"
                                         QuerySubmitted="FileSearchBox_QuerySubmitted"/>
                         <Button Grid.Column="1" Width="32" Height="32" Padding="0"
-                                Click="AgentSearchButton_Click" ToolTipService.ToolTip="Search with Cody"
-                                AutomationProperties.Name="Search workspace with Cody">
+                                Click="AgentSearchButton_Click" ToolTipService.ToolTip="Fuzzy-search workspace text"
+                                AutomationProperties.Name="Fuzzy-search workspace text">
                             <FontIcon Glyph="&#xE721;" FontSize="13"/>
                         </Button>
-                        <Button Grid.Column="2" Width="32" Height="32" Padding="0"
+                    </Grid>
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="2">
+                        <Button Width="32" Height="32" Padding="0"
                                 Click="CollapseWorkspaceButton_Click" ToolTipService.ToolTip="Collapse all folders"
                                 AutomationProperties.Name="Collapse all folders">
                             <FontIcon Glyph="&#xE70E;" FontSize="12"/>
                         </Button>
-                        <Button x:Name="AddWorkspaceEntryButton" Grid.Column="3" Width="32" Height="32" Padding="0"
+                        <Button x:Name="AddWorkspaceEntryButton" Width="32" Height="32" Padding="0"
                                 Click="AddWorkspaceEntryButton_Click" ToolTipService.ToolTip="New file or folder"
                                 AutomationProperties.Name="New file or folder">
                             <FontIcon Glyph="&#xE710;" FontSize="12"/>
                         </Button>
-                        <Button Grid.Column="4" Width="32" Height="32" Padding="0"
+                        <Button Width="32" Height="32" Padding="0"
                                 Click="RefreshWorkspaceButton_Click" ToolTipService.ToolTip="Refresh workspace files"
                                 AutomationProperties.Name="Refresh workspace files">
                             <FontIcon Glyph="&#xE72C;" FontSize="12"/>
                         </Button>
-                    </Grid>
-                    <TreeView x:Name="WorkspaceTree" Grid.Row="1"
+                    </StackPanel>
+                    <TreeView x:Name="WorkspaceTree" Grid.Row="2"
                               SelectionMode="Single" ItemInvoked="WorkspaceTree_ItemInvoked"
+                              Expanding="WorkspaceTree_Expanding"
                               DoubleTapped="WorkspaceTree_DoubleTapped"
                               RightTapped="WorkspaceTree_RightTapped">
                         <TreeView.ItemTemplate>
@@ -151,8 +153,7 @@
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
-                                    <FontIcon Glyph="{Binding Content.Glyph}" FontSize="13"
-                                              Foreground="{Binding Content.Foreground}"/>
+                                    <Image Source="{Binding Content.Icon}" Width="16" Height="16"/>
                                     <TextBlock Grid.Column="1" Text="{Binding Content.Name}"
                                                Foreground="{Binding Content.Foreground}"
                                                TextTrimming="CharacterEllipsis"/>
@@ -160,8 +161,12 @@
                             </DataTemplate>
                         </TreeView.ItemTemplate>
                     </TreeView>
-                    <TextBlock x:Name="FileStatusText" Grid.Row="2" FontSize="11" Opacity="0.7"
-                               TextWrapping="Wrap"/>
+                    <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="6">
+                        <ProgressRing x:Name="FileLoadingRing" Width="14" Height="14"
+                                      IsActive="False" Visibility="Collapsed"/>
+                        <TextBlock x:Name="FileStatusText" FontSize="11" Opacity="0.7"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
                 </Grid>
             </Border>
 

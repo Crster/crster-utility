@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'self' https://monaco.local; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://monaco.local; style-src 'self' 'unsafe-inline' https://monaco.local; font-src 'self' data: https://monaco.local; worker-src 'self' blob: https://monaco.local">
+          content="default-src 'self' https://monaco.local; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://monaco.local; style-src 'self' 'unsafe-inline' https://monaco.local; font-src 'self' data: https://monaco.local; img-src 'self' data: https://monaco.local; worker-src 'self' blob: https://monaco.local">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         html, body, #editor { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #1e1e1e; }
@@ -112,6 +112,16 @@
         require.config({ paths: { vs: 'https://monaco.local/vs' } });
         require(['vs/editor/editor.main'], function () {
             window.chrome.webview.postMessage('debug:Monaco editor.main loaded');
+            monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+                noSemanticValidation: true,
+                noSyntaxValidation: true
+            });
+            monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+                noSemanticValidation: true,
+                noSyntaxValidation: true
+            });
+            monaco.languages.json.jsonDefaults.setDiagnosticsOptions({ validate: false });
+            monaco.languages.css.cssDefaults.setDiagnosticsOptions({ validate: false });
             window.codyEditor = monaco.editor.create(document.getElementById('editor'), {
                 value: '',
                 language: 'plaintext',
@@ -119,6 +129,7 @@
                 fontFamily: 'Cascadia Mono, Consolas, monospace',
                 fontSize: 13,
                 minimap: { enabled: true },
+                renderValidationDecorations: 'off',
                 scrollBeyondLastLine: false,
                 smoothScrolling: true,
                 bracketPairColorization: { enabled: true },

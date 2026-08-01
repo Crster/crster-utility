@@ -12,9 +12,9 @@ namespace App.Services
     internal sealed class ChatLogService
     {
 #if DEBUG
-        private const bool IsEnabled = true;
+        private static readonly bool IsEnabled = true;
 #else
-        private const bool IsEnabled = false;
+        private static readonly bool IsEnabled = false;
 #endif
         private static readonly SemaphoreSlim WriteLock = new(1, 1);
         private readonly string _directory = IsEnabled ? ResolveDirectory() : string.Empty;
