@@ -19,34 +19,57 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
-                <SplitButton x:Name="WorkspaceSplitButton" MinWidth="150" MaxWidth="260" Height="34"
-                             Padding="10,0" HorizontalAlignment="Left"
-                             Click="WorkspaceSplitButton_Click"
-                             ToolTipService.ToolTip="Choose a workspace">
-                    <SplitButton.Content>
-                        <StackPanel Orientation="Horizontal" Spacing="7">
-                            <FontIcon Glyph="&#xE8B7;" FontSize="13"/>
-                            <TextBlock x:Name="WorkspaceNameText" Text="Choose workspace"
-                                       MaxWidth="190" FontSize="12"
-                                       TextTrimming="CharacterEllipsis"/>
-                        </StackPanel>
-                    </SplitButton.Content>
-                    <SplitButton.Flyout>
-                        <MenuFlyout>
-                            <MenuFlyoutItem Text="Change workspace" Click="ChangeWorkspaceMenuItem_Click">
-                                <MenuFlyoutItem.Icon>
-                                    <FontIcon Glyph="&#xE8B7;"/>
-                                </MenuFlyoutItem.Icon>
-                            </MenuFlyoutItem>
-                        </MenuFlyout>
-                    </SplitButton.Flyout>
-                </SplitButton>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <SplitButton x:Name="WorkspaceSplitButton" MinWidth="150" MaxWidth="260" Height="34"
+                                 Padding="10,0" HorizontalAlignment="Left"
+                                 Click="WorkspaceSplitButton_Click"
+                                 ToolTipService.ToolTip="Choose a workspace">
+                        <SplitButton.Content>
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xE8B7;" FontSize="13"/>
+                                <TextBlock x:Name="WorkspaceNameText" Text="Choose workspace"
+                                           MaxWidth="190" FontSize="12"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </SplitButton.Content>
+                        <SplitButton.Flyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Text="Change workspace" Click="ChangeWorkspaceMenuItem_Click">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE8B7;"/>
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                            </MenuFlyout>
+                        </SplitButton.Flyout>
+                    </SplitButton>
+                </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
                             VerticalAlignment="Center">
-                    <ComboBox x:Name="AgentProviderBox" Width="132" Height="34"
+                    <ComboBox x:Name="AgentProviderBox" Width="240" Height="34"
                               SelectionChanged="AgentProviderBox_SelectionChanged"
                               ToolTipService.ToolTip="Choose the installed coding agent"/>
+                    <ToggleButton x:Name="SmartButton" Height="34" Padding="10,0"
+                                  Checked="AgentModeToggle_Changed" Unchecked="AgentModeToggle_Changed"
+                                  ToolTipService.ToolTip="Use the high-capability model">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <FontIcon Glyph="&#xE7BE;" FontSize="13"/>
+                            <TextBlock Text="Smart"/>
+                        </StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="ThinkingButton" Height="34" Padding="10,0"
+                                  Checked="AgentModeToggle_Changed" Unchecked="AgentModeToggle_Changed"
+                                  ToolTipService.ToolTip="Use medium thinking effort">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <FontIcon Glyph="&#xE945;" FontSize="13"/>
+                            <TextBlock Text="Thinking"/>
+                        </StackPanel>
+                    </ToggleButton>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center">
                     <SplitButton x:Name="myColorButton" Height="34" Content="Scan commands" Visibility="Collapsed"
                                  Click="RunButton_Click"
                                  ToolTipService.ToolTip="Run the selected workspace command">
@@ -56,12 +79,10 @@
                             </MenuFlyout>
                         </SplitButton.Flyout>
                     </SplitButton>
-                    <ToggleButton x:Name="TerminalButton" Height="34" Padding="10,0"
-                                  Click="TerminalButton_Click" ToolTipService.ToolTip="Show terminal">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon Glyph="&#xE756;" FontSize="13"/>
-                            <TextBlock Text="Terminal"/>
-                        </StackPanel>
+                    <ToggleButton x:Name="TerminalButton" Width="34" Height="34" Padding="0"
+                                  Click="TerminalButton_Click" ToolTipService.ToolTip="Show terminal"
+                                  AutomationProperties.Name="Show terminal">
+                        <FontIcon Glyph="&#xE756;" FontSize="13"/>
                     </ToggleButton>
                     <Button x:Name="CopySessionButton" Width="34" Height="34" Padding="0"
                             Click="CopySessionButton_Click" ToolTipService.ToolTip="Copy Cody session">
@@ -254,7 +275,12 @@
                                         Margin="0,0,2,2" VerticalAlignment="Bottom" CornerRadius="9"
                                         Style="{StaticResource AccentButtonStyle}" Click="SendButton_Click"
                                         ToolTipService.ToolTip="Send prompt">
-                                    <FontIcon x:Name="SendIcon" Glyph="&#xE724;" FontSize="13"/>
+                                    <Grid>
+                                        <FontIcon x:Name="SendIcon" Glyph="&#xE724;" FontSize="13"/>
+                                        <Rectangle x:Name="StopIcon" Width="11" Height="11"
+                                                   Fill="{ThemeResource TextFillColorPrimaryBrush}"
+                                                   Visibility="Collapsed"/>
+                                    </Grid>
                                 </Button>
                             </Grid>
                         </Border>

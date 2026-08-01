@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -21,7 +22,9 @@ namespace App.Services
         string Prompt,
         string Instruction,
         string? SessionId = null,
-        bool AllowEdits = true);
+        bool AllowEdits = true,
+        string? Model = null,
+        string? ReasoningEffort = null);
 
     internal sealed record AgentCliEvent(AgentCliEventKind Kind, string Title, string Content, bool? Succeeded = null);
     internal sealed record AgentCliResult(string Text, string? SessionId);
@@ -148,12 +151,38 @@ namespace App.Services
     internal sealed class CodexCliProvider : AgentCliProvider
     {
         public override string DisplayName => "Codex";
-        protected override string ExecutableName => "codex";
+        protected override string ExecutableName => ResolveExecutablePath();
+
+        private static string ResolveExecutablePath()
+        {
+            var runtimeDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "OpenAI",
+                "Codex",
+                "bin");
+            if (!Directory.Exists(runtimeDirectory)) return "codex";
+
+            return Directory.EnumerateDirectories(runtimeDirectory)
+                .Select(directory => Path.Combine(directory, "codex.exe"))
+                .Where(File.Exists)
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .FirstOrDefault() ?? "codex";
+        }
 
         protected override void ConfigureArguments(ProcessStartInfo startInfo, AgentCliRequest request)
         {
             startInfo.ArgumentList.Add("exec");
             startInfo.ArgumentList.Add("--json");
+            if (!string.IsNullOrWhiteSpace(request.Model))
+            {
+                startInfo.ArgumentList.Add("--model");
+                startInfo.ArgumentList.Add(request.Model);
+            }
+            if (!string.IsNullOrWhiteSpace(request.ReasoningEffort))
+            {
+                startInfo.ArgumentList.Add("-c");
+                startInfo.ArgumentList.Add($"model_reasoning_effort=\"{request.ReasoningEffort}\"");
+            }
             startInfo.ArgumentList.Add("--sandbox");
             startInfo.ArgumentList.Add(request.AllowEdits ? "workspace-write" : "read-only");
             startInfo.ArgumentList.Add("--skip-git-repo-check");
@@ -221,6 +250,11 @@ namespace App.Services
             startInfo.ArgumentList.Add("--include-partial-messages");
             startInfo.ArgumentList.Add("--permission-mode");
             startInfo.ArgumentList.Add(request.AllowEdits ? "acceptEdits" : "plan");
+            if (!string.IsNullOrWhiteSpace(request.Model))
+            {
+                startInfo.ArgumentList.Add("--model");
+                startInfo.ArgumentList.Add(request.Model);
+            }
             if (!string.IsNullOrWhiteSpace(request.SessionId))
             {
                 startInfo.ArgumentList.Add("--resume");

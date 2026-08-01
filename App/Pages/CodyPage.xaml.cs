@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -37,6 +38,32 @@ namespace App.Pages
         private const int MaximumWorkspaceFileBytes = 1_000_000;
         private const int MaximumCommandFixContextCharacters = 12_000;
         private sealed record TerminalShell(string Name, string FileName, string Arguments);
+        private sealed record AgentModelOption(
+            string Id,
+            int CapabilityRank,
+            decimal? InputCostPerMillion,
+            decimal? OutputCostPerMillion,
+            bool SupportsThinking);
+        private sealed class AgentProviderOption(string name) : INotifyPropertyChanged
+        {
+            private string _displayName = name;
+
+            public string Name { get; } = name;
+            public string DisplayName
+            {
+                get => _displayName;
+                private set
+                {
+                    if (_displayName == value) return;
+                    _displayName = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DisplayName)));
+                }
+            }
+
+            public event PropertyChangedEventHandler? PropertyChanged;
+
+            public void SetDisplayName(string displayName) => DisplayName = displayName;
+        }
         private const string CodyInstruction =
             """
             You are Cody, an agentic coding assistant operating in a selected local workspace.
@@ -66,6 +93,8 @@ namespace App.Pages
         private readonly HashSet<TabViewItem> _terminalCommandTabsOpenedPanel = [];
         private readonly HashSet<TabViewItem> _terminalCommandTabsClosing = [];
         private readonly List<CodyCommand> _commands = [];
+        private readonly List<AgentModelOption> _rankedAgentModels = [];
+        private readonly List<AgentProviderOption> _agentProviders = [];
         private readonly HashSet<string> _shownMissingAgentInstructions = new(StringComparer.OrdinalIgnoreCase);
         private readonly global::App.Controls.MonacoEditorControl _sharedEditor = new();
         private ChatSession _session = new();
@@ -121,11 +150,14 @@ namespace App.Pages
             SetCodyChatDocked(false);
             _settings = await App.Settings.LoadAsync();
             _session = _sessionStorage.Load()[ChatPersonality.Cody];
-            AgentProviderBox.ItemsSource = Enum.GetNames<AgentCliProviderKind>();
-            AgentProviderBox.SelectedItem = Enum.GetNames<AgentCliProviderKind>()
-                .FirstOrDefault(name => string.Equals(name, _settings.CodyAgentProvider, StringComparison.OrdinalIgnoreCase))
-                ?? AgentCliProviderKind.Codex.ToString();
+            _agentProviders.AddRange(Enum.GetNames<AgentCliProviderKind>().Select(name => new AgentProviderOption(name)));
+            AgentProviderBox.DisplayMemberPath = nameof(AgentProviderOption.DisplayName);
+            AgentProviderBox.ItemsSource = _agentProviders;
+            AgentProviderBox.SelectedItem = _agentProviders.FirstOrDefault(option =>
+                string.Equals(option.Name, _settings.CodyAgentProvider, StringComparison.OrdinalIgnoreCase))
+                ?? _agentProviders.First(option => option.Name == AgentCliProviderKind.Codex.ToString());
             SelectAgentProvider(_settings.CodyAgentProvider);
+            UpdateAgentActionButtons();
             LoadAvailableTerminalShells();
             RenderSession();
             RefreshWorkspace();
@@ -1879,23 +1911,19 @@ namespace App.Pages
                 await ShowMessageAsync("Choose a workspace", "Cody needs a workspace before it can inspect or change files.");
                 return;
             }
-
             if (promptOverride is null) PromptBox.Text = string.Empty;
             AddMessage(new ChatMessage(ChatItemKind.User, "You", prompt));
             _agentCancellation = new CancellationTokenSource();
             SetBusy(true);
             try
             {
+                await RefreshAgentModelsAsync(_agentCancellation.Token);
                 var providerName = _settings.CodyAgentProvider;
                 var sessionId = string.Equals(_session.AgentProvider, providerName, StringComparison.OrdinalIgnoreCase)
                     ? _session.AgentSessionId
                     : string.Empty;
                 var result = await _agentProvider.RunAsync(
-                    new AgentCliRequest(
-                        _settings.CodyWorkspace,
-                        prompt,
-                        EffectiveInstruction(),
-                        sessionId),
+                    CreateAgentRequest(prompt, EffectiveInstruction(), sessionId),
                     ReportAgentEventAsync,
                     _agentCancellation.Token);
                 _session.AgentProvider = providerName;
@@ -1922,7 +1950,7 @@ namespace App.Pages
             }
             finally
             {
-                _agentCancellation.Dispose();
+                _agentCancellation?.Dispose();
                 _agentCancellation = null;
                 SetBusy(false);
                 RenderSession();
@@ -1932,6 +1960,80 @@ namespace App.Pages
 
         private string EffectiveInstruction() =>
             $"{CodyInstruction}\n\nSelected workspace: {_settings.CodyWorkspace}";
+
+        private AgentCliRequest CreateAgentRequest(string prompt, string instruction, string? sessionId = null)
+        {
+            var usesCodex = string.Equals(_settings.CodyAgentProvider, AgentCliProviderKind.Codex.ToString(), StringComparison.OrdinalIgnoreCase);
+            var selectedModel = GetSelectedAgentModel();
+            return new AgentCliRequest(
+                _settings.CodyWorkspace,
+                prompt,
+                instruction,
+                sessionId,
+                Model: selectedModel?.Id,
+                ReasoningEffort: ThinkingButton.IsChecked == true && usesCodex
+                    ? "medium"
+                    : null);
+        }
+
+        private AgentModelOption? GetSelectedAgentModel()
+        {
+            if (_rankedAgentModels.Count == 0) return null;
+            return SmartButton.IsChecked == true
+                ? _rankedAgentModels[^1]
+                : _rankedAgentModels[_rankedAgentModels.Count / 2];
+        }
+
+        private async Task RefreshAgentModelsAsync(CancellationToken cancellationToken)
+        {
+            if (_agentProvider is null || !HasWorkspace() || _rankedAgentModels.Count > 0) return;
+
+            try
+            {
+                var result = await _agentProvider.RunAsync(
+                    new AgentCliRequest(
+                        _settings.CodyWorkspace,
+                        "List the models available to this CLI account.",
+                        """
+                        Return JSON only. List every model this CLI account can select for a coding request.
+                        Use this schema exactly:
+                        [{"id":"model-id","capabilityRank":1,"inputCostPerMillion":0,"outputCostPerMillion":0,"supportsThinking":true}]
+
+                        Rules:
+                        - Include only models that are available to this account and selectable through this CLI.
+                        - capabilityRank is an integer from 1 (least capable) to 100 (most capable).
+                        - Use the current token prices in USD per million tokens when known; otherwise use null.
+                        - Set supportsThinking only when medium thinking effort is supported.
+                        - Do not include explanations, markdown, or unverified model IDs.
+                        """,
+                        AllowEdits: false),
+                    _ => Task.CompletedTask,
+                    cancellationToken);
+                _rankedAgentModels.AddRange(ParseAgentModelOptions(result.Text));
+            }
+            catch (Exception exception) when (exception is AgentCliNotFoundException or DirectoryNotFoundException or InvalidOperationException or JsonException)
+            {
+                Debug.WriteLine($"[Cody] Could not load agent models: {exception.Message}");
+            }
+
+            UpdateAgentActionButtons();
+        }
+
+        private static IEnumerable<AgentModelOption> ParseAgentModelOptions(string text)
+        {
+            var options = JsonSerializer.Deserialize<List<AgentModelOption>>(
+                ExtractJsonArray(text),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
+            return options
+                .Where(option => !string.IsNullOrWhiteSpace(option.Id) && option.CapabilityRank is >= 1 and <= 100)
+                .OrderBy(option => option.CapabilityRank)
+                .ThenBy(option => option.InputCostPerMillion is { } input && option.OutputCostPerMillion is { } output
+                    ? input + output
+                    : decimal.MaxValue)
+                .ThenBy(option => option.Id, StringComparer.OrdinalIgnoreCase)
+                .DistinctBy(option => option.Id, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
 
         private static string AgentInstallationInstructions(string providerName) =>
             providerName.Equals("Claude Code", StringComparison.OrdinalIgnoreCase)
@@ -1972,12 +2074,15 @@ namespace App.Pages
 
         private void AgentProviderBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (!_loaded || AgentProviderBox.SelectedItem is not string provider) return;
+            if (!_loaded || AgentProviderBox.SelectedItem is not AgentProviderOption option) return;
+            var provider = option.Name;
             SelectAgentProvider(provider);
+            _rankedAgentModels.Clear();
             var changed = _settings.Clone();
             changed.CodyAgentProvider = provider;
             App.Settings.Save(changed);
             _settings = changed;
+            UpdateAgentActionButtons();
             _session.AgentProvider = string.Empty;
             _session.AgentSessionId = string.Empty;
             SaveSession();
@@ -1985,6 +2090,34 @@ namespace App.Pages
 
         private void SelectAgentProvider(string provider) =>
             _agentProvider = AgentCliProviderFactory.Create(provider);
+
+        private void UpdateAgentActionButtons()
+        {
+            var usesCodex = AgentProviderBox.SelectedItem is AgentProviderOption option
+                && string.Equals(option.Name, AgentCliProviderKind.Codex.ToString(), StringComparison.OrdinalIgnoreCase);
+            SmartButton.IsEnabled = !_isBusy;
+            ThinkingButton.IsEnabled = usesCodex && !_isBusy;
+            ToolTipService.SetToolTip(SmartButton, _rankedAgentModels.Count > 0
+                ? $"Use the most capable available model ({_rankedAgentModels[^1].Id})"
+                : "Find available models before the next request");
+            ToolTipService.SetToolTip(ThinkingButton, usesCodex
+                ? "Use medium thinking effort"
+                : "Medium thinking effort is available when Codex is selected");
+            UpdateAgentProviderDisplay();
+        }
+
+        private void AgentModeToggle_Changed(object sender, RoutedEventArgs e) => UpdateAgentProviderDisplay();
+
+        private void UpdateAgentProviderDisplay()
+        {
+            if (AgentProviderBox.SelectedItem is not AgentProviderOption option) return;
+
+            var model = GetSelectedAgentModel()?.Id ?? "default";
+            var effort = ThinkingButton.IsChecked == true && option.Name == AgentCliProviderKind.Codex.ToString()
+                ? "medium"
+                : "standard";
+            option.SetDisplayName($"{option.Name} ({model}: {effort})");
+        }
 
         private void AddMessage(ChatMessage message)
         {
@@ -2190,12 +2323,14 @@ namespace App.Pages
                 AgentActivityStatusText.Text = $"{_agentProvider?.DisplayName ?? "Cody"} is working…";
                 AgentActivityDetailText.Text = "Starting the agent and reading the workspace.";
             }
-            SendIcon.Glyph = busy ? "\uE71A" : "\uE724";
+            SendIcon.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
+            StopIcon.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             SendButton.Background = busy
-                ? new SolidColorBrush(Colors.Red)
+                ? (Brush)Application.Current.Resources["ControlFillColorDefaultBrush"]
                 : (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
             ToolTipService.SetToolTip(SendButton, busy ? "Stop Cody" : "Send prompt");
             AutomationProperties.SetName(SendButton, busy ? "Stop Cody" : "Send prompt");
+            UpdateAgentActionButtons();
             RefreshWorkspace();
         }
 
