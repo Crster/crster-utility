@@ -67,6 +67,9 @@ namespace App.Windows
                 using (var client = new QwenClient(apiKey))
                     _ = await client.EmbedRetrievalQueryAsync("Crster Utility setup", CancellationToken.None);
                 App.Settings.Configure(folder, apiKey);
+                var settings = App.Settings.Current.Clone();
+                settings.UseQwenApiKeyForCli = UseQwenApiKeyForCliBox.IsChecked == true;
+                App.Settings.Save(settings);
                 SetupCompleted?.Invoke(this, EventArgs.Empty);
                 Close();
             }

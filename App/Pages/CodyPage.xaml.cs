@@ -37,8 +37,19 @@ namespace App.Pages
     {
         private const int MaximumWorkspaceFileBytes = 1_000_000;
         private const int MaximumCommandFixContextCharacters = 12_000;
+        private const string QwenCodePackage = "@qwen-code/qwen-code@latest";
+        private const string QwenOpenAiApiRoot = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+        private const string QwenClaudeApiRoot = "https://dashscope-intl.aliyuncs.com/api/v2/apps/claude-code-proxy";
+        private const string QwenCoderModel = "qwen3-coder-plus";
         private sealed record TerminalShell(string Name, string FileName, string Arguments);
-        private sealed record AgentCliClient(string Name, string DisplayName, string ExecutablePath, string Glyph);
+        private sealed record AgentCliClient(
+            string Name,
+            string DisplayName,
+            string? ExecutablePath,
+            string Glyph,
+            string Status,
+            bool IsInstalled,
+            bool IsEnabled);
         private sealed record AgentCliDefinition(
             string Name,
             string DisplayName,
@@ -46,9 +57,9 @@ namespace App.Pages
             IReadOnlyList<string> ExecutableNames);
         private static readonly AgentCliDefinition[] AgentCliDefinitions =
         [
+            new("Qwen", "Qwen Code", "\uE7C1", ["qwen.cmd", "qwen.exe"]),
             new("Codex", "Codex", "\uE943", ["codex.cmd", "codex.exe"]),
             new("Claude", "Claude Code", "\uE8BD", ["claude.cmd", "claude.exe"]),
-            new("Qwen", "Qwen Code", "\uE7C1", ["qwen.cmd", "qwen.exe"]),
             new("Gemini", "Gemini CLI", "\uE945", ["gemini.cmd", "gemini.exe"]),
             new("Copilot", "GitHub Copilot CLI", "\uE8A5", ["copilot.cmd", "copilot.exe"]),
             new("OpenCode", "OpenCode", "\uE756", ["opencode.cmd", "opencode.exe"]),
@@ -133,6 +144,7 @@ namespace App.Pages
         private int _searchVersion;
         private bool _loaded;
         private bool _isBusy;
+        private bool _isInstallingQwenCode;
         private bool _filesVisible;
         private bool _isFilesResizing;
         private bool _isTerminalResizing;
@@ -153,6 +165,13 @@ namespace App.Pages
         public CodyPage()
         {
             InitializeComponent();
+            var toggleTerminalAccelerator = new KeyboardAccelerator
+            {
+                Key = (global::Windows.System.VirtualKey)192,
+                Modifiers = global::Windows.System.VirtualKeyModifiers.Control
+            };
+            toggleTerminalAccelerator.Invoked += ToggleTerminalKeyboardAccelerator_Invoked;
+            RootGrid.KeyboardAccelerators.Add(toggleTerminalAccelerator);
             MonacoPreloadHost.Children.Add(_sharedEditor);
             _sharedEditor.ContentChanged += SharedEditor_ContentChanged;
             _sharedEditor.SaveRequested += SharedEditor_SaveRequested;
@@ -2768,6 +2787,13 @@ namespace App.Pages
             Path.Combine(_settings.CodyWorkspace, ".crster", "cody.json");
 
         // Section: Terminal
+        private void ToggleTerminalKeyboardAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+        {
+            args.Handled = true;
+            if (TerminalPanel.Visibility == Visibility.Visible) HideTerminal();
+            else ShowTerminal();
+        }
+
         private void TerminalButton_Click(object sender, RoutedEventArgs e)
         {
             if (TerminalButton.IsChecked == true) ShowTerminal();
@@ -3076,11 +3102,85 @@ namespace App.Pages
         // Section: Agent CLI terminal
         private void AgentCliHost_SizeChanged(object sender, SizeChangedEventArgs e) => ResizeAgentCliTerminal();
 
+        private void AgentSelectionButton_Click(object sender, RoutedEventArgs e)
+        {
+            CancelAgentCliSession();
+            ShowAgentSelection();
+        }
+
         private void ShowAgentSelection()
         {
             LoadAvailableAgentClients();
             AgentCliWelcome.Visibility = Visibility.Visible;
             AgentCliHost.Visibility = Visibility.Collapsed;
+        }
+
+        private async Task<bool> InstallQwenCodeAsync()
+        {
+            if (_isInstallingQwenCode) return false;
+            var qwenDefinition = AgentCliDefinitions.First(agent => agent.Name == "Qwen");
+            if (FindAgentCliExecutable(qwenDefinition) is not null) return true;
+
+            var npmExecutable = FindExecutable("npm.cmd") ?? FindExecutable("npm.exe");
+            if (npmExecutable is null)
+            {
+                await ShowMessageAsync("Node.js required", "Install Node.js, then try installing Qwen Code again.");
+                return false;
+            }
+
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = "Install Qwen Code?",
+                Content = "Cody uses Qwen, but Qwen Code is not installed. Install it globally with npm now?",
+                PrimaryButtonText = "Install",
+                CloseButtonText = "Not now",
+                DefaultButton = ContentDialogButton.Primary
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return false;
+
+            _isInstallingQwenCode = true;
+            LoadAvailableAgentClients();
+            try
+            {
+                var startInfo = new ProcessStartInfo(npmExecutable)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                startInfo.ArgumentList.Add("install");
+                startInfo.ArgumentList.Add("--global");
+                startInfo.ArgumentList.Add(QwenCodePackage);
+
+                using var process = Process.Start(startInfo)
+                    ?? throw new InvalidOperationException("npm did not start.");
+                var standardOutput = process.StandardOutput.ReadToEndAsync();
+                var standardError = process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                var output = await standardOutput;
+                var error = await standardError;
+                if (process.ExitCode != 0)
+                    throw new InvalidOperationException(string.IsNullOrWhiteSpace(error) ? output.Trim() : error.Trim());
+
+                if (FindAgentCliExecutable(qwenDefinition) is null)
+                {
+                    await ShowMessageAsync("Restart required", "Qwen Code was installed. Restart Crster Utility so the updated PATH is available.");
+                    return false;
+                }
+                return true;
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
+            {
+                await ShowMessageAsync("Could not install Qwen Code", exception.Message);
+                return false;
+            }
+            finally
+            {
+                _isInstallingQwenCode = false;
+                LoadAvailableAgentClients();
+            }
         }
 
         private void LoadAvailableAgentClients()
@@ -3089,27 +3189,39 @@ namespace App.Pages
             foreach (var definition in AgentCliDefinitions)
                 AddAvailableAgentClient(definition);
             AvailableAgentsRepeater.ItemsSource = _availableAgentClients.ToArray();
-            AgentSelectionStatusText.Text = _availableAgentClients.Count == 0
-                ? "No supported coding agents were found. Install Codex or Claude Code, then reopen Cody."
+            var installedAgentCount = _availableAgentClients.Count(client => client.IsInstalled);
+            AgentSelectionStatusText.Text = installedAgentCount == 0
+                ? "Choose Qwen Code to install it, or install another supported coding agent."
                 : HasWorkspace()
-                    ? $"{_availableAgentClients.Count} installed agent{(_availableAgentClients.Count == 1 ? string.Empty : "s")} available."
+                    ? $"{installedAgentCount} installed agent{(installedAgentCount == 1 ? string.Empty : "s")} available."
                     : "Choose a workspace before starting an agent.";
         }
 
         private void AddAvailableAgentClient(AgentCliDefinition definition)
         {
             var executable = FindAgentCliExecutable(definition);
-            if (executable is not null)
+            if (executable is not null || string.Equals(definition.Name, "Qwen", StringComparison.OrdinalIgnoreCase))
                 _availableAgentClients.Add(new AgentCliClient(
                     definition.Name,
                     definition.DisplayName,
                     executable,
-                    definition.Glyph));
+                    definition.Glyph,
+                    _isInstallingQwenCode
+                        ? "Installing Qwen Code…"
+                        : executable is null ? "Install Qwen Code" : "Installed and ready",
+                    executable is not null,
+                    !_isInstallingQwenCode));
         }
 
         private async void LaunchAgentButton_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not Button { Tag: AgentCliClient client }) return;
+            if (!client.IsInstalled)
+            {
+                if (!await InstallQwenCodeAsync()) return;
+                client = _availableAgentClients.First(agent =>
+                    string.Equals(agent.Name, "Qwen", StringComparison.OrdinalIgnoreCase));
+            }
             if (!HasWorkspace())
             {
                 await ChangeWorkspaceAsync();
@@ -3132,7 +3244,7 @@ namespace App.Pages
                 var executable = ResolveSelectedAgentCliExecutable();
                 var terminal = new EasyTerminalControl
                 {
-                    StartupCommandLine = $"\"{executable.Replace("\"", "\\\"")}\"",
+                    StartupCommandLine = CreateAgentCliStartupCommandLine(executable),
                     WorkingDirectory = _settings.CodyWorkspace,
                     FontFamilyWhenSettingTheme = new FontFamily("Consolas"),
                     FontSizeWhenSettingTheme = 10,
@@ -3163,6 +3275,37 @@ namespace App.Pages
                 ?? AgentCliDefinitions[0];
             return FindAgentCliExecutable(definition)
                 ?? throw new FileNotFoundException($"{definition.DisplayName} is not installed or is not available on PATH.");
+        }
+
+        private string CreateAgentCliStartupCommandLine(string executable)
+        {
+            var provider = AgentProviderBox.SelectedItem as AgentProviderOption;
+            if (!_settings.UseQwenApiKeyForCli || string.IsNullOrWhiteSpace(_settings.QwenApiKey))
+                return $"\"{executable.Replace("\"", "\\\"")}\"";
+
+            var environment = provider?.Name switch
+            {
+                "Qwen" => new Dictionary<string, string>
+                {
+                    ["OPENAI_API_KEY"] = _settings.QwenApiKey,
+                    ["OPENAI_BASE_URL"] = QwenOpenAiApiRoot,
+                    ["OPENAI_MODEL"] = QwenCoderModel
+                },
+                "Claude" => new Dictionary<string, string>
+                {
+                    ["ANTHROPIC_BASE_URL"] = QwenClaudeApiRoot,
+                    ["ANTHROPIC_AUTH_TOKEN"] = _settings.QwenApiKey
+                },
+                _ => null
+            };
+            if (environment is null || FindWindowsPowerShell() is not { } powerShell)
+                return $"\"{executable.Replace("\"", "\\\"")}\"";
+
+            var assignments = string.Join(
+                "; ",
+                environment.Select(pair =>
+                    $"$env:{pair.Key}=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{Convert.ToBase64String(Encoding.UTF8.GetBytes(pair.Value))}'))"));
+            return $"\"{powerShell.Replace("\"", "\\\"")}\" -NoLogo -NoProfile -NoExit -Command \"{assignments}; & '{executable.Replace("'", "''")}'\"";
         }
 
         private static string? FindAgentCliExecutable(AgentCliDefinition definition)

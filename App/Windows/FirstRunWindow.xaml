@@ -27,6 +27,9 @@
                     </Grid>
                 </StackPanel>
                 <PasswordBox x:Name="QwenApiKeyBox" Header="Qwen API key" PlaceholderText="Paste your Qwen API key" />
+                <CheckBox x:Name="UseQwenApiKeyForCliBox"
+                          Content="Use Qwen with compatible agents in Cody"
+                          ToolTipService.ToolTip="Configures Qwen Code and Claude Code sessions launched from Cody." />
                 <TextBlock x:Name="StatusText" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" />
                 <Button x:Name="ContinueButton" Content="Continue" HorizontalAlignment="Right" Click="ContinueButton_Click" />
             </StackPanel>
