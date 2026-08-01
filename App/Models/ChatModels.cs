@@ -55,6 +55,8 @@ namespace App.Models
         public bool ProjectDocumentationScanned { get; set; }
         public string ProjectDocumentationFingerprint { get; set; } = string.Empty;
         public TechnicianModelTier? LastTechnicianModelTier { get; set; }
+        public string AgentProvider { get; set; } = string.Empty;
+        public string AgentSessionId { get; set; } = string.Empty;
     }
 
     internal sealed record ChatMessage(

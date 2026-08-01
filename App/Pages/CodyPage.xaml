@@ -39,17 +39,15 @@
                                     <FontIcon Glyph="&#xE8B7;"/>
                                 </MenuFlyoutItem.Icon>
                             </MenuFlyoutItem>
-                            <MenuFlyoutItem Text="Scan project commands" Click="ScanCommandsMenuItem_Click">
-                                <MenuFlyoutItem.Icon>
-                                    <FontIcon Glyph="&#xE721;"/>
-                                </MenuFlyoutItem.Icon>
-                            </MenuFlyoutItem>
                         </MenuFlyout>
                     </SplitButton.Flyout>
                 </SplitButton>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
                             VerticalAlignment="Center">
-                    <SplitButton x:Name="myColorButton" Height="34" Content="Scan commands"
+                    <ComboBox x:Name="AgentProviderBox" Width="132" Height="34"
+                              SelectionChanged="AgentProviderBox_SelectionChanged"
+                              ToolTipService.ToolTip="Choose the installed coding agent"/>
+                    <SplitButton x:Name="myColorButton" Height="34" Content="Scan commands" Visibility="Collapsed"
                                  Click="RunButton_Click"
                                  ToolTipService.ToolTip="Run the selected workspace command">
                         <SplitButton.Flyout>
@@ -65,23 +63,10 @@
                             <TextBlock Text="Terminal"/>
                         </StackPanel>
                     </ToggleButton>
-                    <Button x:Name="ThinkDeepButton" Width="34" Height="34" Padding="0"
-                            Click="ThinkDeepButton_Click" ToolTipService.ToolTip="Think deep">
-                        <FontIcon Glyph="&#xE945;" FontSize="13"/>
-                    </Button>
-                    <Button x:Name="BeSmartButton" Width="34" Height="34" Padding="0"
-                            Click="BeSmartButton_Click" ToolTipService.ToolTip="Be smart">
-                        <FontIcon Glyph="&#xE7BE;" FontSize="13"/>
-                    </Button>
                     <Button x:Name="CopySessionButton" Width="34" Height="34" Padding="0"
                             Click="CopySessionButton_Click" ToolTipService.ToolTip="Copy Cody session">
                         <FontIcon Glyph="&#xE8C8;" FontSize="13"/>
                     </Button>
-                    <ToggleButton x:Name="ContextButton" Width="34" Height="34" Padding="0"
-                                  Click="ContextButton_Click" ToolTipService.ToolTip="Show agent context"
-                                  AutomationProperties.Name="Show agent context">
-                        <FontIcon Glyph="&#xF133;" FontSize="13"/>
-                    </ToggleButton>
                     <Button x:Name="ClearSessionButton" Width="34" Height="34" Padding="0"
                             Click="ClearSessionButton_Click" ToolTipService.ToolTip="Clear Cody session"
                             AutomationProperties.Name="Clear Cody session">
@@ -98,7 +83,6 @@
                 <ColumnDefinition x:Name="FilesSplitterColumn" Width="0"/>
                 <ColumnDefinition x:Name="EditorColumn" Width="0"/>
                 <ColumnDefinition x:Name="CodyChatColumn" Width="0"/>
-                <ColumnDefinition x:Name="ContextColumn" Width="0"/>
             </Grid.ColumnDefinitions>
 
             <Border x:Name="FilesPanel" Visibility="Collapsed" BorderThickness="0,0,1,0"
@@ -198,6 +182,7 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <ScrollViewer x:Name="ConversationScroller" VerticalScrollBarVisibility="Auto">
                             <StackPanel x:Name="ConversationHost" Spacing="10">
@@ -216,7 +201,27 @@
                                 </StackPanel>
                             </StackPanel>
                         </ScrollViewer>
-                        <Border Grid.Row="1" BorderThickness="1" CornerRadius="14" Padding="6"
+                        <!-- Section: Agent activity -->
+                        <Border x:Name="AgentActivityPanel" Grid.Row="1" Visibility="Collapsed"
+                                Padding="10,7" CornerRadius="8"
+                                Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                            <Grid ColumnSpacing="9">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <ProgressRing Width="16" Height="16" IsActive="True"
+                                              VerticalAlignment="Top" Margin="0,2,0,0"/>
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock x:Name="AgentActivityStatusText" FontSize="12"
+                                               FontWeight="SemiBold" Text="Cody is working…"/>
+                                    <TextBlock x:Name="AgentActivityDetailText" FontSize="11" Opacity="0.7"
+                                               MaxLines="3" TextWrapping="Wrap"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <Border Grid.Row="2" BorderThickness="1" CornerRadius="14" Padding="6"
                                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                 Translation="0,0,8">
@@ -270,24 +275,6 @@
                                 VerticalContentAlignment="Stretch"/>
             </Border>
 
-            <Border x:Name="ContextPanel" Grid.Column="4" Visibility="Collapsed"
-                    BorderThickness="1,0,0,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    Padding="14">
-                <ScrollViewer>
-                    <StackPanel Spacing="12">
-                        <TextBlock Text="Agent context" FontWeight="SemiBold"/>
-                        <TextBlock Text="System instruction" FontSize="11" FontWeight="SemiBold"/>
-                        <TextBox x:Name="SystemInstructionBox" IsReadOnly="True" AcceptsReturn="True"
-                                 TextWrapping="Wrap" MinHeight="140"/>
-                        <TextBlock Text="Session context" FontSize="11" FontWeight="SemiBold"/>
-                        <TextBox x:Name="ContextTextBox" AcceptsReturn="True" TextWrapping="Wrap"
-                                 MinHeight="160" TextChanged="ContextTextBox_TextChanged"/>
-                        <TextBlock x:Name="ModelText" FontSize="11" Opacity="0.7"/>
-                        <Button Content="Compact conversation" HorizontalAlignment="Left"
-                                Click="CompactContextButton_Click"/>
-                    </StackPanel>
-                </ScrollViewer>
-            </Border>
         </Grid>
 
         <!-- Section: Terminal -->

@@ -183,6 +183,7 @@ namespace App.Services
             new("qwen.artistModel", "Artist model", "qwen-image-2.0", value => value.ArtistModel),
             new("technician.workspace", "Technician workspace", "", value => value.TechnicianWorkspace),
             new("cody.workspace", "Cody workspace", "", value => value.CodyWorkspace),
+            new("cody.agentProvider", "Cody agent provider", "Codex", value => value.CodyAgentProvider),
             new("general.city", "City", "Manila", value => value.City),
             new("general.country", "Country", "Philippines", value => value.Country)
         ];
@@ -202,6 +203,7 @@ namespace App.Services
         public string ArtistModel { get; set; } = "qwen-image-2.0";
         public string TechnicianWorkspace { get; set; } = string.Empty;
         public string CodyWorkspace { get; set; } = string.Empty;
+        public string CodyAgentProvider { get; set; } = "Codex";
         public string City { get; set; } = "Manila";
         public string Country { get; set; } = "Philippines";
 
@@ -227,6 +229,7 @@ namespace App.Services
             result.ArtistModel = Text("qwen.artistModel", result.ArtistModel);
             result.TechnicianWorkspace = Text("technician.workspace", result.TechnicianWorkspace);
             result.CodyWorkspace = Text("cody.workspace", result.CodyWorkspace);
+            result.CodyAgentProvider = Text("cody.agentProvider", result.CodyAgentProvider);
             result.City = Text("general.city", result.City);
             result.Country = Text("general.country", result.Country);
             return result;

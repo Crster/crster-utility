@@ -36,7 +36,6 @@ namespace App.Pages
     {
         private const int MaximumWorkspaceFileBytes = 1_000_000;
         private const int MaximumCommandFixContextCharacters = 12_000;
-        private const int MaximumToolCalls = 50;
         private sealed record TerminalShell(string Name, string FileName, string Arguments);
         private const string CodyInstruction =
             """
@@ -67,12 +66,11 @@ namespace App.Pages
         private readonly HashSet<TabViewItem> _terminalCommandTabsOpenedPanel = [];
         private readonly HashSet<TabViewItem> _terminalCommandTabsClosing = [];
         private readonly List<CodyCommand> _commands = [];
+        private readonly HashSet<string> _shownMissingAgentInstructions = new(StringComparer.OrdinalIgnoreCase);
         private readonly global::App.Controls.MonacoEditorControl _sharedEditor = new();
         private ChatSession _session = new();
         private AppSettings _settings = new();
-        private QwenClient? _client;
-        private TechnicianToolService? _tools;
-        private TechnicianSessionOrchestrator? _orchestrator;
+        private IAgentCliProvider? _agentProvider;
         private CancellationTokenSource? _agentCancellation;
         private CancellationTokenSource? _workspaceRefreshCancellation;
         private IReadOnlyDictionary<string, GitFileState> _workspaceGitStates = new Dictionary<string, GitFileState>();
@@ -86,7 +84,6 @@ namespace App.Pages
         private CodyCommand? _selectedCommand;
         private int _searchVersion;
         private bool _loaded;
-        private bool _renderingContext;
         private bool _isBusy;
         private bool _filesVisible;
         private bool _isFilesResizing;
@@ -124,18 +121,12 @@ namespace App.Pages
             SetCodyChatDocked(false);
             _settings = await App.Settings.LoadAsync();
             _session = _sessionStorage.Load()[ChatPersonality.Cody];
-            _client = new QwenClient(_settings.QwenApiKey);
-            var secretaryMemory = new SecretaryMemoryService(_client);
-            var secretaryTools = new SecretaryToolService(secretaryMemory);
-            _tools = new TechnicianToolService(_client, secretaryTools, ConfirmActionAsync)
-            {
-                WorkspacePath = _settings.CodyWorkspace
-            };
-            _orchestrator = new TechnicianSessionOrchestrator(_client, new ChatLogService());
-            LoadWorkspaceCommands();
+            AgentProviderBox.ItemsSource = Enum.GetNames<AgentCliProviderKind>();
+            AgentProviderBox.SelectedItem = Enum.GetNames<AgentCliProviderKind>()
+                .FirstOrDefault(name => string.Equals(name, _settings.CodyAgentProvider, StringComparison.OrdinalIgnoreCase))
+                ?? AgentCliProviderKind.Codex.ToString();
+            SelectAgentProvider(_settings.CodyAgentProvider);
             LoadAvailableTerminalShells();
-            SystemInstructionBox.Text = CodyInstruction;
-            ModelText.Text = $"{App.Settings.Current.LowCostModel} · Thinking: adaptive";
             RenderSession();
             RefreshWorkspace();
             _ = _sharedEditor.PreloadAsync();
@@ -174,10 +165,7 @@ namespace App.Pages
             CloseAllEditorTabs();
             _settings.CodyWorkspace = folder.Path;
             await App.Settings.SaveAsync(_settings);
-            if (_tools is not null) _tools.WorkspacePath = folder.Path;
-            _commands.Clear();
-            _selectedCommand = null;
-            LoadWorkspaceCommands();
+            _session.AgentSessionId = string.Empty;
             LoadAvailableTerminalShells();
             RefreshRunMenu();
             RefreshWorkspace();
@@ -204,7 +192,6 @@ namespace App.Pages
             ToolTipService.SetToolTip(
                 WorkspaceSplitButton,
                 available ? $"{workspace}\nClick to show or hide workspace files." : "Choose Cody workspace");
-            myColorButton.IsEnabled = available && !_isBusy;
             FileSearchBox.IsEnabled = available;
             TerminalTypeBox.IsEnabled = available;
         }
@@ -545,26 +532,6 @@ namespace App.Pages
             e.Handled = true;
         }
 
-        private void ContextButton_Click(object sender, RoutedEventArgs e)
-        {
-            var show = ContextButton.IsChecked == true;
-            ContextPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-            ContextColumn.Width = show ? new GridLength(310) : new GridLength(0);
-        }
-
-        private async void ThinkDeepButton_Click(object sender, RoutedEventArgs e) =>
-            await ResubmitLatestPromptAsync(TechnicianRequestMode.Think);
-
-        private async void BeSmartButton_Click(object sender, RoutedEventArgs e) =>
-            await ResubmitLatestPromptAsync(TechnicianRequestMode.Smart);
-
-        private async Task ResubmitLatestPromptAsync(TechnicianRequestMode requestMode)
-        {
-            if (_isBusy) return;
-            var prompt = _session.Messages.LastOrDefault(message => message.Kind == ChatItemKind.User)?.Content;
-            if (!string.IsNullOrWhiteSpace(prompt)) await SendPromptAsync(requestMode, prompt);
-        }
-
         private void CopySessionButton_Click(object sender, RoutedEventArgs e)
         {
             var history = string.Join("\n\n", _session.Messages.Select(message => $"{message.Title}:\n{message.Content}"));
@@ -580,10 +547,6 @@ namespace App.Pages
             if (_isBusy) return;
             _session = new ChatSession();
             SaveSession();
-            ContextTextBox.Text = string.Empty;
-            ContextButton.IsChecked = false;
-            ContextPanel.Visibility = Visibility.Collapsed;
-            ContextColumn.Width = new GridLength(0);
             RenderSession();
         }
 
@@ -1907,12 +1870,10 @@ namespace App.Pages
             await SendPromptAsync();
         }
 
-        private async Task SendPromptAsync(
-            TechnicianRequestMode requestMode = TechnicianRequestMode.Default,
-            string? promptOverride = null)
+        private async Task SendPromptAsync(string? promptOverride = null)
         {
             var prompt = (promptOverride ?? PromptBox.Text).Trim();
-            if (prompt.Length == 0 || _client is null || _tools is null || _isBusy) return;
+            if (prompt.Length == 0 || _agentProvider is null || _isBusy) return;
             if (!HasWorkspace())
             {
                 await ShowMessageAsync("Choose a workspace", "Cody needs a workspace before it can inspect or change files.");
@@ -1925,56 +1886,21 @@ namespace App.Pages
             SetBusy(true);
             try
             {
-                var tier = requestMode switch
-                {
-                    TechnicianRequestMode.Smart => TechnicianModelTier.Escalated,
-                    TechnicianRequestMode.Think => TechnicianModelTier.HighThinking,
-                    _ => TechnicianModelTier.Standard
-                };
-                var nextSteps = new List<JsonObject> { QwenClient.CreateUserStep(prompt, []) };
-                var toolCount = 0;
-                while (true)
-                {
-                    var result = await _client.CreateSimpleInteractionAsync(
-                        TechnicianSessionOrchestrator.Model(tier),
-                        _session.History,
-                        nextSteps,
+                var providerName = _settings.CodyAgentProvider;
+                var sessionId = string.Equals(_session.AgentProvider, providerName, StringComparison.OrdinalIgnoreCase)
+                    ? _session.AgentSessionId
+                    : string.Empty;
+                var result = await _agentProvider.RunAsync(
+                    new AgentCliRequest(
+                        _settings.CodyWorkspace,
+                        prompt,
                         EffectiveInstruction(),
-                        TechnicianToolService.CreateExecutionDeclarations(requestMode == TechnicianRequestMode.Think),
-                        _agentCancellation.Token,
-                        TechnicianSessionOrchestrator.Thinking(tier));
-                    foreach (var step in nextSteps) _session.History.Add((JsonObject)step.DeepClone());
-                    foreach (var step in result.Steps) _session.History.Add((JsonObject)step.DeepClone());
-                    if (!string.IsNullOrWhiteSpace(result.Thinking))
-                        AddMessage(new ChatMessage(ChatItemKind.Thinking, "Thinking", result.Thinking));
-                    if (result.FunctionCalls.Count == 0)
-                    {
-                        AddMessage(new ChatMessage(
-                            string.IsNullOrWhiteSpace(result.Text) ? ChatItemKind.Error : ChatItemKind.Assistant,
-                            "Cody",
-                            string.IsNullOrWhiteSpace(result.Text) ? "Cody returned an empty response. Please retry." : result.Text));
-                        break;
-                    }
-
-                    nextSteps = [];
-                    foreach (var call in result.FunctionCalls)
-                    {
-                        if (++toolCount > MaximumToolCalls)
-                        {
-                            AddMessage(new ChatMessage(ChatItemKind.Error, "Cody", "The tool-call limit was reached."));
-                            return;
-                        }
-                        var toolResult = await _tools.ExecuteAsync(call.Name, call.Arguments, _agentCancellation.Token);
-                        AddMessage(new ChatMessage(
-                            ChatItemKind.Tool,
-                            call.Name,
-                            toolResult.Output,
-                            ToolArguments: (JsonObject)call.Arguments.DeepClone(),
-                            ToolSucceeded: toolResult.Success));
-                        _session.History.Add(QwenClient.CreateFunctionResult(call, toolResult));
-                    }
-                    SaveSession();
-                }
+                        sessionId),
+                    ReportAgentEventAsync,
+                    _agentCancellation.Token);
+                _session.AgentProvider = providerName;
+                _session.AgentSessionId = result.SessionId ?? string.Empty;
+                AddMessage(new ChatMessage(ChatItemKind.Assistant, "Cody", result.Text));
                 CompletionNotificationService.ShowWhenMainWindowIsInactive(
                     "Cody task complete",
                     "Cody has finished responding.");
@@ -1982,6 +1908,13 @@ namespace App.Pages
             catch (OperationCanceledException)
             {
                 AddMessage(new ChatMessage(ChatItemKind.Error, "Cody", "Operation stopped."));
+            }
+            catch (AgentCliNotFoundException exception)
+            {
+                AddMessage(new ChatMessage(ChatItemKind.Error, "Cody error", exception.Message));
+                var providerName = _agentProvider?.DisplayName ?? _settings.CodyAgentProvider;
+                if (_shownMissingAgentInstructions.Add(providerName))
+                    await ShowMessageAsync($"Install {providerName}", AgentInstallationInstructions(providerName));
             }
             catch (Exception exception)
             {
@@ -1998,7 +1931,60 @@ namespace App.Pages
         }
 
         private string EffectiveInstruction() =>
-            $"{CodyInstruction}\n\nSelected workspace: {_settings.CodyWorkspace}\n\nSession context:\n{_session.ContextText}";
+            $"{CodyInstruction}\n\nSelected workspace: {_settings.CodyWorkspace}";
+
+        private static string AgentInstallationInstructions(string providerName) =>
+            providerName.Equals("Claude Code", StringComparison.OrdinalIgnoreCase)
+                ? "Install Node.js 18+ and Git for Windows, then run:\n\nnpm install -g @anthropic-ai/claude-code\n\nRun 'claude' in a terminal and sign in. Restart Crster Utility afterward.\n\nhttps://docs.anthropic.com/en/docs/claude-code/getting-started"
+                : "Install Node.js, then run:\n\nnpm install -g @openai/codex\n\nRun 'codex' in a terminal and sign in. Restart Crster Utility afterward.\n\nhttps://developers.openai.com/codex/cli";
+
+        private Task ReportAgentEventAsync(AgentCliEvent agentEvent)
+        {
+            if (agentEvent.Kind == AgentCliEventKind.Output)
+            {
+                AgentActivityStatusText.Text = $"{agentEvent.Title} is responding…";
+                AgentActivityDetailText.Text = AppendActivityText(
+                    AgentActivityDetailText.Text,
+                    agentEvent.Content);
+                return Task.CompletedTask;
+            }
+
+            AgentActivityStatusText.Text = agentEvent.Kind == AgentCliEventKind.Thinking
+                ? $"{_agentProvider?.DisplayName ?? "Cody"} is thinking…"
+                : $"Running {HumanizeToolName(agentEvent.Title)}…";
+            AgentActivityDetailText.Text = AppendActivityText(string.Empty, agentEvent.Content);
+            AddMessage(new ChatMessage(
+                agentEvent.Kind == AgentCliEventKind.Thinking ? ChatItemKind.Thinking : ChatItemKind.Tool,
+                agentEvent.Title,
+                agentEvent.Content,
+                ToolSucceeded: agentEvent.Succeeded));
+            return Task.CompletedTask;
+        }
+
+        private static string AppendActivityText(string current, string addition)
+        {
+            const int maximumCharacters = 600;
+            var combined = current == "Starting the agent and reading the workspace."
+                ? addition
+                : current + addition;
+            return combined.Length <= maximumCharacters ? combined : combined[^maximumCharacters..];
+        }
+
+        private void AgentProviderBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (!_loaded || AgentProviderBox.SelectedItem is not string provider) return;
+            SelectAgentProvider(provider);
+            var changed = _settings.Clone();
+            changed.CodyAgentProvider = provider;
+            App.Settings.Save(changed);
+            _settings = changed;
+            _session.AgentProvider = string.Empty;
+            _session.AgentSessionId = string.Empty;
+            SaveSession();
+        }
+
+        private void SelectAgentProvider(string provider) =>
+            _agentProvider = AgentCliProviderFactory.Create(provider);
 
         private void AddMessage(ChatMessage message)
         {
@@ -2014,9 +2000,6 @@ namespace App.Pages
             ConversationHost.Children.Clear();
             foreach (var message in _session.Messages) RenderMessage(message);
             if (_session.Messages.Count == 0) ConversationHost.Children.Add(CodyEmptyState);
-            _renderingContext = true;
-            ContextTextBox.Text = _session.ContextText;
-            _renderingContext = false;
         }
 
         private void RenderMessage(ChatMessage message)
@@ -2201,6 +2184,12 @@ namespace App.Pages
         {
             _isBusy = busy;
             PromptBox.IsEnabled = !busy;
+            AgentActivityPanel.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+            if (busy)
+            {
+                AgentActivityStatusText.Text = $"{_agentProvider?.DisplayName ?? "Cody"} is working…";
+                AgentActivityDetailText.Text = "Starting the agent and reading the workspace.";
+            }
             SendIcon.Glyph = busy ? "\uE71A" : "\uE724";
             SendButton.Background = busy
                 ? new SolidColorBrush(Colors.Red)
@@ -2210,45 +2199,15 @@ namespace App.Pages
             RefreshWorkspace();
         }
 
-        private void ContextTextBox_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            if (_renderingContext) return;
-            _session.ContextText = ContextTextBox.Text;
-            SaveSession();
-        }
-
-        private async void CompactContextButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (_orchestrator is null || _session.Messages.Count == 0 || _agentCancellation is not null) return;
-            _agentCancellation = new CancellationTokenSource();
-            SetBusy(true);
-            try
-            {
-                var transcript = string.Join("\n\n", _session.Messages.Select(message => $"{message.Title}:\n{message.Content}"));
-                var original = _session.Messages.FirstOrDefault(message => message.Kind == ChatItemKind.User)?.Content
-                    ?? "Continue the current Cody task.";
-                _session.ContextText = await _orchestrator.CompactAsync(
-                    new TechnicianCompactionInput(original, _session.ContextText, transcript),
-                    _agentCancellation.Token);
-                ContextTextBox.Text = _session.ContextText;
-                SaveSession();
-            }
-            catch (Exception exception)
-            {
-                await ShowMessageAsync("Compact conversation", exception.Message);
-            }
-            finally
-            {
-                _agentCancellation.Dispose();
-                _agentCancellation = null;
-                SetBusy(false);
-            }
-        }
-
         // Section: Run commands
         private async void ScanCommandsMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            if (_client is null || !HasWorkspace()) return;
+            await ShowMessageAsync(
+                "Project commands",
+                "Ask Cody to inspect or run the project. The selected agent CLI now owns command discovery and execution.");
+            return;
+#pragma warning disable CS0162
+            if (_agentProvider is null || !HasWorkspace()) return;
             myColorButton.IsEnabled = false;
             myColorButton.Content = "Scanning…";
             try
@@ -2283,10 +2242,10 @@ namespace App.Pages
                     + $"\n\nTerminal shell: {GetTerminalTypeName()}"
                     + $"\nActivation instructions:\n{activationInstructions}"
                     + $"\n\nAvailable project executables:\n{availableExecutables}";
-                var result = await _client.CreateSimpleInteractionAsync(
-                    App.Settings.Current.LowCostModel,
-                    [],
-                    [QwenClient.CreateUserStep(scannerInput, [])],
+                var result = await _agentProvider.RunAsync(
+                    new AgentCliRequest(
+                    _settings.CodyWorkspace,
+                    scannerInput,
                     """
                     Identify every project type, package manager, runtime, toolchain, and environment profile evidenced by the supplied files, then extract its supported commands. Return JSON only:
                     [{"name":"Build application","command":"npm run build"}]
@@ -2312,9 +2271,9 @@ namespace App.Pages
                     - Name each command in 2–5 sentence-case words describing its action and target. Never use generic names like
                       "Run", "Test", "Build", or "Lint".
                     """,
-                    null,
-                    CancellationToken.None,
-                    QwenThinkingLevel.Disabled);
+                    AllowEdits: false),
+                    _ => Task.CompletedTask,
+                    CancellationToken.None);
                 var json = ExtractJsonArray(result.Text);
                 var commands = JsonSerializer.Deserialize<List<CodyCommand>>(json, new JsonSerializerOptions
                 {
@@ -2350,6 +2309,7 @@ namespace App.Pages
                 myColorButton.Content = _selectedCommand?.Name ?? "Scan commands";
                 RefreshWorkspace();
             }
+#pragma warning restore CS0162
         }
 
         private static bool IsCommandManifest(string name) =>
@@ -2569,10 +2529,6 @@ namespace App.Pages
                 RunMenu.Items.Add(item);
             }
             if (_commands.Count > 0) RunMenu.Items.Add(new MenuFlyoutSeparator());
-            var scan = new MenuFlyoutItem { Text = "Scan project commands" };
-            ToolTipService.SetToolTip(scan, "Scan root-level project files for supported commands");
-            scan.Click += ScanCommandsMenuItem_Click;
-            RunMenu.Items.Add(scan);
             myColorButton.Content = _selectedCommand?.Name ?? "Scan commands";
             ToolTipService.SetToolTip(
                 myColorButton,
@@ -2592,7 +2548,6 @@ namespace App.Pages
         {
             if (_selectedCommand is null)
             {
-                ScanCommandsMenuItem_Click(sender, new RoutedEventArgs());
                 return;
             }
             await RunCommandInTerminalTabAsync(_selectedCommand);

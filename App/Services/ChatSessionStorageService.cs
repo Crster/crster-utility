@@ -41,7 +41,9 @@ namespace App.Services
                     Messages = session.Messages.Select(PersistedChatMessage.From).ToList(),
                     ProjectDocumentationScanned = session.ProjectDocumentationScanned,
                     ProjectDocumentationFingerprint = session.ProjectDocumentationFingerprint,
-                    LastTechnicianModelTier = session.LastTechnicianModelTier
+                    LastTechnicianModelTier = session.LastTechnicianModelTier,
+                    AgentProvider = session.AgentProvider,
+                    AgentSessionId = session.AgentSessionId
                 }, SerializerOptions)
             });
         }
@@ -58,7 +60,9 @@ namespace App.Services
                 ContextText = document.Context,
                 ProjectDocumentationScanned = persisted.ProjectDocumentationScanned,
                 ProjectDocumentationFingerprint = persisted.ProjectDocumentationFingerprint ?? string.Empty,
-                LastTechnicianModelTier = persisted.LastTechnicianModelTier
+                LastTechnicianModelTier = persisted.LastTechnicianModelTier,
+                AgentProvider = persisted.AgentProvider ?? string.Empty,
+                AgentSessionId = persisted.AgentSessionId ?? string.Empty
             };
 
             foreach (var history in persisted.History)
@@ -74,6 +78,8 @@ namespace App.Services
             public bool ProjectDocumentationScanned { get; set; }
             public string? ProjectDocumentationFingerprint { get; set; }
             public TechnicianModelTier? LastTechnicianModelTier { get; set; }
+            public string? AgentProvider { get; set; }
+            public string? AgentSessionId { get; set; }
         }
 
         private sealed class PersistedChatMessage
