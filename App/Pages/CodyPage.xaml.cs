@@ -1027,7 +1027,7 @@ namespace App.Pages
             foreach (var child in node.Children) CollapseTreeNode(child);
         }
 
-        private void AddWorkspaceEntryButton_Click(object sender, RoutedEventArgs e)
+        private async void AddWorkspaceEntryButton_Click(object sender, RoutedEventArgs e)
         {
             var selected = WorkspaceTree.SelectedNode?.Content as WorkspaceTreeEntry;
             var selectedParentPath = selected is { IsDirectory: false }
@@ -1052,14 +1052,7 @@ namespace App.Pages
                     GitFileState.None,
                     false,
                     false);
-            var menu = new MenuFlyout();
-            var newFile = new MenuFlyoutItem { Text = "New file" };
-            newFile.Click += async (_, _) => await CreateWorkspaceEntryAsync(false);
-            menu.Items.Add(newFile);
-            var newFolder = new MenuFlyoutItem { Text = "New folder" };
-            newFolder.Click += async (_, _) => await CreateWorkspaceEntryAsync(true);
-            menu.Items.Add(newFolder);
-            menu.ShowAt(AddWorkspaceEntryButton);
+            await CreateWorkspaceEntryAsync(false);
         }
 
         private void WorkspaceTree_RightTapped(object sender, RightTappedRoutedEventArgs e)
@@ -1207,7 +1200,6 @@ namespace App.Pages
             var input = new TextBox
             {
                 Header = directory ? "Folder name" : "File name",
-                PlaceholderText = directory ? "New folder" : "new-file.txt",
                 MinWidth = 340
             };
             var dialog = new ContentDialog
@@ -2600,11 +2592,21 @@ namespace App.Pages
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 var select = new Button
                 {
-                    Content = command.Name,
                     Tag = command,
                     HorizontalAlignment = HorizontalAlignment.Stretch,
-                    HorizontalContentAlignment = HorizontalAlignment.Left
+                    HorizontalContentAlignment = HorizontalAlignment.Left,
+                    Padding = new Thickness(10, 6, 10, 6)
                 };
+                var commandDetails = new StackPanel { Spacing = 2 };
+                commandDetails.Children.Add(new TextBlock { Text = command.Name });
+                commandDetails.Children.Add(new TextBlock
+                {
+                    Text = command.Command,
+                    FontSize = 12,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+                });
+                select.Content = commandDetails;
                 ToolTipService.SetToolTip(select, command.Command);
                 AutomationProperties.SetName(select, $"Select {command.Name}: {command.Command}");
                 select.Click += CommandMenuItem_Click;
@@ -2612,9 +2614,11 @@ namespace App.Pages
                 {
                     Content = new FontIcon { Glyph = "\uE74D", FontSize = 12 },
                     Tag = command,
-                    Width = 32,
-                    Height = 32,
-                    Padding = new Thickness(0)
+                    Width = 28,
+                    Height = 28,
+                    Padding = new Thickness(0),
+                    Background = new SolidColorBrush(Colors.Transparent),
+                    BorderThickness = new Thickness(0)
                 };
                 Grid.SetColumn(remove, 1);
                 ToolTipService.SetToolTip(remove, $"Remove {command.Name}");

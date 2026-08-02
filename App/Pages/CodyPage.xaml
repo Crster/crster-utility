@@ -81,12 +81,26 @@
                                     <StackPanel x:Name="RunCommandItemsPanel" Spacing="2"/>
                                     <Border Height="1" Margin="0,4"
                                             Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-                                    <Button x:Name="AddCommandButton" Content="Add command"
-                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                            Click="AddCommandButton_Click"/>
-                                    <Button x:Name="ScanCommandsButton" Content="Scan commands"
-                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                            Click="ScanCommandsMenuItem_Click"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="4" Margin="4,0,4,2">
+                                        <HyperlinkButton x:Name="AddCommandButton" Padding="8,6"
+                                                         Click="AddCommandButton_Click"
+                                                         ToolTipService.ToolTip="Add a workspace command"
+                                                         AutomationProperties.Name="Add workspace command">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <FontIcon Glyph="&#xE710;" FontSize="12"/>
+                                                <TextBlock Text="Add command"/>
+                                            </StackPanel>
+                                        </HyperlinkButton>
+                                        <HyperlinkButton x:Name="ScanCommandsButton" Padding="8,6"
+                                                         Click="ScanCommandsMenuItem_Click"
+                                                         ToolTipService.ToolTip="Discover workspace commands"
+                                                         AutomationProperties.Name="Scan workspace commands">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <FontIcon Glyph="&#xE895;" FontSize="12"/>
+                                                <TextBlock Text="Scan workspace"/>
+                                            </StackPanel>
+                                        </HyperlinkButton>
+                                    </StackPanel>
                                 </StackPanel>
                             </Flyout>
                         </SplitButton.Flyout>
