@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Net.Http.Json;
 using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Text;
@@ -22,12 +23,18 @@ namespace App.Services
     {
         private const int MaximumFunctionResultCharacters = 12_000;
         private readonly HttpClient _downloadClient = new() { Timeout = TimeSpan.FromMinutes(5) };
+        private readonly string _apiKey;
+        private readonly string _imageApiBaseUrl;
+        private readonly string _nativeDashScopeBaseUrl;
         private readonly OpenAIClient _openAiClient;
 
         public OpenAiCompatibleClient(string apiKey) : this(App.Settings.Current.OpenAiCompatibleBaseUrl, apiKey) { }
 
         public OpenAiCompatibleClient(string baseUrl, string apiKey)
         {
+            _apiKey = apiKey;
+            _imageApiBaseUrl = $"{baseUrl.TrimEnd('/')}/images";
+            _nativeDashScopeBaseUrl = baseUrl.TrimEnd('/').Replace("/compatible-mode/v1", "/api/v1", StringComparison.OrdinalIgnoreCase);
             _openAiClient = new OpenAIClient(
                 new ApiKeyCredential(apiKey),
                 new OpenAIClientOptions { Endpoint = new Uri($"{baseUrl.TrimEnd('/')}/") });
@@ -468,24 +475,201 @@ namespace App.Services
             CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(prompt)) throw new ArgumentException("An image prompt is required.", nameof(prompt));
-            if (contextImages.Count > 1) throw new NotSupportedException("The configured OpenAI-compatible image API supports one reference image per edit.");
-            var client = _openAiClient.GetImageClient(App.Settings.Current.ArtistModel);
-            OpenAI.Images.GeneratedImage image;
+            var model = App.Settings.Current.ArtistModel;
+            if (IsQwenImageModel(model))
+                return await GenerateQwenImageAsync(model, prompt.Trim(), contextImages, cancellationToken);
+
             if (contextImages.Count == 0)
-                image = (await client.GenerateImageAsync(prompt.Trim(), null, cancellationToken)).Value;
-            else
             {
-                var context = contextImages[0];
-                if (context.Data.Length == 0) throw new ArgumentException("The context image is empty.", nameof(contextImages));
-                using var stream = new MemoryStream(context.Data, writable: false);
-                image = (await client.GenerateImageEditAsync(stream, $"reference{MimeTypeExtension(context.MimeType)}", prompt.Trim(), null, cancellationToken)).Value;
+                using var request = new HttpRequestMessage(HttpMethod.Post, $"{_imageApiBaseUrl}/generations")
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        model,
+                        prompt = prompt.Trim(),
+                        n = 1
+                    })
+                };
+                return await SendImageRequestAsync(request, cancellationToken);
             }
-            if (image.ImageBytes is not null) return new GeneratedImage(image.ImageBytes.ToArray(), "image/png");
-            if (image.ImageUri is null) throw new InvalidOperationException("The AI provider returned no image.");
-            using var response = await _downloadClient.GetAsync(image.ImageUri, cancellationToken);
+
+            using var form = new MultipartFormDataContent();
+            form.Add(new StringContent(model), "model");
+            form.Add(new StringContent(prompt.Trim()), "prompt");
+            form.Add(new StringContent("1"), "n");
+            foreach (var context in contextImages)
+            {
+                if (context.Data.Length == 0) throw new ArgumentException("The context image is empty.", nameof(contextImages));
+                var imageContent = new ByteArrayContent(context.Data);
+                imageContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(context.MimeType);
+                form.Add(imageContent, "image[]", $"reference{MimeTypeExtension(context.MimeType)}");
+            }
+
+            using var editRequest = new HttpRequestMessage(HttpMethod.Post, $"{_imageApiBaseUrl}/edits") { Content = form };
+            return await SendImageRequestAsync(editRequest, cancellationToken);
+        }
+
+        private async Task<GeneratedImage> SendImageRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
+            using var response = await _downloadClient.SendAsync(request, cancellationToken);
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                try
+                {
+                    var error = JsonNode.Parse(responseBody)?["error"]?["message"]?.GetValue<string>();
+                    throw new InvalidOperationException(error ?? $"The image API returned HTTP {(int)response.StatusCode}.");
+                }
+                catch (JsonException)
+                {
+                    throw new InvalidOperationException($"The image API returned HTTP {(int)response.StatusCode}.");
+                }
+            }
+
+            var imageBase64 = JsonNode.Parse(responseBody)?["data"]?[0]?["b64_json"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(imageBase64)) throw new InvalidOperationException("The image API returned no image data.");
+            return new GeneratedImage(Convert.FromBase64String(imageBase64), "image/png");
+        }
+
+        private async Task<GeneratedImage> GenerateQwenImageAsync(
+            string model,
+            string prompt,
+            IReadOnlyList<GeneratedImage> contextImages,
+            CancellationToken cancellationToken)
+        {
+            if (model.Contains("image-plus", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(model, "qwen-image", StringComparison.OrdinalIgnoreCase))
+            {
+                if (contextImages.Count > 0)
+                    throw new NotSupportedException("The selected Qwen model generates images from text only. Choose a qwen-image-2.0 or qwen-image-3.0 model to edit images.");
+                return await GenerateQwenAsyncTextToImageAsync(model, prompt, cancellationToken);
+            }
+
+            var content = new JsonArray();
+            foreach (var context in contextImages)
+            {
+                if (context.Data.Length == 0) throw new ArgumentException("The context image is empty.", nameof(contextImages));
+                content.Add(new JsonObject
+                {
+                    ["image"] = $"data:{context.MimeType};base64,{Convert.ToBase64String(context.Data)}"
+                });
+            }
+            content.Add(new JsonObject { ["text"] = prompt });
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, NativeDashScopeUrl("/services/aigc/multimodal-generation/generation"))
+            {
+                Content = JsonContent.Create(new
+                {
+                    model,
+                    input = new
+                    {
+                        messages = new[]
+                        {
+                            new
+                            {
+                                role = "user",
+                                content
+                            }
+                        }
+                    },
+                    parameters = new { prompt_extend = true, watermark = false }
+                })
+            };
+            var imageUrl = await SendQwenRequestAsync(request, cancellationToken);
+            return await DownloadGeneratedImageAsync(imageUrl, cancellationToken);
+        }
+
+        private async Task<GeneratedImage> GenerateQwenAsyncTextToImageAsync(
+            string model,
+            string prompt,
+            CancellationToken cancellationToken)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, NativeDashScopeUrl("/services/aigc/text2image/image-synthesis"))
+            {
+                Content = JsonContent.Create(new
+                {
+                    model,
+                    input = new { prompt },
+                    parameters = new { n = 1, prompt_extend = true, watermark = false }
+                })
+            };
+            request.Headers.Add("X-DashScope-Async", "enable");
+            var taskId = await SendQwenTaskCreationAsync(request, cancellationToken);
+            var deadline = DateTimeOffset.UtcNow.AddMinutes(2);
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+                using var statusRequest = new HttpRequestMessage(HttpMethod.Get, NativeDashScopeUrl($"/tasks/{taskId}"));
+                var imageUrl = await ReadQwenTaskStatusAsync(statusRequest, cancellationToken);
+                if (imageUrl is not null) return await DownloadGeneratedImageAsync(imageUrl, cancellationToken);
+            }
+            throw new TimeoutException("Qwen image generation did not finish within two minutes.");
+        }
+
+        private async Task<string> SendQwenRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var root = await SendAuthorizedJsonRequestAsync(request, cancellationToken);
+            var imageUrl = root["output"]?["choices"]?[0]?["message"]?["content"]?[0]?["image"]?.GetValue<string>();
+            return !string.IsNullOrWhiteSpace(imageUrl)
+                ? imageUrl
+                : throw new InvalidOperationException("Qwen returned no image URL.");
+        }
+
+        private async Task<string> SendQwenTaskCreationAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var root = await SendAuthorizedJsonRequestAsync(request, cancellationToken);
+            var taskId = root["output"]?["task_id"]?.GetValue<string>();
+            return !string.IsNullOrWhiteSpace(taskId)
+                ? taskId
+                : throw new InvalidOperationException("Qwen returned no image task ID.");
+        }
+
+        private async Task<string?> ReadQwenTaskStatusAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var root = await SendAuthorizedJsonRequestAsync(request, cancellationToken);
+            var output = root["output"] as JsonObject;
+            var status = output?["task_status"]?.GetValue<string>();
+            if (string.Equals(status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase))
+                return output?["results"]?[0]?["url"]?.GetValue<string>()
+                    ?? throw new InvalidOperationException("Qwen completed the image task without an image URL.");
+            if (string.Equals(status, "FAILED", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(status, "CANCELED", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(output?["message"]?.GetValue<string>() ?? "Qwen image generation failed.");
+            return null;
+        }
+
+        private async Task<JsonObject> SendAuthorizedJsonRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
+            using var response = await _downloadClient.SendAsync(request, cancellationToken);
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            JsonObject root;
+            try
+            {
+                root = JsonNode.Parse(responseBody) as JsonObject
+                    ?? throw new InvalidOperationException("Qwen returned an invalid JSON response.");
+            }
+            catch (JsonException exception)
+            {
+                throw new InvalidOperationException("Qwen returned an invalid JSON response.", exception);
+            }
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException(root["message"]?.GetValue<string>() ?? root["error"]?["message"]?.GetValue<string>() ?? $"The Qwen image API returned HTTP {(int)response.StatusCode}.");
+            return root;
+        }
+
+        private async Task<GeneratedImage> DownloadGeneratedImageAsync(string imageUrl, CancellationToken cancellationToken)
+        {
+            using var response = await _downloadClient.GetAsync(imageUrl, cancellationToken);
             response.EnsureSuccessStatusCode();
             return new GeneratedImage(await response.Content.ReadAsByteArrayAsync(cancellationToken), response.Content.Headers.ContentType?.MediaType ?? "image/png");
         }
+
+        private string NativeDashScopeUrl(string path) => $"{_nativeDashScopeBaseUrl}{path}";
+
+        private static bool IsQwenImageModel(string model) =>
+            model.StartsWith("qwen-image", StringComparison.OrdinalIgnoreCase);
 
         // Section: HTTP
         private static string TruncateFunctionResult(string value) => value.Length <= MaximumFunctionResultCharacters

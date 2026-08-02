@@ -32,6 +32,7 @@
         window.chrome.webview.postMessage('debug:HTML bootstrap started');
         let pendingHostMessage = null;
         let changingModel = false;
+        let codyAgentAvailableContextKey = null;
         window.addEventListener('keydown', function (event) {
             if (!event.ctrlKey || event.key !== '`') return;
             event.preventDefault();
@@ -59,6 +60,8 @@
                         message.value || '',
                         message.language || 'plaintext',
                         uri);
+                } else if (model.getValue() !== (message.value || '')) {
+                    model.setValue(message.value || '');
                 }
                 window.codyEditor.setModel(model);
                 monaco.editor.setTheme(message.theme || 'vs-dark');
@@ -123,6 +126,8 @@
                 const editor = window.codyDiffEditor || window.codyEditor;
                 editor.layout();
                 editor.focus();
+            } else if (message.type === 'setAgentAvailability') {
+                if (codyAgentAvailableContextKey) codyAgentAvailableContextKey.set(!!message.available);
             }
         }
         function documentUri(documentId) {
@@ -172,10 +177,12 @@
                 renderValidationDecorations: 'off',
                 scrollBeyondLastLine: false,
                 smoothScrolling: true,
+                contextmenu: true,
                 bracketPairColorization: { enabled: true },
                 guides: { bracketPairs: true, indentation: true },
                 padding: { top: 10, bottom: 10 }
             });
+            codyAgentAvailableContextKey = window.codyEditor.createContextKey('codyAgentAvailable', false);
             window.chrome.webview.postMessage('debug:Monaco editor instance created');
             window.codyEditor.onDidChangeModelContent(function () {
                 if (!changingModel && window.codyEditor.getModel()) {
@@ -187,6 +194,44 @@
                 if (!window.codyEditor.getModel()) return;
                 const id = decodeURIComponent(window.codyEditor.getModel().uri.path.substring(1));
                 window.chrome.webview.postMessage('save:' + encodeURIComponent(id));
+            });
+            window.codyEditor.addAction({
+                id: 'cody.askAboutSelection',
+                label: 'Ask Cody about this selection',
+                contextMenuGroupId: 'navigation',
+                contextMenuOrder: 0,
+                precondition: 'editorHasSelection && codyAgentAvailable',
+                run: function (editor) {
+                    const model = editor.getModel();
+                    const selection = editor.getSelection();
+                    if (!model || !selection || selection.isEmpty()) return;
+                    const firstContextLine = Math.max(1, selection.startLineNumber - 3);
+                    const lastContextLine = Math.min(model.getLineCount(), selection.endLineNumber + 3);
+                    const contextRange = {
+                        startLineNumber: firstContextLine,
+                        startColumn: 1,
+                        endLineNumber: lastContextLine,
+                        endColumn: model.getLineMaxColumn(lastContextLine)
+                    };
+                    const contextLines = model.getValueInRange(contextRange)
+                        .split(/\r?\n/)
+                        .map((line, index) => {
+                            const lineNumber = firstContextLine + index;
+                            const marker = lineNumber >= selection.startLineNumber && lineNumber <= selection.endLineNumber ? '>' : ' ';
+                            return `${marker} ${String(lineNumber).padStart(4, ' ')} | ${line}`;
+                        })
+                        .join('\n');
+                    const context = {
+                        DocumentId: decodeURIComponent(model.uri.path.substring(1)),
+                        SelectedText: model.getValueInRange(selection),
+                        ContextText: contextLines.slice(0, 1024),
+                        StartLine: selection.startLineNumber,
+                        StartColumn: selection.startColumn,
+                        EndLine: selection.endLineNumber,
+                        EndColumn: selection.endColumn
+                    };
+                    window.chrome.webview.postMessage('askCody:' + encodeURIComponent(JSON.stringify(context)));
+                }
             });
             window.chrome.webview.postMessage('ready');
             if (pendingHostMessage) {

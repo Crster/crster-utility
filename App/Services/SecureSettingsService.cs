@@ -190,7 +190,7 @@ namespace App.Services
             new("ai.embeddingModel", "Embedding model", "text-embedding-3-small", value => value.EmbeddingModel),
             new("ai.lowCostModel", "Low cost model", "gpt-4.1-mini", value => value.LowCostModel),
             new("ai.highCostModel", "High cost model", "gpt-4.1", value => value.HighCostModel),
-            new("ai.artistModel", "Artist model", "gpt-image-1", value => value.ArtistModel),
+            new("ai.artistModel", "Artist model", "gpt-image-2", value => value.ArtistModel),
             new("technician.workspace", "Technician workspace", "", value => value.TechnicianWorkspace),
             new("cody.workspace", "Cody workspace", "", value => value.CodyWorkspace),
             new("cody.agentProvider", "Cody agent provider", "Codex", value => value.CodyAgentProvider),
@@ -211,7 +211,7 @@ namespace App.Services
         public string EmbeddingModel { get; set; } = "text-embedding-3-small";
         public string LowCostModel { get; set; } = "gpt-4.1-mini";
         public string HighCostModel { get; set; } = "gpt-4.1";
-        public string ArtistModel { get; set; } = "gpt-image-1";
+        public string ArtistModel { get; set; } = "gpt-image-2";
         public string TechnicianWorkspace { get; set; } = string.Empty;
         public string CodyWorkspace { get; set; } = string.Empty;
         public string CodyAgentProvider { get; set; } = "Codex";
@@ -239,6 +239,8 @@ namespace App.Services
             result.LowCostModel = Text("ai.lowCostModel", result.LowCostModel);
             result.HighCostModel = Text("ai.highCostModel", result.HighCostModel);
             result.ArtistModel = Text("ai.artistModel", result.ArtistModel);
+            if (string.Equals(result.ArtistModel, "gpt-image-1", StringComparison.OrdinalIgnoreCase))
+                result.ArtistModel = "gpt-image-2";
             result.TechnicianWorkspace = Text("technician.workspace", result.TechnicianWorkspace);
             result.CodyWorkspace = Text("cody.workspace", result.CodyWorkspace);
             result.CodyAgentProvider = Text("cody.agentProvider", result.CodyAgentProvider);

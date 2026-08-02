@@ -113,6 +113,7 @@ namespace App.Pages
         private readonly List<WorkspaceFileItem> _workspaceFiles = [];
         private readonly List<WorkspaceTreeEntry> _workspaceRoots = [];
         private readonly HashSet<string> _loadedWorkspaceDirectories = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _pendingWorkspaceChanges = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<TabViewItem, EditorDocument> _editors = [];
         private readonly Dictionary<TabViewItem, Process> _terminalCommandProcesses = [];
         private readonly Dictionary<TabViewItem, EasyTerminalControl> _additionalTerminalSessions = [];
@@ -169,6 +170,7 @@ namespace App.Pages
             MonacoPreloadHost.Children.Add(_sharedEditor);
             _sharedEditor.ContentChanged += SharedEditor_ContentChanged;
             _sharedEditor.SaveRequested += SharedEditor_SaveRequested;
+            _sharedEditor.AskCodyRequested += Editor_AskCodyRequested;
             _sharedEditor.TerminalToggleRequested += Editor_TerminalToggleRequested;
             Loaded += CodyPage_Loaded;
             Unloaded += CodyPage_Unloaded;
@@ -193,6 +195,7 @@ namespace App.Pages
             LoadWorkspaceCommands();
             LoadAvailableTerminalShells();
             RefreshWorkspace();
+            ConfigureWorkspaceWatcher();
             ShowAgentSelection();
             _ = _sharedEditor.PreloadAsync();
             await RefreshWorkspaceFilesAsync(notifyOnCompletion: true);
@@ -238,6 +241,7 @@ namespace App.Pages
             LoadWorkspaceCommands();
             LoadAvailableTerminalShells();
             RefreshWorkspace();
+            ConfigureWorkspaceWatcher();
             ShowAgentSelection();
             await RefreshWorkspaceFilesAsync(notifyOnCompletion: true);
         }
@@ -269,6 +273,7 @@ namespace App.Pages
 
         private async Task RefreshWorkspaceFilesAsync(bool showLoading = true, bool notifyOnCompletion = false)
         {
+            var expandedDirectories = GetExpandedWorkspaceDirectories();
             _workspaceFiles.Clear();
             _workspaceRoots.Clear();
             _loadedWorkspaceDirectories.Clear();
@@ -287,14 +292,31 @@ namespace App.Pages
                 _workspaceGitStates = await Task.Run(() => ReadGitStates(workspace));
                 var rootEntries = await Task.Run(() => ReadWorkspaceDirectory(workspace, workspace, _workspaceGitStates));
                 foreach (var entry in rootEntries.Entries)
-                {
                     _workspaceRoots.Add(entry);
+
+                if (ChangesButton.IsChecked == true)
+                {
+                    var changes = await Task.Run(() => EnumerateWorkspaceFiles(workspace)
+                        .Where(item => !IsExcludedFromPathSearch(item.FullPath))
+                        .Where(item => ResolveGitState(item.RelativePath, _workspaceGitStates) is GitFileState.Created or GitFileState.Modified)
+                        .ToList());
+                    _workspaceFiles.AddRange(changes);
+                    ShowSearchResults(changes);
+                    FileStatusText.Text = changes.Count == 0
+                        ? "No new or modified files."
+                        : $"{changes.Count:N0} changed files.";
+                    return;
+                }
+
+                foreach (var entry in _workspaceRoots)
+                {
                     var node = CreateTreeNode(entry);
                     WorkspaceTree.RootNodes.Add(node);
                     _ = LoadSystemIconAsync(node, entry);
                     await Task.Yield();
                 }
                 _workspaceFiles.AddRange(rootEntries.Files);
+                await RestoreExpandedWorkspaceDirectoriesAsync(expandedDirectories);
                 FileStatusText.Text = $"{_workspaceFiles.Count:N0} files · Git status included";
                 if (notifyOnCompletion)
                     CompletionNotificationService.ShowWhenMainWindowIsInactive(
@@ -348,19 +370,30 @@ namespace App.Pages
             _workspaceRefreshCancellation?.Cancel();
             _workspaceRefreshCancellation?.Dispose();
             _workspaceRefreshCancellation = null;
+            _pendingWorkspaceChanges.Clear();
             _workspaceWatcher?.Dispose();
             _workspaceWatcher = null;
         }
 
-        private void WorkspaceWatcher_Changed(object sender, FileSystemEventArgs e) => QueueWorkspaceRefresh();
+        private void WorkspaceWatcher_Changed(object sender, FileSystemEventArgs e) => QueueWorkspaceRefresh(e.FullPath);
 
-        private void WorkspaceWatcher_Renamed(object sender, RenamedEventArgs e) => QueueWorkspaceRefresh();
-
-        private void WorkspaceWatcher_Error(object sender, ErrorEventArgs e) => QueueWorkspaceRefresh();
-
-        private void QueueWorkspaceRefresh()
+        private void WorkspaceWatcher_Renamed(object sender, RenamedEventArgs e)
         {
-            _ = DispatcherQueue.TryEnqueue(ScheduleWorkspaceRefresh);
+            QueueWorkspaceRefresh(e.OldFullPath);
+            QueueWorkspaceRefresh(e.FullPath);
+        }
+
+        private void WorkspaceWatcher_Error(object sender, ErrorEventArgs e) =>
+            _ = DispatcherQueue.TryEnqueue(() => FileStatusText.Text = "Workspace changes could not be fully tracked.");
+
+        private void QueueWorkspaceRefresh(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
+            _ = DispatcherQueue.TryEnqueue(() =>
+            {
+                _pendingWorkspaceChanges.Add(Path.GetFullPath(path));
+                ScheduleWorkspaceRefresh();
+            });
         }
 
         private void ScheduleWorkspaceRefresh()
@@ -374,8 +407,20 @@ namespace App.Pages
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(10), token);
-                if (!token.IsCancellationRequested) await RefreshWorkspaceFilesAsync(false);
+                await Task.Delay(TimeSpan.FromMilliseconds(750), token);
+                if (!token.IsCancellationRequested)
+                {
+                    var changedPaths = _pendingWorkspaceChanges.ToArray();
+                    _pendingWorkspaceChanges.Clear();
+                    await ApplyWorkspaceChangesAsync(changedPaths);
+                    var result = await RefreshChangedEditorDocumentsAsync();
+                    if (result is { SkippedDirtyDocuments: > 0 } or { ReloadFailures: > 0 })
+                    {
+                        FileStatusText.Text = result.SkippedDirtyDocuments > 0
+                            ? $"{result.SkippedDirtyDocuments} unsaved editor change(s) kept."
+                            : $"{result.ReloadFailures} editor reload(s) failed.";
+                    }
+                }
             }
             catch (OperationCanceledException)
             {
@@ -386,8 +431,231 @@ namespace App.Pages
                 {
                     _workspaceRefreshCancellation.Dispose();
                     _workspaceRefreshCancellation = null;
+                    if (_pendingWorkspaceChanges.Count > 0) ScheduleWorkspaceRefresh();
                 }
             }
+        }
+
+        private async Task ApplyWorkspaceChangesAsync(IEnumerable<string> changedPaths)
+        {
+            var paths = changedPaths
+                .Where(IsWorkspacePath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (paths.Count == 0) return;
+
+            _workspaceGitStates = await Task.Run(() => ReadGitStates(_settings.CodyWorkspace));
+            foreach (var path in paths)
+                ApplyWorkspacePathChange(path);
+        }
+
+        private bool IsWorkspacePath(string path)
+        {
+            if (!HasWorkspace()) return false;
+            var root = Path.GetFullPath(_settings.CodyWorkspace).TrimEnd(Path.DirectorySeparatorChar);
+            var fullPath = Path.GetFullPath(path);
+            return fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void ApplyWorkspacePathChange(string fullPath)
+        {
+            var entry = TryReadWorkspaceTreeEntry(fullPath);
+            var isChangesView = ChangesButton.IsChecked == true;
+            var existingNode = FindTreeNode(WorkspaceTree.RootNodes, fullPath);
+
+            if (entry is null
+                || isChangesView && !entry.IsDirectory && entry.GitState is not (GitFileState.Created or GitFileState.Modified))
+            {
+                RemoveWorkspaceTreeNode(WorkspaceTree.RootNodes, fullPath);
+                if (isChangesView) RemoveEmptyChangeFolders(WorkspaceTree.RootNodes);
+                UpdateWorkspaceRootEntry(fullPath, null);
+                UpdateWorkspaceFile(fullPath, null);
+                return;
+            }
+
+            if (existingNode is not null)
+            {
+                existingNode.Content = entry;
+                existingNode.HasUnrealizedChildren = entry.IsDirectory && existingNode.Children.Count == 0;
+                _ = LoadSystemIconAsync(existingNode, entry);
+            }
+            else if (isChangesView)
+            {
+                var parent = EnsureChangeViewParent(Path.GetDirectoryName(fullPath));
+                AddWorkspaceTreeNode(parent?.Children ?? WorkspaceTree.RootNodes, CreateTreeNode(entry));
+            }
+            else
+            {
+                var parentPath = Path.GetDirectoryName(fullPath);
+                if (string.Equals(parentPath, _settings.CodyWorkspace, StringComparison.OrdinalIgnoreCase))
+                    AddWorkspaceTreeNode(WorkspaceTree.RootNodes, CreateTreeNode(entry));
+                else if (parentPath is not null
+                    && _loadedWorkspaceDirectories.Contains(parentPath)
+                    && FindTreeNode(WorkspaceTree.RootNodes, parentPath) is { } parent)
+                    AddWorkspaceTreeNode(parent.Children, CreateTreeNode(entry));
+            }
+
+            UpdateWorkspaceRootEntry(fullPath, entry);
+            UpdateWorkspaceFile(fullPath, entry);
+        }
+
+        private WorkspaceTreeEntry? TryReadWorkspaceTreeEntry(string fullPath)
+        {
+            try
+            {
+                var attributes = File.GetAttributes(fullPath);
+                if (attributes.HasFlag(System.IO.FileAttributes.Hidden)) return null;
+
+                var isDirectory = attributes.HasFlag(System.IO.FileAttributes.Directory);
+                var relativePath = Path.GetRelativePath(_settings.CodyWorkspace, fullPath);
+                var gitState = ResolveGitState(relativePath, _workspaceGitStates);
+                return new WorkspaceTreeEntry(
+                    Path.GetFileName(fullPath),
+                    relativePath,
+                    fullPath,
+                    isDirectory,
+                    null,
+                    gitState,
+                    gitState == GitFileState.Ignored,
+                    isDirectory);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+
+        private TreeViewNode? EnsureChangeViewParent(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path)
+                || string.Equals(path, _settings.CodyWorkspace, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            var parent = EnsureChangeViewParent(Path.GetDirectoryName(path));
+            var existing = FindTreeNode(WorkspaceTree.RootNodes, path);
+            if (existing is not null) return existing;
+
+            var relativePath = Path.GetRelativePath(_settings.CodyWorkspace, path);
+            var gitState = ResolveGitState(relativePath, _workspaceGitStates);
+            var entry = new WorkspaceTreeEntry(
+                Path.GetFileName(path),
+                relativePath,
+                path,
+                true,
+                null,
+                gitState,
+                gitState == GitFileState.Ignored,
+                false);
+            var node = CreateTreeNode(entry);
+            node.IsExpanded = true;
+            AddWorkspaceTreeNode(parent?.Children ?? WorkspaceTree.RootNodes, node);
+            return node;
+        }
+
+        private static void AddWorkspaceTreeNode(IList<TreeViewNode> nodes, TreeViewNode node)
+        {
+            var entry = (WorkspaceTreeEntry)node.Content;
+            var index = 0;
+            while (index < nodes.Count
+                && nodes[index].Content is WorkspaceTreeEntry current
+                && (current.IsDirectory && !entry.IsDirectory
+                    || current.IsDirectory == entry.IsDirectory
+                    && string.Compare(current.Name, entry.Name, StringComparison.OrdinalIgnoreCase) <= 0))
+                index++;
+            nodes.Insert(index, node);
+            _ = LoadSystemIconAsync(node, entry);
+        }
+
+        private static bool RemoveWorkspaceTreeNode(IList<TreeViewNode> nodes, string fullPath)
+        {
+            for (var index = nodes.Count - 1; index >= 0; index--)
+            {
+                var node = nodes[index];
+                if (node.Content is WorkspaceTreeEntry entry
+                    && string.Equals(entry.FullPath, fullPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    nodes.RemoveAt(index);
+                    return true;
+                }
+                if (RemoveWorkspaceTreeNode(node.Children, fullPath)) return true;
+            }
+            return false;
+        }
+
+        private static void RemoveEmptyChangeFolders(IList<TreeViewNode> nodes)
+        {
+            for (var index = nodes.Count - 1; index >= 0; index--)
+            {
+                var node = nodes[index];
+                RemoveEmptyChangeFolders(node.Children);
+                if (node.Content is WorkspaceTreeEntry { IsDirectory: true } && node.Children.Count == 0)
+                    nodes.RemoveAt(index);
+            }
+        }
+
+        private void UpdateWorkspaceRootEntry(string fullPath, WorkspaceTreeEntry? entry)
+        {
+            if (!string.Equals(Path.GetDirectoryName(fullPath), _settings.CodyWorkspace, StringComparison.OrdinalIgnoreCase)) return;
+            var index = _workspaceRoots.FindIndex(root => string.Equals(root.FullPath, fullPath, StringComparison.OrdinalIgnoreCase));
+            if (entry is null)
+            {
+                if (index >= 0) _workspaceRoots.RemoveAt(index);
+                return;
+            }
+            if (index >= 0) _workspaceRoots[index] = entry;
+            else _workspaceRoots.Add(entry);
+        }
+
+        private void UpdateWorkspaceFile(string fullPath, WorkspaceTreeEntry? entry)
+        {
+            _workspaceFiles.RemoveAll(file => string.Equals(file.FullPath, fullPath, StringComparison.OrdinalIgnoreCase));
+            if (entry is not { IsDirectory: false } || !IsTextFile(fullPath)) return;
+            try
+            {
+                if (new FileInfo(fullPath).Length <= MaximumWorkspaceFileBytes)
+                    _workspaceFiles.Add(new WorkspaceFileItem(entry.Name, entry.RelativePath, entry.FullPath));
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                Debug.WriteLine($"[Workspace] Could not update {fullPath}: {exception.Message}");
+            }
+        }
+
+        private async Task<ExternalEditorRefreshResult> RefreshChangedEditorDocumentsAsync()
+        {
+            var skippedDirtyDocuments = 0;
+            var reloadFailures = 0;
+            foreach (var (tab, document) in _editors.ToList())
+            {
+                try
+                {
+                    if (document.Kind != WorkspaceDocumentKind.Text || !File.Exists(document.FullPath)) continue;
+
+                    var lastWriteUtc = File.GetLastWriteTimeUtc(document.FullPath);
+                    if (lastWriteUtc <= document.LastWriteUtc) continue;
+                    if (document.IsDirty)
+                    {
+                        skippedDirtyDocuments++;
+                        continue;
+                    }
+
+                    var bytes = await File.ReadAllBytesAsync(document.FullPath);
+                    if (bytes.Length > MaximumWorkspaceFileBytes || !TryDecodeText(bytes, out var text)) continue;
+
+                    await (document.Editor ?? _sharedEditor).OpenDocumentAsync(
+                        document.DocumentId,
+                        text,
+                        MonacoLanguage(document.FullPath));
+                    document.SavedText = text;
+                    document.LastWriteUtc = lastWriteUtc;
+                    tab.Header = CreateEditorTabHeader(document.FullPath, document.IsPreview, false);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    reloadFailures++;
+                }
+            }
+            return new ExternalEditorRefreshResult(skippedDirtyDocuments, reloadFailures);
         }
 
         private static WorkspaceDirectoryLoad ReadWorkspaceDirectory(
@@ -933,11 +1201,20 @@ namespace App.Pages
         private async void WorkspaceTree_Expanding(TreeView sender, TreeViewExpandingEventArgs args)
         {
             if (args.Node.Content is not WorkspaceTreeEntry { IsDirectory: true } entry
-                || !string.IsNullOrWhiteSpace(FileSearchBox.Text)
-                || !_loadedWorkspaceDirectories.Add(entry.FullPath))
+                || !string.IsNullOrWhiteSpace(FileSearchBox.Text))
                 return;
 
-            SetWorkspaceLoading(true, $"Loading {entry.RelativePath}…");
+            await LoadWorkspaceDirectoryAsync(args.Node, entry, true);
+        }
+
+        private async Task LoadWorkspaceDirectoryAsync(
+            TreeViewNode node,
+            WorkspaceTreeEntry entry,
+            bool showLoading)
+        {
+            if (!_loadedWorkspaceDirectories.Add(entry.FullPath)) return;
+
+            if (showLoading) SetWorkspaceLoading(true, $"Loading {entry.RelativePath}…");
             try
             {
                 await Task.Delay(125);
@@ -945,26 +1222,61 @@ namespace App.Pages
                     _settings.CodyWorkspace,
                     entry.FullPath,
                     _workspaceGitStates));
-                args.Node.HasUnrealizedChildren = false;
+                node.HasUnrealizedChildren = false;
                 foreach (var child in children.Entries)
                 {
                     var childNode = CreateTreeNode(child);
-                    args.Node.Children.Add(childNode);
+                    node.Children.Add(childNode);
                     _ = LoadSystemIconAsync(childNode, child);
                     await Task.Yield();
                 }
                 _workspaceFiles.AddRange(children.Files);
-                FileStatusText.Text = $"{_workspaceFiles.Count:N0} files · Git status included";
+                if (showLoading) FileStatusText.Text = $"{_workspaceFiles.Count:N0} files · Git status included";
             }
             catch (Exception exception)
             {
                 _loadedWorkspaceDirectories.Remove(entry.FullPath);
-                FileStatusText.Text = $"Could not load {entry.RelativePath}: {exception.Message}";
+                if (showLoading) FileStatusText.Text = $"Could not load {entry.RelativePath}: {exception.Message}";
             }
             finally
             {
-                SetWorkspaceLoading(false);
+                if (showLoading) SetWorkspaceLoading(false);
             }
+        }
+
+        private HashSet<string> GetExpandedWorkspaceDirectories() =>
+            EnumerateExpandedWorkspaceDirectories(WorkspaceTree.RootNodes)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        private static IEnumerable<string> EnumerateExpandedWorkspaceDirectories(IEnumerable<TreeViewNode> nodes)
+        {
+            foreach (var node in nodes)
+            {
+                if (node.Content is WorkspaceTreeEntry { IsDirectory: true } entry && node.IsExpanded)
+                    yield return entry.FullPath;
+                foreach (var path in EnumerateExpandedWorkspaceDirectories(node.Children))
+                    yield return path;
+            }
+        }
+
+        private async Task RestoreExpandedWorkspaceDirectoriesAsync(IReadOnlySet<string> expandedDirectories)
+        {
+            foreach (var node in WorkspaceTree.RootNodes)
+                await RestoreExpandedWorkspaceDirectoryAsync(node, expandedDirectories);
+        }
+
+        private async Task RestoreExpandedWorkspaceDirectoryAsync(
+            TreeViewNode node,
+            IReadOnlySet<string> expandedDirectories)
+        {
+            if (node.Content is not WorkspaceTreeEntry { IsDirectory: true } entry
+                || !expandedDirectories.Contains(entry.FullPath))
+                return;
+
+            await LoadWorkspaceDirectoryAsync(node, entry, false);
+            node.IsExpanded = true;
+            foreach (var child in node.Children)
+                await RestoreExpandedWorkspaceDirectoryAsync(child, expandedDirectories);
         }
 
         private async void WorkspaceTree_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
@@ -1066,9 +1378,13 @@ namespace App.Pages
                 showDiff.Click += async (_, _) => await ShowContextDiffAsync();
                 menu.Items.Add(showDiff);
             }
+            menu.Items.Add(new MenuFlyoutSeparator());
+            var askCody = new MenuFlyoutItem { Text = "Ask Cody about this" };
+            askCody.IsEnabled = HasActiveAgent();
+            askCody.Click += async (_, _) => await AskCodyAboutWorkspaceEntryAsync();
+            menu.Items.Add(askCody);
             if (_contextTreeEntry.IsDirectory)
             {
-                menu.Items.Add(new MenuFlyoutSeparator());
                 var newFile = new MenuFlyoutItem { Text = "New file" };
                 newFile.Click += async (_, _) => await CreateWorkspaceEntryAsync(false);
                 menu.Items.Add(newFile);
@@ -1151,6 +1467,7 @@ namespace App.Pages
 
             var workingCopy = await File.ReadAllTextAsync(entry.FullPath);
             var viewer = new global::App.Controls.MonacoEditorControl();
+            viewer.AskCodyRequested += Editor_AskCodyRequested;
             viewer.TerminalToggleRequested += Editor_TerminalToggleRequested;
             var tab = new TabViewItem
             {
@@ -1242,6 +1559,19 @@ namespace App.Pages
             var data = new DataPackage();
             data.SetText(_contextTreeEntry.FullPath);
             Clipboard.SetContent(data);
+        }
+
+        private async Task AskCodyAboutWorkspaceEntryAsync()
+        {
+            if (!HasActiveAgent()) return;
+            var entry = _contextTreeEntry;
+            if (entry is null) return;
+
+            var entryType = entry.IsDirectory ? "folder" : "file";
+            var context =
+                $"Selected {entryType}: {entry.RelativePath}\r\n" +
+                $"Full path: {entry.FullPath}";
+            await ShowAgentPromptAsync($"Ask Cody about {entry.Name}", context);
         }
 
         private async Task PasteWorkspaceEntryAsync()
@@ -1865,6 +2195,7 @@ namespace App.Pages
                     CodyChatHost.Content = AgentCliSurface;
                 }
 
+                HomeTab.Visibility = Visibility.Collapsed;
                 CodyChatDock.Visibility = Visibility.Visible;
                 EditorColumn.Width = new GridLength(1, GridUnitType.Star);
                 var availableWidth = ActualWidth > 0 ? ActualWidth : 1100;
@@ -1878,9 +2209,15 @@ namespace App.Pages
                 HomeTab.Content = AgentCliSurface;
             }
 
+            HomeTab.Visibility = Visibility.Visible;
             CodyChatDock.Visibility = Visibility.Collapsed;
             EditorColumn.Width = new GridLength(1, GridUnitType.Star);
             CodyChatColumn.Width = new GridLength(0);
+            if (!ReferenceEquals(EditorTabs.SelectedItem, HomeTab))
+                EditorTabs.SelectedItem = HomeTab;
+            _ = DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                ResizeAgentCliTerminal);
         }
 
         private void AgentCliWelcome_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -1968,6 +2305,22 @@ namespace App.Pages
 
         private void Editor_TerminalToggleRequested(object? sender, EventArgs e) => ToggleTerminal();
 
+        private async void Editor_AskCodyRequested(object? sender, global::App.Controls.EditorSelectionContext selection)
+        {
+            if (!HasActiveAgent()) return;
+            var fileName = _editors.Values.FirstOrDefault(document =>
+                string.Equals(document.DocumentId, selection.DocumentId, StringComparison.OrdinalIgnoreCase))?.RelativePath
+                ?? selection.DocumentId;
+            var context =
+                $"File: {fileName}\r\n" +
+                $"Selection: lines {selection.StartLine}:{selection.StartColumn}–" +
+                $"{selection.EndLine}:{selection.EndColumn}\r\n\r\n" +
+                "Selected text:\r\n" + selection.SelectedText + "\r\n\r\n" +
+                "Nearby lines:\r\n" +
+                (string.IsNullOrEmpty(selection.ContextText) ? selection.SelectedText : selection.ContextText);
+            await ShowAgentPromptAsync("Ask Cody about the selected code", context);
+        }
+
         private async Task SendPromptAsync(string? promptOverride = null)
         {
             var prompt = (promptOverride ?? PromptBox.Text).Trim();
@@ -2020,7 +2373,6 @@ namespace App.Pages
                 _agentCancellation = null;
                 SetBusy(false);
                 RenderSession();
-                await RefreshWorkspaceFilesAsync();
             }
         }
 
@@ -3096,7 +3448,6 @@ namespace App.Pages
                         "Command complete",
                         $"{command.Name} finished with exit code {process.ExitCode}.");
                     process.Dispose();
-                    _ = RefreshWorkspaceFilesAsync();
                 });
                 process.Start();
                 _terminalCommandProcesses.Add(tab, process);
@@ -3119,7 +3470,12 @@ namespace App.Pages
         private MenuFlyout CreateTerminalCommandTabMenu(CodyCommand command, TextBlock output)
         {
             var menu = new MenuFlyout();
-            var requestFix = new MenuFlyoutItem { Text = "Request a fix" };
+            var requestFix = new MenuFlyoutItem
+            {
+                Text = "Request a fix",
+                IsEnabled = HasActiveAgent()
+            };
+            menu.Opening += (_, _) => requestFix.IsEnabled = HasActiveAgent();
             requestFix.Click += async (_, _) => await RequestFixForCommandAsync(command, output.Text);
             menu.Items.Add(requestFix);
             return menu;
@@ -3127,6 +3483,7 @@ namespace App.Pages
 
         private async Task RequestFixForCommandAsync(CodyCommand command, string output)
         {
+            if (!HasActiveAgent()) return;
             if (_isBusy)
             {
                 await ShowMessageAsync("Cody is busy", "Wait for the current request to finish before requesting a fix.");
@@ -3436,6 +3793,7 @@ namespace App.Pages
                 };
                 _agentCliTerminal = terminal;
                 AgentCliHost.Children.Add(terminal);
+                UpdateAgentAvailability();
                 ResizeAgentCliTerminal();
                 _ = DispatcherQueue.TryEnqueue(() => terminal.Terminal.Focus(FocusState.Programmatic));
             }
@@ -3502,15 +3860,31 @@ namespace App.Pages
             EnsureAgentCliSession();
             if (_agentCliTerminal is not { } terminal) return;
 
-            var singleLinePrompt = Regex.Replace(prompt, @"\s+", " ").Trim();
-            terminal.ConPTYTerm.WriteToTerm($"{singleLinePrompt}\r");
-            _ = DispatcherQueue.TryEnqueue(() => terminal.Terminal.Focus(FocusState.Programmatic));
+            var formattedPrompt = FormatAgentCliPrompt(prompt);
+            terminal.ConPTYTerm.WriteToTerm(formattedPrompt);
+            _ = DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                () =>
+                {
+                    if (!ReferenceEquals(_agentCliTerminal, terminal)) return;
+                    terminal.ConPTYTerm.WriteToTerm("\r");
+                    terminal.Terminal.Focus(FocusState.Programmatic);
+                });
         }
+
+        private static string FormatAgentCliPrompt(string prompt) =>
+            string.Join(
+                " | ",
+                prompt.Replace("\r\n", "\n", StringComparison.Ordinal)
+                    .Replace('\r', '\n')
+                    .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(line => Regex.Replace(line, @"\s+", " ")));
 
         private void CancelAgentCliSession()
         {
             var terminal = _agentCliTerminal;
             _agentCliTerminal = null;
+            UpdateAgentAvailability();
             if (terminal is null) return;
 
             TermPTY? session = null;
@@ -3667,7 +4041,11 @@ namespace App.Pages
             menu.Items.Add(paste);
 
             menu.Items.Add(new MenuFlyoutSeparator());
-            var sendToCody = new MenuFlyoutItem { Text = "Send to Cody" };
+            var sendToCody = new MenuFlyoutItem
+            {
+                Text = "Send to Cody",
+                IsEnabled = HasActiveAgent()
+            };
             sendToCody.Click += async (_, _) => await SendTerminalContextToCodyAsync(terminal);
             menu.Items.Add(sendToCody);
             menu.ShowAt(TerminalPanel, new FlyoutShowOptions { Position = position });
@@ -3695,6 +4073,7 @@ namespace App.Pages
 
         private async Task SendTerminalContextToCodyAsync(EasyTerminalControl terminal)
         {
+            if (!HasActiveAgent()) return;
             if (_isBusy)
             {
                 await ShowMessageAsync("Cody is busy", "Wait for the current request to finish before sending terminal context.");
@@ -3718,6 +4097,11 @@ namespace App.Pages
             EditorTabs.SelectedItem = HomeTab;
             SendPromptToAgentCli(prompt);
         }
+
+        private bool HasActiveAgent() => _agentCliTerminal is not null;
+
+        private void UpdateAgentAvailability() =>
+            _sharedEditor.SetAgentAvailability(HasActiveAgent());
 
         private void AttachTerminalContextMenuHook(EasyTerminalControl terminal)
         {
@@ -4115,6 +4499,52 @@ namespace App.Pages
             }
         }
 
+        private async Task ShowAgentPromptAsync(string title, string context)
+        {
+            if (!HasActiveAgent()) return;
+
+            var requestBox = new TextBox
+            {
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                MinWidth = 520,
+                MinHeight = 84,
+                MaxHeight = 180,
+                Header = "What would you like Cody to do?",
+                PlaceholderText = "For example: Revert this selection to its previous version."
+            };
+            var content = new StackPanel { Spacing = 8 };
+            content.Children.Add(requestBox);
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = title,
+                Content = content,
+                PrimaryButtonText = "Ask Cody",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Primary,
+                IsPrimaryButtonEnabled = false
+            };
+            requestBox.TextChanged += (_, _) =>
+                dialog.IsPrimaryButtonEnabled = !string.IsNullOrWhiteSpace(requestBox.Text);
+
+            ContentDialogResult result;
+            HideAgentCliForPopup();
+            try
+            {
+                result = await dialog.ShowAsync();
+            }
+            finally
+            {
+                RestoreAgentCliAfterPopup();
+            }
+
+            var request = requestBox.Text.Trim();
+            if (result != ContentDialogResult.Primary || request.Length == 0 || !HasActiveAgent()) return;
+            var prompt = $"Request: {request}\r\n{context}";
+            SendPromptToAgentCli(prompt);
+        }
+
         private void HideAgentCliForPopup()
         {
             _agentCliHostWasVisibleBeforePopup = AgentCliHost.Visibility == Visibility.Visible;
@@ -4164,6 +4594,7 @@ namespace App.Pages
             };
         }
         private enum GitFileState { None, Created, Modified, Ignored }
+        private sealed record ExternalEditorRefreshResult(int SkippedDirtyDocuments, int ReloadFailures);
         private sealed record CodyCommand(string Name, string Command);
         private sealed record CodyWorkspaceSettings(
             IReadOnlyList<CodyCommand> Commands,

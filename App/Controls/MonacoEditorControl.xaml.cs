@@ -1,5 +1,7 @@
 using System;
+using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.UI;
@@ -13,6 +15,8 @@ namespace App.Controls
     {
         private TaskCompletionSource _ready = new();
         private bool _initialized;
+        private bool _agentAvailable;
+        private bool _isUnloaded;
 
         public MonacoEditorControl()
         {
@@ -20,15 +24,24 @@ namespace App.Controls
             HorizontalAlignment = HorizontalAlignment.Stretch;
             VerticalAlignment = VerticalAlignment.Stretch;
             Loaded += MonacoEditorControl_Loaded;
+            Unloaded += MonacoEditorControl_Unloaded;
             SizeChanged += MonacoEditorControl_SizeChanged;
             ActualThemeChanged += MonacoEditorControl_ActualThemeChanged;
         }
 
         public event EventHandler<string>? ContentChanged;
         public event EventHandler<string>? SaveRequested;
+        public event EventHandler<EditorSelectionContext>? AskCodyRequested;
         public event EventHandler? TerminalToggleRequested;
 
         public Task PreloadAsync() => _ready.Task;
+
+        public void SetAgentAvailability(bool available)
+        {
+            _agentAvailable = available;
+            if (_ready.Task.IsCompletedSuccessfully)
+                PostMessage(new { type = "setAgentAvailability", available });
+        }
 
         public async Task OpenDocumentAsync(string documentId, string text, string language)
         {
@@ -86,6 +99,7 @@ namespace App.Controls
 
         private async void MonacoEditorControl_Loaded(object sender, RoutedEventArgs e)
         {
+            _isUnloaded = false;
             if (_initialized) return;
             _initialized = true;
             try
@@ -93,6 +107,7 @@ namespace App.Controls
                 ApplyNativeBackground();
                 await EditorWebView.EnsureCoreWebView2Async();
                 ApplyNativeBackground();
+                EditorWebView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
                 var assets = Path.Combine(AppContext.BaseDirectory, "Assets", "Monaco");
                 EditorWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
                     "monaco.local",
@@ -131,6 +146,7 @@ namespace App.Controls
                 EditorWebView.InvalidateArrange();
                 EditorWebView.UpdateLayout();
                 PostMessage(new { type = "layout" });
+                PostMessage(new { type = "setAgentAvailability", available = _agentAvailable });
                 LoadingRing.IsActive = false;
                 LoadingRing.Visibility = Visibility.Collapsed;
                 _ = DispatcherQueue.TryEnqueue(() =>
@@ -155,14 +171,32 @@ namespace App.Controls
                 ContentChanged?.Invoke(this, Uri.UnescapeDataString(message[8..]));
             else if (message.StartsWith("save:", StringComparison.Ordinal))
                 SaveRequested?.Invoke(this, Uri.UnescapeDataString(message[5..]));
+            else if (message.StartsWith("askCody:", StringComparison.Ordinal))
+            {
+                var selection = JsonSerializer.Deserialize<EditorSelectionContext>(
+                    Uri.UnescapeDataString(message[8..]));
+                if (selection is not null) AskCodyRequested?.Invoke(this, selection);
+            }
             else if (message == "toggleTerminal")
                 TerminalToggleRequested?.Invoke(this, EventArgs.Empty);
         }
 
         private void PostMessage(object message)
         {
-            EditorWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message));
+            if (_isUnloaded || EditorWebView.CoreWebView2 is null) return;
+
+            try
+            {
+                EditorWebView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message));
+            }
+            catch (COMException exception) when (
+                exception.HResult is unchecked((int)0x8007139F) or unchecked((int)0x80010108))
+            {
+                Debug.WriteLine($"[Monaco] Ignored WebView2 shutdown message: {exception.Message}");
+            }
         }
+
+        private void MonacoEditorControl_Unloaded(object sender, RoutedEventArgs e) => _isUnloaded = true;
 
         private void MonacoEditorControl_ActualThemeChanged(FrameworkElement sender, object args)
         {
@@ -190,4 +224,13 @@ namespace App.Controls
             PostMessage(new { type = "layout" });
         }
     }
+
+    internal sealed record EditorSelectionContext(
+        string DocumentId,
+        string SelectedText,
+        int StartLine,
+        int StartColumn,
+        int EndLine,
+        int EndColumn,
+        string ContextText = "");
 }
