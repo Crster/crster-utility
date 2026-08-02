@@ -6,7 +6,6 @@ using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.ApplicationModel.DataTransfer;
@@ -17,6 +16,7 @@ namespace App.Services
     internal sealed class SecretaryToolService : IDisposable
     {
         private const int MaximumResults = 20;
+        private const double MinimumSearchSimilarity = 0.45;
         private readonly SecretaryMemoryService _memory;
         private readonly NotebookDatabaseService _notebook = new();
         private readonly TodoRepository _todos = new();
@@ -26,9 +26,9 @@ namespace App.Services
 
         public static JsonArray CreateDeclarations() => new()
         {
-            Function("search_memory", "Search saved notes, memos, and todos with a case-insensitive .NET regular expression.", Props(("search_pattern", String("Focused .NET regular expression matched against saved text."))), "search_pattern"),
+            Function("search_memory", "Search saved notes, memos, and todos by semantic meaning. Use a concise natural-language keyword or phrase.", Props(("search_keyword", String("Natural-language keyword or phrase to search for."))), "search_keyword"),
             Function("save_note", "Save a note the user explicitly asks to keep.", Props(("note_text", String("Exact note content to save."))), "note_text"),
-            Function("save_memo", "Use only to remember an explicit, durable user detail that will improve future help. Never save secrets, credentials, guesses, or inferred claims.", Props(("memo_topic", MemoTopic()), ("memo_text", String("Exact user-provided detail to remember."))), "memo_topic", "memo_text"),
+            Function("save_memo", "Use only to remember an explicit, durable user detail that will improve future help. Never save secrets, credentials, guesses, or inferred claims.", Props(("memo_text", String("Exact user-provided detail to remember."))), "memo_text"),
             Function("remove_memo", "Forget one saved memo identified by its key. Search memory first when the key is unknown.", Props(("memo_key", String("Exact memo key returned by search_memory."))), "memo_key"),
             Function("save_todo", "Save a todo the user explicitly asks to keep. Category defaults to General.", Props(("todo_text", String("Task text to save.")), ("category_name", String("Optional category name.")), ("notification_cron", String("Optional five-field cron expression interpreted in local time."))), "todo_text"),
             Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", DataKindSchema())), "context_type")
@@ -36,7 +36,7 @@ namespace App.Services
 
         public static JsonArray CreateReadOnlyDeclarations() => new()
         {
-            Function("search_memory", "Search saved notes, memos, and todos with a case-insensitive .NET regular expression.", Props(("search_pattern", String("Focused .NET regular expression matched against saved text."))), "search_pattern"),
+            Function("search_memory", "Search saved notes, memos, and todos by semantic meaning. Use a concise natural-language keyword or phrase.", Props(("search_keyword", String("Natural-language keyword or phrase to search for."))), "search_keyword"),
             Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", DataKindSchema())), "context_type")
         };
 
@@ -46,9 +46,9 @@ namespace App.Services
             {
                 return name switch
                 {
-                    "search_memory" => await SearchLocalKnowledgeAsync(RequiredString(arguments, "search_pattern"), token),
+                    "search_memory" => await SearchLocalKnowledgeAsync(RequiredString(arguments, "search_keyword"), token),
                     "save_note" => await SaveNoteAsync(RequiredString(arguments, "note_text"), token),
-                    "save_memo" => await WriteMemoAsync(RequiredString(arguments, "memo_topic"), RequiredString(arguments, "memo_text"), token),
+                    "save_memo" => await WriteMemoAsync(RequiredString(arguments, "memo_text"), token),
                     "remove_memo" => DeleteMemo(RequiredString(arguments, "memo_key")),
                     "save_todo" => await WriteTodoAsync(RequiredString(arguments, "todo_text"), OptionalString(arguments, "category_name") is { Length: > 0 } category ? category : "General", OptionalString(arguments, "notification_cron"), token),
                     "get_local_context" => await GetDataAsync(RequiredString(arguments, "context_type"), token),
@@ -67,56 +67,75 @@ namespace App.Services
             return Ok("Saved the note.", new JsonObject { ["key"] = note.Key });
         }
 
-        private Task<ToolResult> SearchLocalKnowledgeAsync(string regexPattern, CancellationToken token)
+        private async Task<ToolResult> SearchLocalKnowledgeAsync(string keyword, CancellationToken token)
         {
-            token.ThrowIfCancellationRequested();
-            var regex = new Regex(regexPattern, RegexOptions.IgnoreCase, TimeSpan.FromSeconds(2));
+            using var client = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
+            var queryEmbedding = await client.EmbedRetrievalQueryAsync(keyword, token);
             var matches = new List<(DateTime Timestamp, JsonObject Item)>();
             foreach (var note in _memory.ListNotes())
             {
-                if (!regex.IsMatch(note.Value)) continue;
-                matches.Add((note.Timestamp, new JsonObject
+                AddSemanticMatch(matches, note.Timestamp, note.Embedding, new JsonObject
                 {
                     ["source"] = "note",
                     ["key"] = note.Id,
                     ["value"] = note.Value,
                     ["written_utc"] = note.Timestamp.ToString("O")
-                }));
+                }, queryEmbedding);
             }
 
             foreach (var memo in _memory.ListMemos())
             {
-                if (!regex.IsMatch(memo.Value)) continue;
-                matches.Add((memo.Timestamp, new JsonObject
+                AddSemanticMatch(matches, memo.Timestamp, memo.Embedding, new JsonObject
                 {
                     ["source"] = "memo",
                     ["key"] = memo.Id,
-                    ["topic"] = memo.Topic,
                     ["value"] = memo.Value,
                     ["written_utc"] = memo.Timestamp.ToString("O")
-                }));
+                }, queryEmbedding);
             }
 
             foreach (var todo in _todos.List())
             {
-                if (!regex.IsMatch(todo.Value)) continue;
                 var value = TodoJson(todo);
                 value.Insert(0, "source", "todo");
-                matches.Add((todo.CreatedAt, value));
+                AddSemanticMatch(matches, todo.CreatedAt, todo.Embedding, value, queryEmbedding);
             }
 
+            var relativeCutoff = matches.Count == 0
+                ? double.MinValue
+                : matches.Max(match => match.Item["similarity"]?.GetValue<double>() ?? double.MinValue) - 0.12;
             var items = new JsonArray(matches
-                .OrderByDescending(match => match.Timestamp)
+                .Where(match => (match.Item["similarity"]?.GetValue<double>() ?? double.MinValue) >= relativeCutoff)
+                .OrderByDescending(match => match.Item["similarity"]?.GetValue<double>() ?? double.MinValue)
+                .ThenByDescending(match => match.Timestamp)
                 .Take(MaximumResults)
-                .Select(match => (JsonNode)match.Item)
+                .Select(match =>
+                {
+                    match.Item.Remove("similarity");
+                    return (JsonNode)match.Item;
+                })
                 .ToArray());
-            return Task.FromResult(Ok($"Found {items.Count} saved result(s).", new JsonObject { ["items"] = items }));
+            return Ok($"Found {items.Count} saved result(s).", new JsonObject { ["items"] = items });
         }
 
-        private async Task<ToolResult> WriteMemoAsync(string topic, string value, CancellationToken token)
+        private static void AddSemanticMatch(
+            List<(DateTime Timestamp, JsonObject Item)> matches,
+            DateTime timestamp,
+            byte[] embedding,
+            JsonObject item,
+            float[] queryEmbedding)
         {
-            var memo = await _memory.WriteMemoAsync(topic, value, token);
-            return Ok("Saved the memo.", new JsonObject { ["key"] = memo.Id, ["topic"] = memo.Topic });
+            if (embedding.Length == 0) return;
+            var score = NotebookDatabaseService.Cosine(queryEmbedding, NotebookDatabaseService.BytesToFloats(embedding));
+            if (score < MinimumSearchSimilarity) return;
+            item["similarity"] = score;
+            matches.Add((timestamp, item));
+        }
+
+        private async Task<ToolResult> WriteMemoAsync(string value, CancellationToken token)
+        {
+            var memo = await _memory.WriteMemoAsync(value, token);
+            return Ok("Saved the memo.", new JsonObject { ["key"] = memo.Id });
         }
 
         private ToolResult DeleteMemo(string key) =>
@@ -244,11 +263,6 @@ namespace App.Services
             if (description is not null) schema["description"] = description;
             return schema;
         }
-        private static JsonObject MemoTopic() => new()
-        {
-            ["type"] = "string",
-            ["enum"] = new JsonArray("personal", "career", "knowledge", "opinion", "idea", "relationship", "guide", "milestone")
-        };
         internal static JsonObject DataKindSchema() => new()
         {
             ["type"] = "string",

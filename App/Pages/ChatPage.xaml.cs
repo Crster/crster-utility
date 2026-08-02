@@ -56,6 +56,8 @@ namespace App.Pages
         private bool _renderingContext;
         private bool _changingPersonality;
         private bool _suppressAttachmentCleanup;
+        private Border? _streamingMessageContainer;
+        private MarkdownView? _streamingMessageContent;
 
         public ChatPage()
         {
@@ -88,7 +90,7 @@ namespace App.Pages
             _client = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
             _secretaryMemory = new SecretaryMemoryService(_client);
             _secretaryTools = new SecretaryToolService(_secretaryMemory);
-            _smartTools = new SmartToolService(_client, _secretaryTools);
+            _smartTools = new SmartToolService(_secretaryTools);
             _technicianTools = new TechnicianToolService(
                 _smartTools,
                 () => _sessions[ChatPersonality.Technician].Messages
@@ -206,7 +208,17 @@ namespace App.Pages
                         ["input"] = new JsonArray(nextSteps.Select(step => step.DeepClone()).ToArray()),
                         ["tools"] = tools?.DeepClone()
                     });
-                    var result = await _client!.CreateSimpleInteractionAsync(model, Session.History, nextSteps, systemInstruction, tools, operationCancellation.Token, thinkingLevel);
+                    var usesHostedWebSearch = _personality is ChatPersonality.Smart or ChatPersonality.Technician;
+                    var result = await _client!.CreateSimpleInteractionAsync(
+                        model,
+                        Session.History,
+                        nextSteps,
+                        systemInstruction,
+                        tools,
+                        operationCancellation.Token,
+                        thinkingLevel,
+                        usesHostedWebSearch,
+                        usesHostedWebSearch ? QueueStreamedAssistantText : null);
                     requestTimer.Stop();
                     await _chatLog.WriteAsync("request.completed",
                         ("personality", _personality),
@@ -269,6 +281,7 @@ namespace App.Pages
                     }
                     PruneHistory();
                     SaveSession();
+                    ClearStreamedAssistantMessage();
                     if (!string.IsNullOrWhiteSpace(result.Thinking))
                     {
                         AddMessage(new ChatMessage(ChatItemKind.Thinking, "Thinking", result.Thinking));
@@ -390,6 +403,7 @@ namespace App.Pages
             }
             finally
             {
+                ClearStreamedAssistantMessage();
                 if (ReferenceEquals(_operationCancellation, operationCancellation))
                 {
                     operationCancellation.Dispose();
@@ -1009,6 +1023,57 @@ namespace App.Pages
         }
 
         private void SaveSession() => _sessionStorage.Save(_personality, Session);
+
+        private void QueueStreamedAssistantText(string delta)
+        {
+            if (!string.IsNullOrEmpty(delta))
+                DispatcherQueue.TryEnqueue(() => AppendStreamedAssistantText(delta));
+        }
+
+        private void AppendStreamedAssistantText(string delta)
+        {
+            if (_streamingMessageContent is null)
+            {
+                _streamingMessageContent = new MarkdownView();
+                _streamingMessageContainer = new Border
+                {
+                    Padding = new Thickness(14, 11, 14, 12),
+                    CornerRadius = new CornerRadius(12),
+                    BorderThickness = new Thickness(1),
+                    BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                    Background = (Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"],
+                    Child = new StackPanel
+                    {
+                        Spacing = 7,
+                        Children =
+                        {
+                            new TextBlock
+                            {
+                                Text = _personality.ToString(),
+                                FontSize = 14,
+                                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                                Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"]
+                            },
+                            _streamingMessageContent
+                        }
+                    }
+                };
+                EmptyState.Visibility = Visibility.Collapsed;
+                if (EmptyState.Parent is Panel parent) parent.Children.Remove(EmptyState);
+                ConversationHost.Children.Add(_streamingMessageContainer);
+            }
+            _streamingMessageContent.Markdown += delta;
+            ScrollToLatestMessage();
+        }
+
+        private void ClearStreamedAssistantMessage()
+        {
+            if (_streamingMessageContainer is not null)
+                ConversationHost.Children.Remove(_streamingMessageContainer);
+            _streamingMessageContainer = null;
+            _streamingMessageContent = null;
+        }
+
         private void RenderMessage(ChatMessage message)
         {
             EmptyState.Visibility = Visibility.Collapsed; if (EmptyState.Parent is Panel parent) parent.Children.Remove(EmptyState);
@@ -1389,7 +1454,6 @@ namespace App.Pages
             "remove_memo" => "Remove memo",
             "save_todo" => "Save todo",
             "get_local_context" => "Get local context",
-            "search_web" => "Search web",
             "read_file" => "Read file",
             "list_file_and_directory" => "List files and directories",
             "run_command" => "Run command",
@@ -1407,8 +1471,8 @@ namespace App.Pages
         private static JsonNode? ToolDisplayArgument(JsonObject arguments)
         {
             var preferredArgument = arguments["workspace_path"] ?? arguments["absolute_file_path"] ?? arguments["absolute_directory_path"]
-                ?? arguments["search_pattern"] ?? arguments["name_pattern"] ?? arguments["command_line"]
-                ?? arguments["search_text"] ?? arguments["todo_text"] ?? arguments["memo_text"] ?? arguments["memo_topic"]
+                ?? arguments["search_keyword"] ?? arguments["name_pattern"] ?? arguments["command_line"]
+                ?? arguments["search_text"] ?? arguments["todo_text"] ?? arguments["memo_text"]
                 ?? arguments["context_type"] ?? arguments["process_id"] ?? arguments["memo_key"] ?? arguments.First().Value;
             return preferredArgument;
         }

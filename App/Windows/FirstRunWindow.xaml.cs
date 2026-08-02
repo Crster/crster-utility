@@ -17,7 +17,7 @@ namespace App.Windows
         public FirstRunWindow()
         {
             InitializeComponent();
-            AppWindow.Resize(new SizeInt32(720, 520));
+            AppWindow.Resize(new SizeInt32(720, 640));
             AppWindow.SetIcon("Assets/WindowIcon.ico");
             if (AppWindow.Presenter is OverlappedPresenter presenter)
             {

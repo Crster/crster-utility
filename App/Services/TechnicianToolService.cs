@@ -15,6 +15,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Channels;
 using App.Models;
+using OpenAI.Responses;
+#pragma warning disable OPENAI001
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -1445,11 +1447,12 @@ namespace App.Services
 
         private async Task<ToolResult> GoogleSearchAsync(string query, CancellationToken token)
         {
-            var result = await _client.CreateGroundedInteractionAsync(
-                App.Settings.Current.LowCostModel,
-                query,
-                "Answer the search query using grounded web results. Be concise and factual. Include uncertainty when the available sources do not establish a claim.",
-                token);
+            var options = new CreateResponseOptions { Model = App.Settings.Current.LowCostModel };
+            options.Tools.Add(ResponseTool.CreateWebSearchTool());
+            options.InputItems.Add(ResponseItem.CreateUserMessageItem(
+                "Answer the search query using grounded web results. Be concise and factual. Include uncertainty when the available sources do not establish a claim.\n\n" + query));
+            var response = await _client.Responses.CreateResponseAsync(options, token);
+            var result = new OpenAiCompatibleTurnResult { Text = response.Value.GetOutputText() };
             if (string.IsNullOrWhiteSpace(result.Text))
                 return Error("search_unavailable", "Google Search returned no grounded answer.");
 

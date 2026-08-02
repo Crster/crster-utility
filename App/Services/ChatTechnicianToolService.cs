@@ -38,7 +38,6 @@ namespace App.Services
             Function("list_file_and_directory", "List direct children of an absolute directory the user explicitly supplied or approved.", Props(("absolute_directory_path", String("User-approved absolute Windows directory path."))), "absolute_directory_path"),
             Function("run_command", "Run a PC troubleshooting command. Mutating repairs require confirmation.", Props(("command_line", String("Complete troubleshooting command line.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line"),
             Function("run_elevated_command", "Run a PC troubleshooting command through UAC. Always requires confirmation.", Props(("command_line", String("Complete elevated troubleshooting command line.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line"),
-            Function("search_web", "Search the web for current troubleshooting information and grounded sources.", Props(("query", String("Focused troubleshooting search query."))), "query"),
             Function("get_local_context", "Get current device-local date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", SecretaryToolService.DataKindSchema())), "context_type")
         ];
 
@@ -53,7 +52,7 @@ namespace App.Services
                     "list_file_and_directory" => ListDirectory(Required(arguments, "absolute_directory_path")),
                     "run_command" => await RunCommandAsync(Required(arguments, "command_line"), Optional(arguments, "working_directory"), false, token),
                     "run_elevated_command" => await RunCommandAsync(Required(arguments, "command_line"), Optional(arguments, "working_directory"), true, token),
-                    "search_web" or "get_local_context" => await _sharedTools.ExecuteAsync(name, arguments, token),
+                    "get_local_context" => await _sharedTools.ExecuteAsync(name, arguments, token),
                     _ => Error("unknown_tool", "Technician cannot use that tool.")
                 };
             }

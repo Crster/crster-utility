@@ -39,7 +39,6 @@ namespace App.Models
     {
         [BsonId] public string Id { get; set; } = Guid.NewGuid().ToString("D");
         [BsonField("embedding")] public byte[] Embedding { get; set; } = [];
-        [BsonField("topic")] public string Topic { get; set; } = "knowledge";
         [BsonField("value")] public string Value { get; set; } = string.Empty;
         [BsonField("attachments")] public List<string> Attachments { get; set; } = [];
         [BsonField("timestamp")] public DateTime Timestamp { get; set; } = DateTime.UtcNow;

@@ -32,7 +32,6 @@ namespace App.Services
             MigrateTodoIsDoneField();
             Notes.EnsureIndex(item => item.Timestamp);
             Attachments.EnsureIndex(item => item.Hash);
-            Memos.EnsureIndex(item => item.Topic);
             Memos.EnsureIndex(item => item.Timestamp);
             Todos.EnsureIndex(item => item.Category);
             Todos.EnsureIndex(item => item.IsDone);

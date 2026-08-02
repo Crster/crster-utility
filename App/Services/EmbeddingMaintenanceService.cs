@@ -34,7 +34,7 @@ namespace App.Services
                 }
                 foreach (var memo in database.Memos.FindAll())
                 {
-                    memo.Embedding = NotebookDatabaseService.FloatsToBytes(await client.EmbedRetrievalDocumentAsync(memo.Topic, memo.Value, CancellationToken.None));
+                    memo.Embedding = NotebookDatabaseService.FloatsToBytes(await client.EmbedRetrievalDocumentAsync(string.Empty, memo.Value, CancellationToken.None));
                     database.Memos.Update(memo);
                 }
                 foreach (var todo in database.Todos.FindAll())

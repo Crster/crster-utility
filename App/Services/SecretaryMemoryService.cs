@@ -9,10 +9,6 @@ namespace App.Services
 {
     internal sealed class SecretaryMemoryService
     {
-        private static readonly HashSet<string> AllowedTopics = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "personal", "career", "knowledge", "opinion", "idea", "relationship", "guide", "milestone"
-        };
         private readonly OpenAiCompatibleClient _client;
 
         public SecretaryMemoryService(OpenAiCompatibleClient client) => _client = client;
@@ -33,12 +29,10 @@ namespace App.Services
         public IReadOnlyList<MemoDocument> ListMemos() =>
             App.Settings.Database.Memos.FindAll().ToList();
 
-        public async Task<IReadOnlyList<MemoDocument>> FindMemosAsync(string topic, string query, int maximum, CancellationToken token)
+        public async Task<IReadOnlyList<MemoDocument>> FindMemosAsync(string query, int maximum, CancellationToken token)
         {
-            topic = string.IsNullOrWhiteSpace(topic) ? string.Empty : NormalizeTopic(topic);
             query = query.Trim();
-            var memos = App.Settings.Database.Memos.FindAll()
-                .Where(item => topic.Length == 0 || string.Equals(item.Topic, topic, StringComparison.OrdinalIgnoreCase));
+            var memos = App.Settings.Database.Memos.FindAll();
 
             if (query.Length == 0)
                 return memos.OrderByDescending(item => item.Timestamp).Take(maximum).ToList();
@@ -54,14 +48,12 @@ namespace App.Services
                 .ToList();
         }
 
-        public async Task<MemoDocument> WriteMemoAsync(string topic, string value, CancellationToken token)
+        public async Task<MemoDocument> WriteMemoAsync(string value, CancellationToken token)
         {
-            topic = NormalizeTopic(topic);
             value = Required(value, nameof(value));
-            var embedding = await _client.EmbedRetrievalDocumentAsync(topic, value, token);
+            var embedding = await _client.EmbedRetrievalDocumentAsync(string.Empty, value, token);
             var memo = new MemoDocument
             {
-                Topic = topic,
                 Value = value,
                 Embedding = NotebookDatabaseService.FloatsToBytes(embedding),
                 Timestamp = DateTime.UtcNow
@@ -74,14 +66,6 @@ namespace App.Services
         {
             key = Required(key, nameof(key));
             return App.Settings.Database.Memos.Delete(key);
-        }
-
-        private static string NormalizeTopic(string topic)
-        {
-            topic = Required(topic, nameof(topic)).ToLowerInvariant();
-            if (!AllowedTopics.Contains(topic))
-                throw new FormatException($"topic must be one of: {string.Join(", ", AllowedTopics.Order())}.");
-            return topic;
         }
 
         private static string Required(string value, string name) =>

@@ -13,6 +13,8 @@ using System.Threading.Tasks;
 using App.Models;
 using OpenAI;
 using OpenAI.Embeddings;
+using OpenAI.Responses;
+#pragma warning disable OPENAI001
 
 namespace App.Services
 {
@@ -133,8 +135,21 @@ namespace App.Services
             string systemInstruction,
             JsonArray? tools,
             CancellationToken cancellationToken,
-            OpenAiCompatibleThinkingLevel thinkingLevel = OpenAiCompatibleThinkingLevel.Default)
+            OpenAiCompatibleThinkingLevel thinkingLevel = OpenAiCompatibleThinkingLevel.Default,
+            bool includeWebSearch = false,
+            Action<string>? onTextDelta = null)
         {
+            if (includeWebSearch)
+                return await CreateResponsesInteractionAsync(
+                    model,
+                    history,
+                    newSteps,
+                    systemInstruction,
+                    tools,
+                    cancellationToken,
+                    thinkingLevel,
+                    onTextDelta);
+
             var messages = new JsonArray
             {
                 new JsonObject { ["role"] = "system", ["content"] = systemInstruction }
@@ -171,23 +186,96 @@ namespace App.Services
             return ParseChatCompletion(root);
         }
 
-        public async Task<OpenAiCompatibleTurnResult> CreateGroundedInteractionAsync(
+        private async Task<OpenAiCompatibleTurnResult> CreateResponsesInteractionAsync(
             string model,
-            string prompt,
+            IReadOnlyList<JsonObject> history,
+            IReadOnlyList<JsonObject> newSteps,
             string systemInstruction,
-            CancellationToken cancellationToken)
+            JsonArray? tools,
+            CancellationToken cancellationToken,
+            OpenAiCompatibleThinkingLevel thinkingLevel,
+            Action<string>? onTextDelta)
         {
-            var body = new JsonObject
+            var options = new CreateResponseOptions
             {
-                ["model"] = model,
-                ["messages"] = new JsonArray
-                {
-                    new JsonObject { ["role"] = "system", ["content"] = systemInstruction },
-                    new JsonObject { ["role"] = "user", ["content"] = prompt }
-                }
+                Model = model,
+                StreamingEnabled = true
             };
-            return ParseChatCompletion(await SendChatAsync(body, cancellationToken));
+            options.InputItems.Add(ResponseItem.CreateDeveloperMessageItem(systemInstruction));
+            foreach (var step in history.Concat(newSteps))
+                options.InputItems.Add(CreateResponseInputItem(step));
+            options.Tools.Add(ResponseTool.CreateWebSearchTool());
+            foreach (var tool in tools?.OfType<JsonObject>() ?? [])
+            {
+                var name = tool["name"]?.GetValue<string>();
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                options.Tools.Add(ResponseTool.CreateFunctionTool(
+                    name,
+                    BinaryData.FromString(tool["parameters"]?.ToJsonString() ?? "{}"),
+                    false,
+                    tool["description"]?.GetValue<string>() ?? string.Empty));
+            }
+
+            var result = new OpenAiCompatibleTurnResult();
+            await foreach (var update in _openAiClient.GetResponsesClient()
+                .CreateResponseStreamingAsync(options, cancellationToken))
+            {
+                if (update is StreamingResponseOutputTextDeltaUpdate textDelta)
+                {
+                    result.Text += textDelta.Delta;
+                    onTextDelta?.Invoke(textDelta.Delta);
+                }
+                else if (update is StreamingResponseOutputItemDoneUpdate outputItemDone
+                    && outputItemDone.Item is FunctionCallResponseItem functionCall)
+                {
+                    var argumentsText = functionCall.FunctionArguments.ToString();
+                    JsonObject arguments;
+                    try { arguments = JsonNode.Parse(argumentsText) as JsonObject ?? new JsonObject(); }
+                    catch (JsonException exception) { throw new InvalidOperationException("The AI provider generated invalid tool-call JSON.", exception); }
+                    var call = new OpenAiCompatibleFunctionCall(
+                        functionCall.CallId,
+                        functionCall.FunctionName,
+                        arguments);
+                    result.FunctionCalls.Add(call);
+                    result.Steps.Add(new JsonObject
+                    {
+                        ["type"] = "function_call",
+                        ["id"] = call.Id,
+                        ["name"] = call.Name,
+                        ["arguments"] = call.Arguments.DeepClone()
+                    });
+                }
+                else if (update is StreamingResponseCompletedUpdate completed)
+                {
+                    result.InteractionId = completed.Response.Id;
+                    result.InputTokens = completed.Response.Usage?.InputTokenCount;
+                    result.OutputTokens = completed.Response.Usage?.OutputTokenCount;
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(result.Text))
+                result.Steps.Insert(0, new JsonObject
+                {
+                    ["type"] = "model_output",
+                    ["content"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = result.Text } }
+                });
+            return result;
         }
+
+        public ResponsesClient Responses => _openAiClient.GetResponsesClient();
+
+        private static ResponseItem CreateResponseInputItem(JsonObject step) => step["type"]?.GetValue<string>() switch
+        {
+            "user_input" => ResponseItem.CreateUserMessageItem(ReadInternalText(step)),
+            "model_output" => ResponseItem.CreateAssistantMessageItem(ReadInternalText(step)),
+            "function_call" => ResponseItem.CreateFunctionCallItem(
+                step["call_id"]?.GetValue<string>() ?? step["id"]?.GetValue<string>() ?? throw new InvalidOperationException("A function call did not include an id."),
+                step["name"]?.GetValue<string>() ?? throw new InvalidOperationException("A function call did not include a name."),
+                BinaryData.FromString((step["arguments"] as JsonObject)?.ToJsonString() ?? "{}")),
+            "function_result" => ResponseItem.CreateFunctionCallOutputItem(
+                step["call_id"]?.GetValue<string>() ?? throw new InvalidOperationException("A function result did not include a call id."),
+                step["result"]?.GetValue<string>() ?? string.Empty),
+            _ => throw new InvalidOperationException("The conversation contains an unsupported response item.")
+        };
 
         public static JsonObject CreateUserStep(string text, IEnumerable<ChatAttachment> attachments)
         {
@@ -429,6 +517,9 @@ namespace App.Services
             _ => ".png"
         };
 
-        public void Dispose() => _downloadClient.Dispose();
+        public void Dispose()
+        {
+            _downloadClient.Dispose();
+        }
     }
 }
