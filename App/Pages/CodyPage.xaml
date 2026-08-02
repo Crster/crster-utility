@@ -213,8 +213,9 @@
                         <TextBlock Text="Agent CLI"/>
                     </TabViewItem.Header>
                     <Grid x:Name="AgentCliSurface">
-                    <ScrollViewer x:Name="AgentCliWelcome" Padding="24" VerticalScrollBarVisibility="Auto">
-                        <StackPanel Width="520" HorizontalAlignment="Center" VerticalAlignment="Top"
+                    <ScrollViewer x:Name="AgentCliWelcome" Padding="24" VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled" SizeChanged="AgentCliWelcome_SizeChanged">
+                        <StackPanel x:Name="AgentCliWelcomeContent" HorizontalAlignment="Center" VerticalAlignment="Top"
                                     Margin="0,36,0,24" Spacing="14">
                             <FontIcon Glyph="&#xE8BD;" FontSize="58" Opacity="0.55"
                                       HorizontalAlignment="Center"/>
@@ -353,7 +354,7 @@
             </TabView>
 
             <Grid x:Name="MonacoPreloadHost" Grid.Column="2" Margin="0,42,0,0"
-                  Opacity="0" IsHitTestVisible="False" Canvas.ZIndex="10"
+                  Visibility="Collapsed" Opacity="0" IsHitTestVisible="False" Canvas.ZIndex="10"
                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                   Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"/>
 

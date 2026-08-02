@@ -1855,23 +1855,35 @@ namespace App.Pages
 
         private void SetCodyChatDocked(bool docked)
         {
-            if (CodyChatHost.Content is null)
-            {
-                HomeTab.Content = null;
-                CodyChatHost.Content = AgentCliSurface;
-            }
-
-            CodyChatDock.Visibility = Visibility.Visible;
             if (docked)
             {
+                if (CodyChatHost.Content is null)
+                {
+                    HomeTab.Content = null;
+                    CodyChatHost.Content = AgentCliSurface;
+                }
+
+                CodyChatDock.Visibility = Visibility.Visible;
                 EditorColumn.Width = new GridLength(1, GridUnitType.Star);
                 var availableWidth = ActualWidth > 0 ? ActualWidth : 1100;
                 CodyChatColumn.Width = new GridLength(Math.Clamp(availableWidth * 0.32, 300, 400));
                 return;
             }
 
-            EditorColumn.Width = new GridLength(0);
-            CodyChatColumn.Width = new GridLength(1, GridUnitType.Star);
+            if (HomeTab.Content is null)
+            {
+                CodyChatHost.Content = null;
+                HomeTab.Content = AgentCliSurface;
+            }
+
+            CodyChatDock.Visibility = Visibility.Collapsed;
+            EditorColumn.Width = new GridLength(1, GridUnitType.Star);
+            CodyChatColumn.Width = new GridLength(0);
+        }
+
+        private void AgentCliWelcome_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            AgentCliWelcomeContent.Width = Math.Max(0, Math.Min(520, e.NewSize.Width - 48));
         }
 
         private void AttachSharedEditor(TabViewItem? tab)
@@ -1880,10 +1892,12 @@ namespace App.Pages
             _activeEditorTab = tab;
             if (tab is not null)
             {
+                MonacoPreloadHost.Visibility = Visibility.Visible;
                 MonacoPreloadHost.Opacity = 1;
                 MonacoPreloadHost.IsHitTestVisible = true;
                 return;
             }
+            MonacoPreloadHost.Visibility = Visibility.Collapsed;
             MonacoPreloadHost.Opacity = 0;
             MonacoPreloadHost.IsHitTestVisible = false;
         }
