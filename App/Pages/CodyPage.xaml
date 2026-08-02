@@ -398,6 +398,9 @@
                      AddTabButtonClick="TerminalTabs_AddTabButtonClick"
                      SelectionChanged="TerminalTabs_SelectionChanged"
                      TabCloseRequested="TerminalTabs_TabCloseRequested">
+                <TabView.Resources>
+                    <Thickness x:Key="TabViewItemAddButtonContainerPadding">3,0,0,7</Thickness>
+                </TabView.Resources>
                 <TabViewItem x:Name="InteractiveTerminalTab" IsClosable="True"
                              HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
                     <TabViewItem.Header>

@@ -2982,6 +2982,9 @@ namespace App.Pages
             try
             {
                 var terminal = CreateTerminalControl();
+                terminal.Loaded += (_, _) => _ = DispatcherQueue.TryEnqueue(
+                    Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                    () => ResizeAdditionalTerminal(terminal));
                 var tab = new TabViewItem
                 {
                     Header = new TextBlock
@@ -2996,7 +2999,13 @@ namespace App.Pages
                 _additionalTerminalSessions.Add(tab, terminal);
                 TerminalTabs.TabItems.Add(tab);
                 TerminalTabs.SelectedItem = tab;
-                _ = DispatcherQueue.TryEnqueue(() => terminal.Terminal.Focus(FocusState.Programmatic));
+                _ = DispatcherQueue.TryEnqueue(
+                    Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                    () =>
+                    {
+                        ResizeAdditionalTerminal(terminal);
+                        terminal.Terminal.Focus(FocusState.Programmatic);
+                    });
             }
             catch (Exception exception)
             {
@@ -3308,6 +3317,25 @@ namespace App.Pages
             catch (ArgumentException)
             {
                 // The native terminal can detach while its tab is closing.
+            }
+        }
+
+        private void ResizeAdditionalTerminal(EasyTerminalControl terminal)
+        {
+            try
+            {
+                var terminalTop = terminal.TransformToVisual(TerminalPanel)
+                    .TransformPoint(new global::Windows.Foundation.Point()).Y;
+                var width = TerminalPanel.ActualWidth;
+                var height = TerminalPanel.ActualHeight - terminalTop;
+                if (width <= 0 || height <= 0) return;
+
+                terminal.Width = width;
+                terminal.Height = height;
+            }
+            catch (ArgumentException)
+            {
+                // The terminal tab can close before the deferred layout completes.
             }
         }
 
