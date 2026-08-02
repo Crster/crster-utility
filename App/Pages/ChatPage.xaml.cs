@@ -550,7 +550,7 @@ namespace App.Pages
 
         private async Task SaveHistoryToNoteAsync(string history)
         {
-            var note = await GenerateHistorySummaryAsync(history, "Create a concise standalone Markdown factual report. Start with a descriptive level-one title, then use compact sections or bullets for stated facts, conclusions, decisions, and identified uncertainties. Do not answer, advise, address the reader, add recommendations, invent details, or mention the source conversation. Report contradictions as unresolved.");
+            var note = await GenerateHistorySummaryAsync(history, "Create concise, standalone Markdown documentation that is easy to understand later. Start with a descriptive level-one title. Then use exactly these level-two sections in this order: 'User request/problem/issue' and 'Solution/Answer'. Restate the user's request, problem, or issue clearly in the first section. Document the final solution or answer clearly in the second section, including essential decisions or steps when useful. Use compact paragraphs or bullets. Include only information supported by the conversation, do not address the reader, invent details, or mention the source conversation, and label unresolved points clearly.");
             if (note is null) return;
 
             SetBusy(true, "Saving note...");

@@ -95,6 +95,8 @@
   <PropertyGroup>
     <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
     <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
+    <DebugSymbols Condition="'$(Configuration)' == 'Release'">False</DebugSymbols>
+    <DebugType Condition="'$(Configuration)' == 'Release'">None</DebugType>
     <!-- WinRT/COM capture types are activated at runtime and must remain available in packaged builds. -->
     <PublishTrimmed>False</PublishTrimmed>
     <SupportedOSPlatformVersion>10.0.22621.0</SupportedOSPlatformVersion>
@@ -110,6 +112,7 @@
     <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
     <AppxAutoIncrementPackageRevision>True</AppxAutoIncrementPackageRevision>
     <GenerateTestArtifacts>False</GenerateTestArtifacts>
+    <AppxSymbolPackageEnabled>False</AppxSymbolPackageEnabled>
     <AppxBundle>Auto</AppxBundle>
     <AppxBundlePlatforms>x86|x64</AppxBundlePlatforms>
     <HoursBetweenUpdateChecks>720</HoursBetweenUpdateChecks>

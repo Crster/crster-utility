@@ -8,7 +8,9 @@ using App.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.Devices.Enumeration;
+using Windows.Security.Authorization.AppCapabilityAccess;
 using Windows.Storage.Pickers;
+using Windows.System;
 using WinRT.Interop;
 
 namespace App.Pages
@@ -41,6 +43,7 @@ namespace App.Pages
         {
             InitializeComponent();
             Loaded += SettingsPage_Loaded;
+            Unloaded += SettingsPage_Unloaded;
         }
 
         private async void SettingsPage_Loaded(object sender, RoutedEventArgs e)
@@ -61,8 +64,33 @@ namespace App.Pages
             CaffeineShortcutBox.SelectedItem = FindShortcut(CaffeineShortcuts, _settings.CaffeineShortcut);
             await LoadMicrophonesAsync();
             await LoadModelsAsync();
+            UpdatePermissionWarnings();
+            if (App.MainWindow is not null) App.MainWindow.Activated += MainWindow_Activated;
             _loading = false;
         }
+
+        private void SettingsPage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            if (App.MainWindow is not null) App.MainWindow.Activated -= MainWindow_Activated;
+        }
+
+        private void MainWindow_Activated(object sender, WindowActivatedEventArgs args) => UpdatePermissionWarnings();
+
+        private void UpdatePermissionWarnings()
+        {
+            ScreenCapturePermissionWarning.Visibility = AppCapability.Create("graphicsCaptureProgrammatic").CheckAccess() == AppCapabilityAccessStatus.DeniedByUser
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            MicrophonePermissionWarning.Visibility = AppCapability.Create("microphone").CheckAccess() == AppCapabilityAccessStatus.DeniedByUser
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+
+        private async void OpenScreenCapturePrivacyButton_Click(object sender, RoutedEventArgs e) =>
+            await Launcher.LaunchUriAsync(new Uri("ms-settings:privacy-graphicscaptureprogrammatic"));
+
+        private async void OpenMicrophonePrivacyButton_Click(object sender, RoutedEventArgs e) =>
+            await Launcher.LaunchUriAsync(new Uri("ms-settings:privacy-microphone"));
 
         private async Task SynchronizeStartupSettingAsync()
         {

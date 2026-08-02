@@ -437,15 +437,62 @@ namespace App.Pages
 
         private async Task ApplyWorkspaceChangesAsync(IEnumerable<string> changedPaths)
         {
+            _workspaceGitStates = await Task.Run(() => ReadGitStates(_settings.CodyWorkspace));
             var paths = changedPaths
                 .Where(IsWorkspacePath)
+                .Where(path => !IsExcludedFromWorkspaceWatcher(path))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             if (paths.Count == 0) return;
 
-            _workspaceGitStates = await Task.Run(() => ReadGitStates(_settings.CodyWorkspace));
             foreach (var path in paths)
                 ApplyWorkspacePathChange(path);
+        }
+
+        private bool IsExcludedFromWorkspaceWatcher(string path)
+        {
+            var workspaceRelativePath = Path.GetRelativePath(_settings.CodyWorkspace, path);
+            if (string.Equals(workspaceRelativePath, ".git", StringComparison.OrdinalIgnoreCase)
+                || workspaceRelativePath.StartsWith($".git{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            var existingEntry = FindTreeNode(WorkspaceTree.RootNodes, path)?.Content as WorkspaceTreeEntry;
+            if (existingEntry?.GitState == GitFileState.Ignored) return true;
+
+            var currentPath = path;
+            while (true)
+            {
+                var pathExists = File.Exists(currentPath) || Directory.Exists(currentPath);
+                if (!pathExists)
+                {
+                    if (string.Equals(currentPath, path, StringComparison.OrdinalIgnoreCase)
+                        && existingEntry is null)
+                        return true;
+                }
+                else
+                {
+                    try
+                    {
+                        if (File.GetAttributes(currentPath).HasFlag(System.IO.FileAttributes.Hidden)) return true;
+                    }
+                    catch (IOException)
+                    {
+                        return true;
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        return true;
+                    }
+                }
+
+                var relativePath = Path.GetRelativePath(_settings.CodyWorkspace, currentPath);
+                if (ResolveGitState(relativePath, _workspaceGitStates) == GitFileState.Ignored) return true;
+                if (string.Equals(currentPath, _settings.CodyWorkspace, StringComparison.OrdinalIgnoreCase)) return false;
+
+                var parent = Path.GetDirectoryName(currentPath);
+                if (string.IsNullOrEmpty(parent)) return true;
+                currentPath = parent;
+            }
         }
 
         private bool IsWorkspacePath(string path)

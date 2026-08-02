@@ -35,8 +35,38 @@
                         </Grid>
                     </StackPanel>
                     <StackPanel Spacing="6"><TextBlock Text="Snapshot shortcut" FontWeight="SemiBold"/><ComboBox x:Name="SnapshotShortcutBox" DisplayMemberPath="Name" SelectionChanged="SnapshotShortcutBox_SelectionChanged"/></StackPanel>
+                    <!-- Section: Screen capture permission -->
+                    <Border x:Name="ScreenCapturePermissionWarning" Visibility="Collapsed" Padding="12" CornerRadius="8"
+                            Background="{ThemeResource SystemFillColorCautionBackgroundBrush}">
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE7BA;" Foreground="{ThemeResource SystemFillColorCautionBrush}" VerticalAlignment="Top" Margin="0,2,0,0"/>
+                            <StackPanel Grid.Column="1" Spacing="2">
+                                <TextBlock Text="Screen capture permission is off" FontWeight="SemiBold"/>
+                                <TextBlock Text="Open Windows Settings, allow programmatic screenshots for Crster Utility, then return here and try again."
+                                           TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            </StackPanel>
+                            <Button Grid.Column="2" Content="Open settings" Click="OpenScreenCapturePrivacyButton_Click"
+                                    AutomationProperties.Name="Open screen capture privacy settings"/>
+                        </Grid>
+                    </Border>
                     <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Spacing="3"><TextBlock Text="Capture mouse cursor" FontWeight="SemiBold"/><TextBlock Text="Include the cursor in still snapshots." Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel><ToggleSwitch x:Name="CursorToggle" Grid.Column="1" Toggled="CursorToggle_Toggled"/></Grid>
                     <StackPanel Spacing="6"><TextBlock Text="Recordings microphone" FontWeight="SemiBold"/><ComboBox x:Name="MicrophoneBox" SelectionChanged="MicrophoneBox_SelectionChanged"/></StackPanel>
+                    <!-- Section: Microphone permission -->
+                    <Border x:Name="MicrophonePermissionWarning" Visibility="Collapsed" Padding="12" CornerRadius="8"
+                            Background="{ThemeResource SystemFillColorCautionBackgroundBrush}">
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE7BA;" Foreground="{ThemeResource SystemFillColorCautionBrush}" VerticalAlignment="Top" Margin="0,2,0,0"/>
+                            <StackPanel Grid.Column="1" Spacing="2">
+                                <TextBlock Text="Microphone permission is off" FontWeight="SemiBold"/>
+                                <TextBlock Text="Open Windows Settings, allow microphone access for Crster Utility, then return here and try recording again."
+                                           TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            </StackPanel>
+                            <Button Grid.Column="2" Content="Open settings" Click="OpenMicrophonePrivacyButton_Click"
+                                    AutomationProperties.Name="Open microphone privacy settings"/>
+                        </Grid>
+                    </Border>
                     <StackPanel Spacing="6"><TextBlock Text="Caffeine shortcut" FontWeight="SemiBold"/><ComboBox x:Name="CaffeineShortcutBox" DisplayMemberPath="Name" SelectionChanged="CaffeineShortcutBox_SelectionChanged"/></StackPanel>
                     <TextBlock x:Name="StatusText" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
                 </StackPanel>
