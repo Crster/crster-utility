@@ -42,7 +42,8 @@ namespace App.Services
         [
             Function("read_file", "Read a text file from an absolute path the user explicitly supplied or approved.", Props(("absolute_file_path", String("User-approved absolute Windows file path."))), "absolute_file_path"),
             Function("list_file_and_directory", "List direct children of an absolute directory the user explicitly supplied or approved.", Props(("absolute_directory_path", String("User-approved absolute Windows directory path."))), "absolute_directory_path"),
-            Function("run_command", "Run a non-elevated PC troubleshooting command without user confirmation.", Props(("command_line", String("Complete troubleshooting command line.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line"),
+            Function("ask_user_approval", "Ask the user to approve a dangerous or risky command before executing it. This only asks for approval; it never runs the command. Continue only when the result contains approved=true.", Props(("command_line", String("Exact complete troubleshooting command line that may be dangerous or risky."))), "command_line"),
+            Function("run_command", "Run a non-elevated PC troubleshooting command after approval when it is dangerous or risky.", Props(("command_line", String("Complete troubleshooting command line.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line"),
             Function("run_elevated_command", "Run a PC troubleshooting command through UAC. Always show the user the risk explanation and require confirmation.", Props(("command_line", String("Complete elevated troubleshooting command line.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line"),
             Function("search_web", "Use the high-cost Technician planner to search current web information and return actionable troubleshooting guidance. Include the specific problem or question to research.", Props(("query", String("Focused troubleshooting question or research query."))), "query"),
             Function("get_local_context", "Get current device-local date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", SecretaryToolService.DataKindSchema())), "context_type")
@@ -57,6 +58,7 @@ namespace App.Services
                 {
                     "read_file" => ReadFile(Required(arguments, "absolute_file_path")),
                     "list_file_and_directory" => ListDirectory(Required(arguments, "absolute_directory_path")),
+                    "ask_user_approval" => await AskUserApprovalAsync(Required(arguments, "command_line")),
                     "run_command" => await RunCommandAsync(Required(arguments, "command_line"), Optional(arguments, "working_directory"), false, token),
                     "run_elevated_command" => await RunCommandAsync(Required(arguments, "command_line"), Optional(arguments, "working_directory"), true, token),
                     "search_web" => await SearchWebAsync(Required(arguments, "query"), token),
@@ -166,6 +168,21 @@ namespace App.Services
             var errorTask = process.StandardError.ReadToEndAsync(token);
             await process.WaitForExitAsync(token);
             return CommandResult(await outputTask, await errorTask, process.ExitCode);
+        }
+
+        private async Task<ToolResult> AskUserApprovalAsync(string command)
+        {
+            command = NormalizeCommandLine(command);
+            var safetyWarning = GetCommandSafetyWarning(command);
+            var confirmation = new TechnicianCommandConfirmation(
+                command,
+                false,
+                IsMutatingCommand(command),
+                safetyWarning);
+            var approved = await _confirmAsync(confirmation);
+            return approved
+                ? Ok(new JsonObject { ["approved"] = true, ["command_line"] = command })
+                : Error("confirmation_declined", "The user did not approve the command.");
         }
 
         private string ResolveAuthorizedPath(string path, bool requireDirectory)

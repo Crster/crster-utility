@@ -1428,6 +1428,9 @@ namespace App.Services
                 return powershell;
             }
 
+            if (TryCreateDirectCommandStartInfo(command, workingDirectory, out var directStartInfo))
+                return directStartInfo;
+
             var startInfo = new ProcessStartInfo(Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe")
             {
                 WorkingDirectory = workingDirectory,
@@ -1441,6 +1444,95 @@ namespace App.Services
             startInfo.ArgumentList.Add("/c");
             startInfo.ArgumentList.Add(command);
             return startInfo;
+        }
+
+        private static bool TryCreateDirectCommandStartInfo(
+            string command,
+            string workingDirectory,
+            out ProcessStartInfo startInfo)
+        {
+            startInfo = null!;
+            if (ContainsShellOperator(command) || !TryReadFirstArgument(command, out var executable, out var arguments))
+                return false;
+
+            var resolvedExecutable = ResolveExecutable(executable, workingDirectory);
+            if (resolvedExecutable is null
+                || Path.GetExtension(resolvedExecutable).Equals(".cmd", StringComparison.OrdinalIgnoreCase)
+                || Path.GetExtension(resolvedExecutable).Equals(".bat", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            startInfo = new ProcessStartInfo(resolvedExecutable)
+            {
+                Arguments = arguments,
+                WorkingDirectory = workingDirectory,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            return true;
+        }
+
+        private static bool TryReadFirstArgument(string command, out string executable, out string arguments)
+        {
+            executable = string.Empty;
+            arguments = string.Empty;
+            var start = 0;
+            while (start < command.Length && char.IsWhiteSpace(command[start])) start++;
+            if (start == command.Length) return false;
+
+            var end = start;
+            if (command[start] == '"')
+            {
+                end++;
+                while (end < command.Length && command[end] != '"') end++;
+                if (end == command.Length) return false;
+                executable = command[(start + 1)..end];
+                end++;
+            }
+            else
+            {
+                while (end < command.Length && !char.IsWhiteSpace(command[end])) end++;
+                executable = command[start..end];
+            }
+
+            arguments = end < command.Length ? command[end..].TrimStart() : string.Empty;
+            return !string.IsNullOrWhiteSpace(executable);
+        }
+
+        private static bool ContainsShellOperator(string command)
+        {
+            var quoted = false;
+            for (var index = 0; index < command.Length; index++)
+            {
+                if (command[index] == '"') quoted = !quoted;
+                else if (!quoted && command[index] is '&' or '|' or '<' or '>' or ';') return true;
+            }
+            return false;
+        }
+
+        private static string? ResolveExecutable(string executable, string workingDirectory)
+        {
+            var candidates = new List<string>();
+            if (Path.IsPathFullyQualified(executable) || executable.Contains(Path.DirectorySeparatorChar) || executable.Contains(Path.AltDirectorySeparatorChar))
+            {
+                candidates.Add(Path.GetFullPath(executable, workingDirectory));
+            }
+            else
+            {
+                var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+                var extensions = Path.GetExtension(executable).Length > 0
+                    ? new[] { string.Empty }
+                    : (Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+                        .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                foreach (var extension in extensions)
+                    candidates.Add(Path.Combine(workingDirectory, executable + extension));
+                foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    foreach (var extension in extensions)
+                        candidates.Add(Path.Combine(directory, executable + extension));
+            }
+
+            return candidates.FirstOrDefault(File.Exists);
         }
 
         private static ToolResult CommandResult(string stdout, string stderr, int exitCode, bool full)
