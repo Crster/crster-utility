@@ -26,6 +26,7 @@ namespace App.Controls
 
         public event EventHandler<string>? ContentChanged;
         public event EventHandler<string>? SaveRequested;
+        public event EventHandler? TerminalToggleRequested;
 
         public Task PreloadAsync() => _ready.Task;
 
@@ -154,6 +155,8 @@ namespace App.Controls
                 ContentChanged?.Invoke(this, Uri.UnescapeDataString(message[8..]));
             else if (message.StartsWith("save:", StringComparison.Ordinal))
                 SaveRequested?.Invoke(this, Uri.UnescapeDataString(message[5..]));
+            else if (message == "toggleTerminal")
+                TerminalToggleRequested?.Invoke(this, EventArgs.Empty);
         }
 
         private void PostMessage(object message)

@@ -113,11 +113,13 @@ namespace App.Pages
             ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".ico"
         };
         private readonly ChatSessionStorageService _sessionStorage = new();
+        private readonly ChatLogService _diagnosticLog = new();
         private readonly List<WorkspaceFileItem> _workspaceFiles = [];
         private readonly List<WorkspaceTreeEntry> _workspaceRoots = [];
         private readonly HashSet<string> _loadedWorkspaceDirectories = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<TabViewItem, EditorDocument> _editors = [];
         private readonly Dictionary<TabViewItem, Process> _terminalCommandProcesses = [];
+        private readonly Dictionary<TabViewItem, EasyTerminalControl> _additionalTerminalSessions = [];
         private readonly HashSet<TabViewItem> _terminalCommandTabsOpenedPanel = [];
         private readonly HashSet<TabViewItem> _terminalCommandTabsClosing = [];
         private readonly List<CodyCommand> _commands = [];
@@ -148,6 +150,7 @@ namespace App.Pages
         private bool _filesVisible;
         private bool _isFilesResizing;
         private bool _isTerminalResizing;
+        private bool _isInteractiveTerminalReady;
         private bool _loadingTerminalShells;
         private string? _savedTerminalShellName;
         private double _filesPanelWidth = 280;
@@ -165,16 +168,10 @@ namespace App.Pages
         public CodyPage()
         {
             InitializeComponent();
-            var toggleTerminalAccelerator = new KeyboardAccelerator
-            {
-                Key = (global::Windows.System.VirtualKey)192,
-                Modifiers = global::Windows.System.VirtualKeyModifiers.Control
-            };
-            toggleTerminalAccelerator.Invoked += ToggleTerminalKeyboardAccelerator_Invoked;
-            RootGrid.KeyboardAccelerators.Add(toggleTerminalAccelerator);
             MonacoPreloadHost.Children.Add(_sharedEditor);
             _sharedEditor.ContentChanged += SharedEditor_ContentChanged;
             _sharedEditor.SaveRequested += SharedEditor_SaveRequested;
+            _sharedEditor.TerminalToggleRequested += Editor_TerminalToggleRequested;
             Loaded += CodyPage_Loaded;
             Unloaded += CodyPage_Unloaded;
         }
@@ -196,6 +193,7 @@ namespace App.Pages
                 ?? _agentProviders.First(option => option.Name == AgentCliProviderKind.Codex.ToString());
             SelectAgentProvider(_settings.CodyAgentProvider);
             UpdateAgentActionButtons();
+            LoadWorkspaceCommands();
             LoadAvailableTerminalShells();
             RefreshWorkspace();
             ShowAgentSelection();
@@ -213,6 +211,7 @@ namespace App.Pages
             _agentCancellation?.Cancel();
             CancelAgentCliSession();
             CancelTerminal();
+            CancelAdditionalTerminalSessions();
             CancelTerminalCommandProcesses();
             DisposeWorkspaceWatcher();
         }
@@ -233,13 +232,14 @@ namespace App.Pages
             _agentCancellation?.Cancel();
             CancelAgentCliSession();
             CancelTerminal();
+            CancelAdditionalTerminalSessions();
             CancelTerminalCommandProcesses();
             CloseAllEditorTabs();
             _settings.CodyWorkspace = folder.Path;
             await App.Settings.SaveAsync(_settings);
             _session.AgentSessionId = string.Empty;
+            LoadWorkspaceCommands();
             LoadAvailableTerminalShells();
-            RefreshRunMenu();
             RefreshWorkspace();
             ShowAgentSelection();
             await RefreshWorkspaceFilesAsync(notifyOnCompletion: true);
@@ -267,6 +267,7 @@ namespace App.Pages
                 available ? $"{workspace}\nClick to show or hide workspace files." : "Choose Cody workspace");
             FileSearchBox.IsEnabled = available;
             TerminalTypeBox.IsEnabled = available;
+            RefreshRunMenu();
         }
 
         private async Task RefreshWorkspaceFilesAsync(bool showLoading = true, bool notifyOnCompletion = false)
@@ -1160,6 +1161,7 @@ namespace App.Pages
 
             var workingCopy = await File.ReadAllTextAsync(entry.FullPath);
             var viewer = new global::App.Controls.MonacoEditorControl();
+            viewer.TerminalToggleRequested += Editor_TerminalToggleRequested;
             var tab = new TabViewItem
             {
                 Header = $"{entry.Name} diff",
@@ -1346,10 +1348,21 @@ namespace App.Pages
 
         private string? ContextDirectory()
         {
-            if (_contextTreeEntry is null) return null;
+            if (_contextTreeEntry is null) return HasWorkspace() ? _settings.CodyWorkspace : null;
             return _contextTreeEntry.IsDirectory
                 ? _contextTreeEntry.FullPath
                 : Path.GetDirectoryName(_contextTreeEntry.FullPath);
+        }
+
+        private async void EditorTabs_AddTabButtonClick(TabView sender, object args)
+        {
+            if (!HasWorkspace())
+            {
+                await ShowMessageAsync("Workspace required", "Choose a workspace before creating a file.");
+                return;
+            }
+
+            await CreateWorkspaceEntryAsync(false);
         }
 
         private string ResolveWorkspaceOperationPath(string path)
@@ -1957,6 +1970,15 @@ namespace App.Pages
             await SendPromptAsync();
         }
 
+        private void CodyPage_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
+        {
+            if (e.Key != (global::Windows.System.VirtualKey)192 || !IsControlKeyDown()) return;
+            e.Handled = true;
+            ToggleTerminal();
+        }
+
+        private void Editor_TerminalToggleRequested(object? sender, EventArgs e) => ToggleTerminal();
+
         private async Task SendPromptAsync(string? promptOverride = null)
         {
             var prompt = (promptOverride ?? PromptBox.Text).Trim();
@@ -2395,114 +2417,222 @@ namespace App.Pages
         // Section: Run commands
         private async void ScanCommandsMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            await ShowMessageAsync(
-                "Project commands",
-                "Ask Cody to inspect or run the project. The selected agent CLI now owns command discovery and execution.");
-            return;
-#pragma warning disable CS0162
-            if (_agentProvider is null || !HasWorkspace()) return;
-            myColorButton.IsEnabled = false;
-            myColorButton.Content = "Scanning…";
+            if (!HasWorkspace()) return;
+            if (string.IsNullOrWhiteSpace(_settings.QwenApiKey))
+            {
+                await ShowMessageAsync("Qwen API key required", "Add a Qwen API key in Settings before scanning commands.");
+                return;
+            }
+
+            ScanCommandsButton.IsEnabled = false;
+            RunCommandButton.Content = "Scanning…";
             try
             {
-                var rootManifestPaths = Directory.EnumerateFiles(
-                        _settings.CodyWorkspace,
-                        "*",
-                        SearchOption.TopDirectoryOnly)
-                    .Where(path => IsCommandManifest(Path.GetFileName(path)))
-                    .Take(40)
-                    .ToList();
-                var commandConfigurationPaths = rootManifestPaths
-                    .Concat(GetIdeCommandConfigurationPaths(_settings.CodyWorkspace))
-                    .ToList();
-                var manifests = commandConfigurationPaths
-                    .Select(path => $"{Path.GetRelativePath(_settings.CodyWorkspace, path)}\n{ReadCommandManifest(path)}");
-                var virtualEnvironmentDirectories = DetectVirtualEnvironments(_settings.CodyWorkspace);
-                var projectTypes = DetectProjectTypes(rootManifestPaths.Select(
-                    path => Path.GetFileName(path) ?? string.Empty));
-                if (virtualEnvironmentDirectories.Count > 0
-                    && !projectTypes.Contains("Python", StringComparison.OrdinalIgnoreCase))
-                    projectTypes = projectTypes == "Unknown" ? "Python" : $"{projectTypes}, Python";
-                var activationInstructions = BuildActivationInstructions(
-                    GetTerminalTypeName(),
-                    _settings.CodyWorkspace,
-                    virtualEnvironmentDirectories);
-                var availableExecutables = DetectAvailableProjectExecutables();
-                var scannerInput = $"Detected project type(s): {projectTypes}\n\n"
-                    + "Project manifests and IDE launch/task settings:\n"
-                    + string.Join("\n\n", manifests)
-                    + $"\n\nDetected root Python virtual environments:\n{string.Join("\n", virtualEnvironmentDirectories)}"
-                    + $"\n\nTerminal shell: {GetTerminalTypeName()}"
-                    + $"\nActivation instructions:\n{activationInstructions}"
-                    + $"\n\nAvailable project executables:\n{availableExecutables}";
-                var result = await _agentProvider.RunAsync(
-                    new AgentCliRequest(
-                    _settings.CodyWorkspace,
-                    scannerInput,
-                    """
-                    Identify every project type, package manager, runtime, toolchain, and environment profile evidenced by the supplied files, then extract its supported commands. Return JSON only:
-                    [{"name":"Build application","command":"npm run build"}]
-
-                    Rules:
-                    - Only use the supplied root-level files, IDE launch/task settings, and detected root environment directories. Do not assume or search nested projects.
-                    - Return at most 20 commands. Every command must be non-interactive and run from the workspace root.
-                    - Use only commands explicitly supported by a root script, manifest, lockfile, schema, toolchain file, IDE launch/task setting, or detected environment directory.
-                    - Cross-check commands against the available project executables. Do not return a command requiring a missing executable unless the command is an install or setup step explicitly supported by the root files.
-                    - Account for the appropriate project ecosystem when present: .NET, Node.js, Python, Rust, Go, Java, Kotlin, Ruby, PHP, R, Julia, Perl, Elixir, Haskell, C/C++, Dart, and containerized projects.
-                    - Account for dependency and environment managers when evidenced: npm, pnpm, Yarn, Bun, nvm, Volta, fnm, venv, virtualenv, Conda, Poetry, Pipenv, uv, Cargo, Bundler, rbenv, RVM, Composer, renv, Julia environments, Perlbrew, Mix, Stack, Maven, Gradle, CMake, Conan, vcpkg, and Docker Compose.
-                    - For runtime or toolchain managers, include setup or selection commands only when the root files prove they are used; never invent a manager from the language alone.
-                    - If a Python virtual environment is detected, include an "Activate Python environment" command using the exact activation instruction for the selected shell.
-                    - For non-interactive Python commands, prefer the detected environment's Python executable when that is more reliable than activation.
-                    - For Node.js, prefer project-local package-manager scripts and include the evidenced package-manager install or run commands; do not add global installs.
-                    - For Ruby, PHP, R, Julia, Perl, Elixir, Haskell, and C/C++, use the project manifest and lockfile to choose dependency, build, test, format, and run commands.
-                    - For .NET, Go, Rust, Java, Kotlin, and container projects, identify the root build tool and use its manifest, solution, or compose file rather than guessing generic commands.
-                    - For Docker, include Dockerfile commands such as build or run only when Docker is available and the Dockerfile is present; include Docker Compose commands only when a compose file is present. Use "docker compose", not the legacy "docker-compose", when the available executable supports it.
-                    - Consider all evidenced executable-backed workflows, including build, test, lint, format, package, migration, generation, container, and local development commands. Do not limit discovery to package scripts.
-                    - Include setup commands when evidenced, such as npm install, Python environment setup, migrations, generators,
-                      containers, formatting, linting, testing, and project-specific tools like Prisma.
-                    - For Prisma, require a Prisma dependency, schema, config, or package script before adding its commands.
-                    - Name each command in 2–5 sentence-case words describing its action and target. Never use generic names like
-                      "Run", "Test", "Build", or "Lint".
-                    """,
-                    AllowEdits: false),
-                    _ => Task.CompletedTask,
-                    CancellationToken.None);
-                var json = ExtractJsonArray(result.Text);
-                var commands = JsonSerializer.Deserialize<List<CodyCommand>>(json, new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                }) ?? [];
-                AddNodePackageCommands(commands, _settings.CodyWorkspace);
-                var activationCommand = CreateActivationCommand(
-                    GetTerminalTypeName(),
-                    _settings.CodyWorkspace,
-                    virtualEnvironmentDirectories.FirstOrDefault());
-                if (activationCommand is not null)
-                    commands.Insert(0, activationCommand);
-                _commands.Clear();
-                _commands.AddRange(commands.Where(command =>
-                    !string.IsNullOrWhiteSpace(command.Name) && !string.IsNullOrWhiteSpace(command.Command))
-                    .DistinctBy(command => command.Command, StringComparer.OrdinalIgnoreCase));
-                if (_commands.Count > 0) _selectedCommand = _commands[0];
+                var commands = await DiscoverWorkspaceCommandsAsync();
+                var existingCommandLines = _commands
+                    .Select(command => command.Command)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var addedCommands = commands.Where(command => existingCommandLines.Add(command.Command)).ToList();
+                _commands.AddRange(addedCommands);
+                if (addedCommands.Count > 0) _selectedCommand = addedCommands[0];
                 SaveWorkspaceCommands();
                 RefreshRunMenu();
-                ShowTerminal();
-                AppendTerminal($"Detected project type(s): {projectTypes}\r\n");
-                AppendTerminal($"Discovered {_commands.Count} workspace command(s).\r\n");
-                CompletionNotificationService.ShowWhenMainWindowIsInactive(
+                await ShowMessageAsync(
                     "Command scan complete",
-                    $"Cody discovered {_commands.Count} workspace command(s).");
+                    addedCommands.Count == 0
+                        ? "No new workspace commands were discovered."
+                        : $"Added {addedCommands.Count} workspace command(s).");
             }
-            catch (Exception exception)
+            catch (Exception exception) when (exception is InvalidOperationException or JsonException or IOException or UnauthorizedAccessException)
             {
-                await ShowMessageAsync("Scan project commands", exception.Message);
+                await ShowMessageAsync("Scan commands", exception.Message);
             }
             finally
             {
-                myColorButton.Content = _selectedCommand?.Name ?? "Scan commands";
-                RefreshWorkspace();
+                RefreshRunMenu();
             }
-#pragma warning restore CS0162
+        }
+
+        private async Task<List<CodyCommand>> DiscoverWorkspaceCommandsAsync()
+        {
+            using var client = new QwenClient(_settings.QwenApiKey);
+            var memory = new SecretaryMemoryService(client);
+            using var secretaryTools = new SecretaryToolService(memory);
+            var workspaceTools = new TechnicianToolService(client, secretaryTools, _ => Task.FromResult(false))
+            {
+                WorkspacePath = _settings.CodyWorkspace
+            };
+            var allowedToolNames = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "list_workspace_entries",
+                "search_workspace_files",
+                "read_workspace_file"
+            };
+            var declarations = new JsonArray(TechnicianToolService.CreateExecutionDeclarations()
+                .OfType<JsonObject>()
+                .Where(declaration => allowedToolNames.Contains(declaration["name"]?.GetValue<string>() ?? string.Empty))
+                .Select(declaration => (JsonNode)declaration.DeepClone())
+                .ToArray());
+            var history = new List<JsonObject>();
+            IReadOnlyList<JsonObject> nextSteps =
+            [
+                QwenClient.CreateUserStep(
+                    "Inspect the selected workspace and discover its executable project scripts and manifest-backed commands. Return only a JSON array with objects shaped as {\"name\":\"Run dev server\",\"command\":\"npm run dev\"}.",
+                    [])
+            ];
+            const string instruction = """
+                You discover commands supported by a software workspace. Use the read-only tools to inspect directory names,
+                manifests, package scripts, IDE task or launch files, and executable scripts. Never infer an unsupported command.
+                Never request command execution, file edits, hidden files, or paths outside the workspace. Return at most 20
+                non-interactive commands that run from the workspace root. Use unique command lines and short sentence-case names.
+                After inspection, return only the JSON array without Markdown fences or commentary.
+                """;
+
+            for (var round = 0; round < 12; round++)
+            {
+                var result = await client.CreateSimpleInteractionAsync(
+                    _settings.HighCostModel,
+                    history,
+                    nextSteps,
+                    instruction,
+                    declarations,
+                    CancellationToken.None,
+                    QwenThinkingLevel.High);
+                foreach (var step in nextSteps) history.Add((JsonObject)step.DeepClone());
+                foreach (var step in result.Steps) history.Add((JsonObject)step.DeepClone());
+                if (result.FunctionCalls.Count == 0)
+                {
+                    var json = ExtractJsonArray(result.Text);
+                    var commands = JsonSerializer.Deserialize<List<CodyCommand>>(json, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    }) ?? [];
+                    return commands
+                        .Where(command => !string.IsNullOrWhiteSpace(command.Name) && !string.IsNullOrWhiteSpace(command.Command))
+                        .Select(command => new CodyCommand(command.Name.Trim(), command.Command.Trim()))
+                        .DistinctBy(command => command.Command, StringComparer.OrdinalIgnoreCase)
+                        .Take(20)
+                        .ToList();
+                }
+
+                var functionResults = new List<JsonObject>();
+                foreach (var call in result.FunctionCalls)
+                {
+                    var toolResult = allowedToolNames.Contains(call.Name)
+                        ? await workspaceTools.ExecuteAsync(call.Name, call.Arguments, CancellationToken.None)
+                        : new ToolResult(false, "{\"success\":false,\"error\":\"Only read-only workspace tools are available.\"}");
+                    functionResults.Add(QwenClient.CreateFunctionResult(call, toolResult));
+                }
+                nextSteps = functionResults;
+            }
+
+            throw new InvalidOperationException("Qwen reached the command scan limit without returning a command list.");
+        }
+
+        private async void AddCommandButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (!HasWorkspace())
+            {
+                await ShowMessageAsync("Workspace required", "Choose a workspace before adding commands.");
+                return;
+            }
+            var nameBox = new TextBox { Header = "Name", PlaceholderText = "Run dev server" };
+            var commandBox = new TextBox { Header = "Command", PlaceholderText = "npm run dev" };
+            var content = new StackPanel { Spacing = 12 };
+            content.Children.Add(nameBox);
+            content.Children.Add(commandBox);
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = "Add command",
+                Content = content,
+                PrimaryButtonText = "Add",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Primary
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+            var name = nameBox.Text.Trim();
+            var commandLine = commandBox.Text.Trim();
+            if (name.Length == 0 || commandLine.Length == 0)
+            {
+                await ShowMessageAsync("Command required", "Enter both a name and command line.");
+                return;
+            }
+            if (_commands.Any(command => command.Command.Equals(commandLine, StringComparison.OrdinalIgnoreCase)))
+            {
+                await ShowMessageAsync("Command already exists", "A command with the same command line is already saved.");
+                return;
+            }
+            _selectedCommand = new CodyCommand(name, commandLine);
+            _commands.Add(_selectedCommand);
+            SaveWorkspaceCommands();
+            RefreshRunMenu();
+        }
+
+        private async Task RemoveCommandAsync(CodyCommand command)
+        {
+            if (!await ConfirmActionAsync($"Remove '{command.Name}' from the workspace commands?")) return;
+            var index = _commands.IndexOf(command);
+            _commands.Remove(command);
+            if (ReferenceEquals(_selectedCommand, command))
+                _selectedCommand = _commands.Count == 0 ? null : _commands[Math.Min(index, _commands.Count - 1)];
+            SaveWorkspaceCommands();
+            RefreshRunMenu();
+        }
+
+        private void RefreshRunMenu()
+        {
+            RunCommandItemsPanel.Children.Clear();
+            if (_commands.Count == 0)
+            {
+                RunCommandItemsPanel.Children.Add(new TextBlock
+                {
+                    Text = "No saved commands",
+                    Margin = new Thickness(12, 8, 12, 8),
+                    Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+                });
+            }
+            foreach (var command in _commands)
+            {
+                var row = new Grid { ColumnSpacing = 4 };
+                row.ColumnDefinitions.Add(new ColumnDefinition());
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                var select = new Button
+                {
+                    Content = command.Name,
+                    Tag = command,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    HorizontalContentAlignment = HorizontalAlignment.Left
+                };
+                ToolTipService.SetToolTip(select, command.Command);
+                AutomationProperties.SetName(select, $"Select {command.Name}: {command.Command}");
+                select.Click += CommandMenuItem_Click;
+                var remove = new Button
+                {
+                    Content = new FontIcon { Glyph = "\uE74D", FontSize = 12 },
+                    Tag = command,
+                    Width = 32,
+                    Height = 32,
+                    Padding = new Thickness(0)
+                };
+                Grid.SetColumn(remove, 1);
+                ToolTipService.SetToolTip(remove, $"Remove {command.Name}");
+                AutomationProperties.SetName(remove, $"Remove {command.Name}");
+                remove.Click += async (_, _) => await RemoveCommandAsync(command);
+                row.Children.Add(select);
+                row.Children.Add(remove);
+                RunCommandItemsPanel.Children.Add(row);
+            }
+            RunCommandButton.Content = _selectedCommand?.Name ?? "Run command";
+            ToolTipService.SetToolTip(
+                RunCommandButton,
+                _selectedCommand?.Command ?? "Add or select a workspace command");
+            ScanCommandsButton.IsEnabled = HasWorkspace();
+            ToolTipService.SetToolTip(
+                ScanCommandsButton,
+                ScanCommandsButton.IsEnabled
+                    ? "Discover executable scripts and project commands with Qwen"
+                    : "Choose a workspace before scanning commands");
         }
 
         private static bool IsCommandManifest(string name) =>
@@ -2710,31 +2840,12 @@ namespace App.Pages
             return text[start..(end + 1)];
         }
 
-        private void RefreshRunMenu()
-        {
-            RunMenu.Items.Clear();
-            foreach (var command in _commands)
-            {
-                var item = new MenuFlyoutItem { Text = command.Name, Tag = command };
-                ToolTipService.SetToolTip(item, command.Command);
-                AutomationProperties.SetName(item, $"{command.Name}: {command.Command}");
-                item.Click += CommandMenuItem_Click;
-                RunMenu.Items.Add(item);
-            }
-            if (_commands.Count > 0) RunMenu.Items.Add(new MenuFlyoutSeparator());
-            myColorButton.Content = _selectedCommand?.Name ?? "Scan commands";
-            ToolTipService.SetToolTip(
-                myColorButton,
-                _selectedCommand?.Command ?? "Scan root-level project files for supported commands");
-        }
-
         private void CommandMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is not MenuFlyoutItem { Tag: CodyCommand command }) return;
+            if (sender is not Button { Tag: CodyCommand command }) return;
             _selectedCommand = command;
-            myColorButton.Content = command.Name;
-            ToolTipService.SetToolTip(myColorButton, command.Command);
             SaveWorkspaceCommands();
+            RefreshRunMenu();
         }
 
         private async void RunButton_Click(SplitButton sender, SplitButtonClickEventArgs args)
@@ -2802,9 +2913,8 @@ namespace App.Pages
             Path.Combine(_settings.CodyWorkspace, ".crster", "cody.json");
 
         // Section: Terminal
-        private void ToggleTerminalKeyboardAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+        private void ToggleTerminal()
         {
-            args.Handled = true;
             if (TerminalPanel.Visibility == Visibility.Visible) HideTerminal();
             else ShowTerminal();
         }
@@ -2817,9 +2927,11 @@ namespace App.Pages
 
         private void ShowTerminal(bool startInteractiveSession = true)
         {
+            LogTerminalDiagnostic("show", ("startInteractiveSession", startInteractiveSession), ("hasSession", _terminalControl is not null));
             TerminalButton.IsChecked = true;
             TerminalPanel.Visibility = Visibility.Visible;
             TerminalSplitter.Visibility = Visibility.Visible;
+            TerminalSplitter.IsHitTestVisible = _isInteractiveTerminalReady;
             TerminalSplitterRow.Height = new GridLength(6);
             TerminalRow.Height = new GridLength(_terminalPanelHeight);
             if (startInteractiveSession && EnsureTerminalSession())
@@ -2835,19 +2947,61 @@ namespace App.Pages
 
         private void HideTerminal()
         {
+            LogTerminalDiagnostic("hide", ("height", TerminalRow.ActualHeight));
             if (TerminalPanel.Visibility == Visibility.Visible)
                 _terminalPanelHeight = TerminalRow.ActualHeight;
 
             TerminalPanel.Visibility = Visibility.Collapsed;
             TerminalSplitter.Visibility = Visibility.Collapsed;
+            TerminalSplitter.IsHitTestVisible = false;
             TerminalSplitterRow.Height = new GridLength(0);
             TerminalRow.Height = new GridLength(0);
             if (_terminalControl is not null)
                 _terminalControl.Visibility = Visibility.Collapsed;
         }
 
-        private void TerminalTabs_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        private void TerminalTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (TerminalPanel.Visibility == Visibility.Visible
+                && ReferenceEquals(TerminalTabs.SelectedItem, InteractiveTerminalTab)
+                && EnsureTerminalSession())
+            {
+                var terminal = _terminalControl!;
+                _ = DispatcherQueue.TryEnqueue(() => terminal.Terminal.Focus(FocusState.Programmatic));
+            }
+
             UpdateInteractiveTerminalVisibility();
+        }
+
+        private void TerminalTabs_AddTabButtonClick(TabView sender, object args)
+        {
+            if (!HasWorkspace()) return;
+
+            ShowTerminal(startInteractiveSession: false);
+            try
+            {
+                var terminal = CreateTerminalControl();
+                var tab = new TabViewItem
+                {
+                    Header = new TextBlock
+                    {
+                        Text = $"{GetTerminalTypeName()} terminal",
+                        VerticalAlignment = VerticalAlignment.Center
+                    },
+                    Content = terminal,
+                    HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                    VerticalContentAlignment = VerticalAlignment.Stretch
+                };
+                _additionalTerminalSessions.Add(tab, terminal);
+                TerminalTabs.TabItems.Add(tab);
+                TerminalTabs.SelectedItem = tab;
+                _ = DispatcherQueue.TryEnqueue(() => terminal.Terminal.Focus(FocusState.Programmatic));
+            }
+            catch (Exception exception)
+            {
+                AppendTerminal($"[error] Could not start {GetTerminalTypeName()}: {exception.Message}\r\n");
+            }
+        }
 
         private void UpdateInteractiveTerminalVisibility()
         {
@@ -2862,12 +3016,6 @@ namespace App.Pages
         private async Task RunCommandInTerminalTabAsync(CodyCommand command)
         {
             if (!HasWorkspace()) return;
-            if (command.Name.Equals("Activate Python environment", StringComparison.OrdinalIgnoreCase))
-            {
-                ShowTerminal();
-                EnsureTerminalSession();
-                return;
-            }
             if (IsRiskyCommand(command.Command)
                 && !await ConfirmActionAsync($"Run potentially destructive command '{command.Command}' in '{_settings.CodyWorkspace}'?"))
                 return;
@@ -2986,6 +3134,13 @@ namespace App.Pages
                 return;
             }
 
+            if (_additionalTerminalSessions.Remove(args.Tab, out var terminal))
+            {
+                StopTerminalSession(terminal);
+                sender.TabItems.Remove(args.Tab);
+                return;
+            }
+
             if (!_terminalCommandTabsClosing.Add(args.Tab)) return;
             var closeTerminalPanel = _terminalCommandTabsOpenedPanel.Remove(args.Tab);
             try
@@ -3067,12 +3222,36 @@ namespace App.Pages
             _terminalCommandTabsClosing.Clear();
         }
 
+        private void CancelAdditionalTerminalSessions()
+        {
+            foreach (var terminal in _additionalTerminalSessions.Values)
+                StopTerminalSession(terminal);
+            _additionalTerminalSessions.Clear();
+            foreach (var tab in TerminalTabs.TabItems.OfType<TabViewItem>()
+                .Where(tab => !ReferenceEquals(tab, InteractiveTerminalTab)).ToList())
+            {
+                TerminalTabs.TabItems.Remove(tab);
+            }
+        }
+
         private void TerminalSplitter_PointerPressed(object sender, PointerRoutedEventArgs e)
         {
-            if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+            if (!_isInteractiveTerminalReady
+                || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+                return;
+
             _isTerminalResizing = TerminalSplitter.CapturePointer(e.Pointer);
             _terminalResizeStartY = e.GetCurrentPoint(this).Position.Y;
             _terminalResizeStartHeight = TerminalRow.ActualHeight;
+            if (_isTerminalResizing && _terminalControl is { Visibility: Visibility.Visible } terminal)
+            {
+                terminal.Width = terminal.ActualWidth;
+                terminal.Height = terminal.ActualHeight;
+                LogTerminalDiagnostic("resize_terminal_suspended",
+                    ("width", terminal.ActualWidth),
+                    ("height", terminal.ActualHeight));
+            }
+            LogTerminalDiagnostic("resize_pressed", ("captured", _isTerminalResizing), ("height", _terminalResizeStartHeight));
             e.Handled = _isTerminalResizing;
         }
 
@@ -3097,22 +3276,39 @@ namespace App.Pages
             _isTerminalResizing = false;
             TerminalSplitter.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
+            LogTerminalDiagnostic("resize_released", ("height", TerminalRow.ActualHeight));
             var terminal = _terminalControl;
-            if (terminal is null || terminal.Visibility != Visibility.Visible) return;
-            terminal.InvalidateMeasure();
-            terminal.UpdateLayout();
+            if (terminal is null
+                || TerminalPanel.Visibility != Visibility.Visible
+                || !ReferenceEquals(TerminalTabs.SelectedItem, InteractiveTerminalTab))
+                return;
             _ = DispatcherQueue.TryEnqueue(() =>
             {
                 if (ReferenceEquals(_terminalControl, terminal))
                 {
-                    ResizeInteractiveTerminal();
+                    ResizeInteractiveTerminal(terminal);
                     terminal.Focus(FocusState.Programmatic);
                 }
             });
         }
 
+        private void ResizeInteractiveTerminal(EasyTerminalControl terminal)
+        {
+            var width = InteractiveTerminalHost.ActualWidth;
+            var height = InteractiveTerminalHost.ActualHeight;
+            if (!_isInteractiveTerminalReady
+                || !ReferenceEquals(_terminalControl, terminal)
+                || width <= 0
+                || height <= 0)
+                return;
+
+            terminal.Width = width;
+            terminal.Height = height;
+            LogTerminalDiagnostic("resize_terminal_restored", ("width", width), ("height", height));
+        }
+
         private void TerminalPanel_SizeChanged(object sender, SizeChangedEventArgs e) =>
-            _ = DispatcherQueue.TryEnqueue(ResizeInteractiveTerminal);
+            LogTerminalDiagnostic("panel_size_changed", ("width", e.NewSize.Width), ("height", e.NewSize.Height));
 
         // Section: Agent CLI terminal
         private void AgentCliHost_SizeChanged(object sender, SizeChangedEventArgs e) => ResizeAgentCliTerminal();
@@ -3258,6 +3454,7 @@ namespace App.Pages
             AgentCliWelcome.Visibility = Visibility.Collapsed;
             AgentCliHost.Visibility = Visibility.Visible;
             EnsureAgentCliSession();
+            RefreshRunMenu();
         }
 
         private void EnsureAgentCliSession()
@@ -3407,50 +3604,14 @@ namespace App.Pages
         }
 
         // Section: Utility terminal
-        private void ResizeInteractiveTerminal()
-        {
-            var terminal = _terminalControl;
-            if (terminal is null) return;
-            var width = InteractiveTerminalHost.ActualWidth;
-            var height = InteractiveTerminalHost.ActualHeight;
-            try
-            {
-                var hostTop = InteractiveTerminalHost.TransformToVisual(TerminalPanel)
-                    .TransformPoint(new global::Windows.Foundation.Point()).Y;
-                height = Math.Max(0, TerminalPanel.ActualHeight - hostTop);
-            }
-            catch (ArgumentException)
-            {
-                // The terminal can be detached while its tab is closing.
-            }
-            if (width <= 0 || height <= 0) return;
-            InteractiveTerminalHost.Height = height;
-            terminal.Width = width;
-            terminal.Height = height;
-            terminal.UpdateLayout();
-        }
-
         private bool EnsureTerminalSession()
         {
             if (!HasWorkspace()) return false;
             if (_terminalControl is not null) return true;
             try
             {
-                var shell = GetSelectedTerminalShell();
-                var terminal = new EasyTerminalControl
-                {
-                    StartupCommandLine = CreateTerminalCommandLine(shell),
-                    WorkingDirectory = _settings.CodyWorkspace,
-                    FontFamilyWhenSettingTheme = new FontFamily("Consolas"),
-                    FontSizeWhenSettingTheme = 10,
-                    LogConPTYOutput = true,
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    VerticalAlignment = VerticalAlignment.Stretch,
-                    Win32InputMode = true,
-                    InputCapture = EasyTerminalControl.INPUT_CAPTURE.TabKey
-                        | EasyTerminalControl.INPUT_CAPTURE.DirectionKeys,
-                    Theme = CreateTerminalTheme()
-                };
+                LogTerminalDiagnostic("session_creating", ("shell", GetTerminalTypeName()));
+                var terminal = CreateTerminalControl();
                 var activationCommand = CreateActivationCommand(
                     GetTerminalTypeName(),
                     _settings.CodyWorkspace,
@@ -3466,9 +3627,15 @@ namespace App.Pages
                             ShowInteractiveTerminalContextMenu(terminal, args.GetCurrentPoint(TerminalPanel).Position);
                     }),
                     true);
-                terminal.Terminal.Loaded += (_, _) => AttachTerminalContextMenuHook(terminal);
+                terminal.Terminal.Loaded += (_, _) =>
+                {
+                    LogTerminalDiagnostic("control_loaded");
+                    AttachTerminalContextMenuHook(terminal);
+                    EnableInteractiveTerminalResizeWhenReady(terminal);
+                };
                 terminalSession.TermReady += (_, _) =>
                 {
+                    LogTerminalDiagnostic("session_ready");
                     if (activationCommand is not null)
                         terminalSession.WriteToTerm($"{activationCommand.Command}\r");
 
@@ -3480,17 +3647,65 @@ namespace App.Pages
                     }
                     if (pendingOutput.Length > 0)
                         terminalSession.WriteToUITerminal(pendingOutput);
+
+                    _ = DispatcherQueue.TryEnqueue(() => EnableInteractiveTerminalResizeWhenReady(terminal));
                 };
                 _terminalControl = terminal;
                 InteractiveTerminalHost.Children.Add(terminal);
-                ResizeInteractiveTerminal();
+                LogTerminalDiagnostic("session_hosted");
                 return true;
             }
             catch (Exception exception)
             {
+                LogTerminalDiagnostic("session_failed", ("exception", exception.GetType().Name), ("message", exception.Message));
                 AppendTerminal($"[error] Could not start {GetTerminalTypeName()}: {exception.Message}\r\n");
                 return false;
             }
+        }
+
+        private async void EnableInteractiveTerminalResizeWhenReady(EasyTerminalControl terminal)
+        {
+            if (!ReferenceEquals(_terminalControl, terminal)
+                || !terminal.ConPTYTerm.TermProcIsStarted
+                || !terminal.Terminal.IsLoaded)
+            {
+                LogTerminalDiagnostic("resize_not_ready",
+                    ("isCurrent", ReferenceEquals(_terminalControl, terminal)),
+                    ("processStarted", terminal.ConPTYTerm.TermProcIsStarted),
+                    ("controlLoaded", terminal.Terminal.IsLoaded));
+                return;
+            }
+
+            LogTerminalDiagnostic("resize_enable_delayed");
+            await Task.Delay(TimeSpan.FromSeconds(1));
+            if (!ReferenceEquals(_terminalControl, terminal)
+                || !terminal.ConPTYTerm.TermProcIsStarted
+                || !terminal.Terminal.IsLoaded)
+                return;
+
+            _isInteractiveTerminalReady = true;
+            LogTerminalDiagnostic("resize_enabled");
+            if (TerminalPanel.Visibility == Visibility.Visible)
+                TerminalSplitter.IsHitTestVisible = true;
+        }
+
+        private EasyTerminalControl CreateTerminalControl()
+        {
+            var shell = GetSelectedTerminalShell();
+            return new EasyTerminalControl
+            {
+                StartupCommandLine = CreateTerminalCommandLine(shell),
+                WorkingDirectory = _settings.CodyWorkspace,
+                FontFamilyWhenSettingTheme = new FontFamily("Consolas"),
+                FontSizeWhenSettingTheme = 10,
+                LogConPTYOutput = true,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Win32InputMode = true,
+                InputCapture = EasyTerminalControl.INPUT_CAPTURE.TabKey
+                    | EasyTerminalControl.INPUT_CAPTURE.DirectionKeys,
+                Theme = CreateTerminalTheme()
+            };
         }
 
         private void ShowInteractiveTerminalContextMenu(
@@ -3614,7 +3829,12 @@ namespace App.Pages
         {
             if (_terminalControl is { } terminal)
             {
-                if (message == 0x0204 || message == 0x0206 || message == 0x007B)
+                if (message == 0x0100 && wParam == (UIntPtr)0xC0 && IsControlKeyDown())
+                {
+                    _ = DispatcherQueue.TryEnqueue(ToggleTerminal);
+                    return IntPtr.Zero;
+                }
+                else if (message == 0x0204 || message == 0x0206 || message == 0x007B)
                 {
                     Debug.WriteLine($"[Cody][Terminal] Suppressed native context-menu message 0x{message:X4}.");
                     return IntPtr.Zero;
@@ -3658,6 +3878,11 @@ namespace App.Pages
 
         [DllImport("comctl32.dll")]
         private static extern IntPtr DefSubclassProc(IntPtr windowHandle, uint message, UIntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern short GetKeyState(int virtualKey);
+
+        private static bool IsControlKeyDown() => (GetKeyState(0x11) & 0x8000) != 0;
 
         private static void CopyInteractiveTerminalText(EasyTerminalControl terminal)
         {
@@ -3843,8 +4068,11 @@ namespace App.Pages
 
         private void CancelTerminal()
         {
+            LogTerminalDiagnostic("session_cancelling", ("hasSession", _terminalControl is not null));
             var terminal = _terminalControl;
             _terminalControl = null;
+            _isInteractiveTerminalReady = false;
+            TerminalSplitter.IsHitTestVisible = false;
             DetachTerminalContextMenuHook();
             if (terminal is null) return;
 
@@ -3875,6 +4103,28 @@ namespace App.Pages
 
             // Disconnect while the native terminal is still hosted; removing it first races WinUI teardown.
             InteractiveTerminalHost.Children.Clear();
+            LogTerminalDiagnostic("session_cancelled");
+        }
+
+        private void LogTerminalDiagnostic(string eventName, params (string Name, object? Value)[] properties)
+        {
+            var details = string.Join(" ", properties.Select(property => $"{property.Name}={property.Value}"));
+            Debug.WriteLine($"[Cody][Terminal] {eventName} {details}".TrimEnd());
+            var logProperties = properties.Append(("personality", (object?)ChatPersonality.Cody)).ToArray();
+            _ = _diagnosticLog.WriteAsync($"cody_terminal.{eventName}", logProperties);
+        }
+
+        private static void StopTerminalSession(EasyTerminalControl terminal)
+        {
+            try
+            {
+                var session = terminal.DisconnectConPTYTerm();
+                session?.CloseStdinToApp();
+                session?.StopExternalTermOnly();
+            }
+            catch (Exception exception) when (IsExpectedTerminalShutdownException(exception))
+            {
+            }
         }
 
         private static bool IsExpectedTerminalShutdownException(Exception exception) =>

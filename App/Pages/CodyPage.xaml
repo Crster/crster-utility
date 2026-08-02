@@ -2,7 +2,8 @@
     x:Class="App.Pages.CodyPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:controls="using:App.Controls">
+    xmlns:controls="using:App.Controls"
+    PreviewKeyDown="CodyPage_PreviewKeyDown">
     <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
           KeyboardAcceleratorPlacementMode="Hidden">
         <Grid.RowDefinitions>
@@ -71,13 +72,23 @@
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
                             HorizontalAlignment="Right"
                             VerticalAlignment="Center">
-                    <SplitButton x:Name="myColorButton" Height="34" Content="Scan commands" Visibility="Collapsed"
+                    <SplitButton x:Name="RunCommandButton" Height="34" Content="Run command"
                                  Click="RunButton_Click"
                                  ToolTipService.ToolTip="Run the selected workspace command">
                         <SplitButton.Flyout>
-                            <MenuFlyout x:Name="RunMenu">
-                                <MenuFlyoutItem Text="Scan project commands" Click="ScanCommandsMenuItem_Click"/>
-                            </MenuFlyout>
+                            <Flyout Placement="BottomEdgeAlignedRight">
+                                <StackPanel MinWidth="280" Spacing="4">
+                                    <StackPanel x:Name="RunCommandItemsPanel" Spacing="2"/>
+                                    <Border Height="1" Margin="0,4"
+                                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                                    <Button x:Name="AddCommandButton" Content="Add command"
+                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                            Click="AddCommandButton_Click"/>
+                                    <Button x:Name="ScanCommandsButton" Content="Scan commands"
+                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                            Click="ScanCommandsMenuItem_Click"/>
+                                </StackPanel>
+                            </Flyout>
                         </SplitButton.Flyout>
                     </SplitButton>
                     <Button x:Name="AgentSelectionButton" Height="34" Padding="10,0" Visibility="Collapsed"
@@ -202,9 +213,10 @@
                                   ToolTipService.ToolTip="Resize file sidebar"
                                   AutomationProperties.Name="Resize file sidebar"/>
 
-            <TabView x:Name="EditorTabs" Grid.Column="2" IsAddTabButtonVisible="False"
+            <TabView x:Name="EditorTabs" Grid.Column="2" IsAddTabButtonVisible="True"
                      HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                      HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                     AddTabButtonClick="EditorTabs_AddTabButtonClick"
                      SelectionChanged="EditorTabs_SelectionChanged"
                      TabCloseRequested="EditorTabs_TabCloseRequested">
                 <TabViewItem x:Name="HomeTab" IsClosable="False" Visibility="Collapsed"
@@ -370,7 +382,7 @@
 
         <!-- Section: Terminal -->
         <controls:ResizeHandle x:Name="TerminalSplitter" Grid.Row="2" Height="6"
-                              IsVerticalResize="True" Visibility="Collapsed"
+                              IsVerticalResize="True" Visibility="Collapsed" IsHitTestVisible="False"
                               PointerPressed="TerminalSplitter_PointerPressed"
                               PointerMoved="TerminalSplitter_PointerMoved"
                               PointerReleased="TerminalSplitter_PointerReleased"
@@ -381,8 +393,9 @@
         <Border x:Name="TerminalPanel" Grid.Row="3" Visibility="Collapsed" BorderThickness="0,1,0,0"
                 SizeChanged="TerminalPanel_SizeChanged"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" Background="#FF0C0C0C">
-            <TabView x:Name="TerminalTabs" IsAddTabButtonVisible="False"
+            <TabView x:Name="TerminalTabs" IsAddTabButtonVisible="True"
                      HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                     AddTabButtonClick="TerminalTabs_AddTabButtonClick"
                      SelectionChanged="TerminalTabs_SelectionChanged"
                      TabCloseRequested="TerminalTabs_TabCloseRequested">
                 <TabViewItem x:Name="InteractiveTerminalTab" IsClosable="True"

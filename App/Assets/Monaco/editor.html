@@ -32,6 +32,11 @@
         window.chrome.webview.postMessage('debug:HTML bootstrap started');
         let pendingHostMessage = null;
         let changingModel = false;
+        window.addEventListener('keydown', function (event) {
+            if (!event.ctrlKey || event.key !== '`') return;
+            event.preventDefault();
+            window.chrome.webview.postMessage('toggleTerminal');
+        }, true);
         window.chrome.webview.addEventListener('message', function (event) {
             const message = event.data;
             if (!window.codyEditor && !window.codyDiffEditor) {
