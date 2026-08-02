@@ -2451,7 +2451,7 @@ namespace App.Pages
             using var client = new QwenClient(_settings.QwenApiKey);
             var memory = new SecretaryMemoryService(client);
             using var secretaryTools = new SecretaryToolService(memory);
-            var workspaceTools = new TechnicianToolService(client, secretaryTools, _ => Task.FromResult(false))
+            var workspaceTools = new CodyToolService(client, secretaryTools, _ => Task.FromResult(false))
             {
                 WorkspacePath = _settings.CodyWorkspace
             };
@@ -2461,7 +2461,7 @@ namespace App.Pages
                 "search_workspace_files",
                 "read_workspace_file"
             };
-            var declarations = new JsonArray(TechnicianToolService.CreateExecutionDeclarations()
+            var declarations = new JsonArray(CodyToolService.CreateExecutionDeclarations()
                 .OfType<JsonObject>()
                 .Where(declaration => allowedToolNames.Contains(declaration["name"]?.GetValue<string>() ?? string.Empty))
                 .Select(declaration => (JsonNode)declaration.DeepClone())
@@ -3064,7 +3064,7 @@ namespace App.Pages
             try
             {
                 var executionCommand = ResolvePythonCommand(command.Command);
-                var startInfo = TechnicianToolService.CreateCommandStartInfo(executionCommand, _settings.CodyWorkspace);
+                var startInfo = CodyToolService.CreateCommandStartInfo(executionCommand, _settings.CodyWorkspace);
                 ConfigurePythonEnvironment(startInfo, executionCommand);
                 var process = new Process
                 {

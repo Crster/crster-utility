@@ -25,13 +25,6 @@
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                ToolTipService.ToolTip="Active model and thinking effort"/>
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button x:Name="WorkspaceButton" Height="36" Padding="11,0" Click="WorkspaceButton_Click" Visibility="Collapsed"
-                                ToolTipService.ToolTip="Choose Technician workspace">
-                            <StackPanel Orientation="Horizontal" Spacing="7">
-                                <FontIcon Glyph="&#xE8B7;" FontSize="14"/>
-                                <TextBlock x:Name="WorkspaceButtonText" Text="Workspace"/>
-                            </StackPanel>
-                        </Button>
                         <ToggleButton x:Name="ContextButton" Height="36" Padding="11,0" Click="ContextButton_Click" ToolTipService.ToolTip="Show conversation context">
                             <StackPanel Orientation="Horizontal" Spacing="7">
                                 <FontIcon Glyph="&#xF133;" FontSize="14"/>

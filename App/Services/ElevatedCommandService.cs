@@ -58,7 +58,7 @@ namespace App.Services
                     ?? throw new InvalidOperationException("The elevated command request is invalid.");
                 using var process = new Process
                 {
-                    StartInfo = TechnicianToolService.CreateCommandStartInfo(
+                    StartInfo = CodyToolService.CreateCommandStartInfo(
                         request.Command,
                         request.WorkingDirectory)
                 };

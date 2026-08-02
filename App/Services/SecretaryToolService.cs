@@ -18,6 +18,7 @@ namespace App.Services
     {
         private const int MaximumResults = 20;
         private readonly SecretaryMemoryService _memory;
+        private readonly NotebookDatabaseService _notebook = new();
         private readonly TodoRepository _todos = new();
         private readonly WeatherService _weather = new();
 
@@ -25,15 +26,17 @@ namespace App.Services
 
         public static JsonArray CreateDeclarations() => new()
         {
-            Function("search_saved_items", "Use when the user asks about previously saved information across notes, memos, or todos. Searches all three sources with a case-insensitive .NET regular expression.", Props(("search_pattern", String("Focused .NET regular expression matched against saved text, for example: four13\\s+group."))), "search_pattern"),
-            Function("search_notes", "Use when the user wants notes whose text contains a phrase. Returns matching saved notes only.", Props(("search_text", String("Literal text to find in saved note content."))), "search_text"),
-            Function("search_memos", "Use when the user asks what is remembered about them. Filter by memo topic, text, or both; omit both filters to return all memos.", Props(("memo_topic", MemoTopic()), ("search_text", String("Optional literal text to find in memo content.")))),
+            Function("search_memory", "Search saved notes, memos, and todos with a case-insensitive .NET regular expression.", Props(("search_pattern", String("Focused .NET regular expression matched against saved text."))), "search_pattern"),
+            Function("save_note", "Save a note the user explicitly asks to keep.", Props(("note_text", String("Exact note content to save."))), "note_text"),
             Function("save_memo", "Use only to remember an explicit, durable user detail that will improve future help. Never save secrets, credentials, guesses, or inferred claims.", Props(("memo_topic", MemoTopic()), ("memo_text", String("Exact user-provided detail to remember."))), "memo_topic", "memo_text"),
-            Function("remove_memo", "Use to forget one saved memo identified by its memo key. Search memos first when the key is unknown.", Props(("memo_key", String("Exact key returned by search_memos or search_saved_items."))), "memo_key"),
-            Function("search_todos", "Use to find todos within one category whose text contains a phrase.", Props(("category_name", String("Exact todo category name.")), ("search_text", String("Literal text to find in todo content."))), "category_name", "search_text"),
-            Function("list_todo_categories", "Use before saving or searching todos when the available category names are unknown. Returns every category and its description.", new JsonObject()),
-            Function("list_due_todos", "Use when the user asks what they need to do now. Returns unfinished unscheduled todos and scheduled todos due now or within 30 minutes.", new JsonObject()),
-            Function("save_todo", "Use when the user explicitly asks to remember a task. Saves the task in an existing category and can optionally schedule local notifications with a five-field cron expression.", Props(("todo_text", String("Task text to save.")), ("category_name", String("Exact category name from list_todo_categories.")), ("notification_cron", String("Optional five-field cron expression interpreted in local time."))), "todo_text", "category_name"),
+            Function("remove_memo", "Forget one saved memo identified by its key. Search memory first when the key is unknown.", Props(("memo_key", String("Exact memo key returned by search_memory."))), "memo_key"),
+            Function("save_todo", "Save a todo the user explicitly asks to keep. Category defaults to General.", Props(("todo_text", String("Task text to save.")), ("category_name", String("Optional category name.")), ("notification_cron", String("Optional five-field cron expression interpreted in local time."))), "todo_text"),
+            Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", DataKindSchema())), "context_type")
+        };
+
+        public static JsonArray CreateReadOnlyDeclarations() => new()
+        {
+            Function("search_memory", "Search saved notes, memos, and todos with a case-insensitive .NET regular expression.", Props(("search_pattern", String("Focused .NET regular expression matched against saved text."))), "search_pattern"),
             Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", DataKindSchema())), "context_type")
         };
 
@@ -43,15 +46,11 @@ namespace App.Services
             {
                 return name switch
                 {
-                    "search_saved_items" => await SearchLocalKnowledgeAsync(RequiredString(arguments, "search_pattern"), token),
-                    "search_notes" => FindNotes(RequiredString(arguments, "search_text")),
-                    "search_memos" => await FindMemosAsync(OptionalString(arguments, "memo_topic"), OptionalString(arguments, "search_text"), token),
+                    "search_memory" => await SearchLocalKnowledgeAsync(RequiredString(arguments, "search_pattern"), token),
+                    "save_note" => await SaveNoteAsync(RequiredString(arguments, "note_text"), token),
                     "save_memo" => await WriteMemoAsync(RequiredString(arguments, "memo_topic"), RequiredString(arguments, "memo_text"), token),
                     "remove_memo" => DeleteMemo(RequiredString(arguments, "memo_key")),
-                    "search_todos" => FindTodos(RequiredString(arguments, "category_name"), RequiredString(arguments, "search_text")),
-                    "list_todo_categories" => GetTodoCategories(),
-                    "list_due_todos" => GetTodos(),
-                    "save_todo" => await WriteTodoAsync(RequiredString(arguments, "todo_text"), RequiredString(arguments, "category_name"), OptionalString(arguments, "notification_cron"), token),
+                    "save_todo" => await WriteTodoAsync(RequiredString(arguments, "todo_text"), OptionalString(arguments, "category_name") is { Length: > 0 } category ? category : "General", OptionalString(arguments, "notification_cron"), token),
                     "get_local_context" => await GetDataAsync(RequiredString(arguments, "context_type"), token),
                     _ => Error("unknown_tool", $"Secretary cannot use the tool “{name}”.")
                 };
@@ -60,6 +59,12 @@ namespace App.Services
             catch (FormatException exception) { return Error("invalid_arguments", exception.Message); }
             catch (ArgumentException exception) { return Error("invalid_arguments", exception.Message); }
             catch (Exception) { return Error("operation_failed", "Secretary could not complete that local operation."); }
+        }
+
+        private async Task<ToolResult> SaveNoteAsync(string content, CancellationToken token)
+        {
+            var note = await _notebook.CreateAsync(content, token);
+            return Ok("Saved the note.", new JsonObject { ["key"] = note.Key });
         }
 
         private Task<ToolResult> SearchLocalKnowledgeAsync(string regexPattern, CancellationToken token)
@@ -108,25 +113,6 @@ namespace App.Services
             return Task.FromResult(Ok($"Found {items.Count} saved result(s).", new JsonObject { ["items"] = items }));
         }
 
-        private ToolResult FindNotes(string query)
-        {
-            var items = new JsonArray(_memory.FindNotes(query, MaximumResults).Select(item => (JsonNode)new JsonObject
-            {
-                ["key"] = item.Id, ["value"] = item.Value, ["written_utc"] = item.Timestamp.ToString("O")
-            }).ToArray());
-            return Ok($"Found {items.Count} note(s).", new JsonObject { ["items"] = items });
-        }
-
-        private async Task<ToolResult> FindMemosAsync(string topic, string query, CancellationToken token)
-        {
-            var matches = await _memory.FindMemosAsync(topic, query, MaximumResults, token);
-            var items = new JsonArray(matches.Select(item => (JsonNode)new JsonObject
-            {
-                ["key"] = item.Id, ["topic"] = item.Topic, ["value"] = item.Value, ["written_utc"] = item.Timestamp.ToString("O")
-            }).ToArray());
-            return Ok($"Found {items.Count} memo(s).", new JsonObject { ["items"] = items });
-        }
-
         private async Task<ToolResult> WriteMemoAsync(string topic, string value, CancellationToken token)
         {
             var memo = await _memory.WriteMemoAsync(topic, value, token);
@@ -137,49 +123,6 @@ namespace App.Services
             _memory.DeleteMemo(key)
                 ? Ok("Deleted the memo.", new JsonObject { ["key"] = key })
                 : Error("memo_not_found", "No memo with that key was found.");
-
-        private ToolResult FindTodos(string category, string query)
-        {
-            var items = new JsonArray(_todos.ListByCategory(category.Trim())
-                .Where(item => item.Value.Contains(query.Trim(), StringComparison.OrdinalIgnoreCase))
-                .Take(MaximumResults)
-                .Select(TodoJson).ToArray());
-            return Ok($"Found {items.Count} todo(s).", new JsonObject { ["items"] = items });
-        }
-
-        private ToolResult GetTodoCategories()
-        {
-            var items = new JsonArray(_todos.ListCategories().Select(item => (JsonNode)new JsonObject
-            {
-                ["category"] = item.Id, ["description"] = item.Description
-            }).ToArray());
-            return Ok($"Found {items.Count} todo categor{(items.Count == 1 ? "y" : "ies")}.", new JsonObject { ["items"] = items });
-        }
-
-        private ToolResult GetTodos()
-        {
-            var now = DateTimeOffset.Now;
-            var end = now.AddMinutes(30);
-            var items = new JsonArray();
-            foreach (var todo in _todos.List().Where(item => !item.IsDone))
-            {
-                if (string.IsNullOrWhiteSpace(todo.Notify))
-                {
-                    items.Add(TodoJson(todo));
-                    continue;
-                }
-
-                CronExpression cron;
-                try { cron = CronExpression.Parse(todo.Notify, CronFormat.Standard); }
-                catch (CronFormatException) { continue; }
-                var next = cron.GetNextOccurrence(now.AddMinutes(-1), TimeZoneInfo.Local);
-                if (next is null || next > end) continue;
-                var value = TodoJson(todo);
-                value["next_notify_local"] = next.Value.ToString("O");
-                items.Add(value);
-            }
-            return Ok($"Found {items.Count} relevant unfinished todo(s).", new JsonObject { ["items"] = items });
-        }
 
         private async Task<ToolResult> WriteTodoAsync(string value, string category, string notify, CancellationToken token)
         {

@@ -20,7 +20,7 @@ using Microsoft.CodeAnalysis.CSharp;
 
 namespace App.Services
 {
-    internal sealed class TechnicianToolService
+    internal sealed class CodyToolService
     {
         private const int MaximumFileBytes = 1_000_000;
         private const int MaximumReadResultCharacters = 60_000;
@@ -45,7 +45,7 @@ namespace App.Services
         private readonly QwenClient _client;
         private readonly SecretaryToolService _secretaryTools;
         private readonly Func<string, Task<bool>> _confirmAsync;
-        public TechnicianToolService(QwenClient client, SecretaryToolService secretaryTools,
+        public CodyToolService(QwenClient client, SecretaryToolService secretaryTools,
             Func<string, Task<bool>> confirmAsync)
         {
             _client = client;
