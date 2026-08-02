@@ -26,6 +26,7 @@ namespace App.Windows
             }
             CenterOnCurrentScreen();
             DatabaseFolderBox.Text = App.Settings.Current.DatabaseFolder;
+            OpenAiCompatibleBaseUrlBox.Text = App.Settings.Current.OpenAiCompatibleBaseUrl;
         }
 
         private void CenterOnCurrentScreen()
@@ -49,27 +50,25 @@ namespace App.Windows
         private async void ContinueButton_Click(object sender, RoutedEventArgs e)
         {
             var folder = DatabaseFolderBox.Text.Trim();
-            var apiKey = QwenApiKeyBox.Password.Trim();
-            if (folder.Length == 0 || apiKey.Length == 0)
+            var baseUrl = OpenAiCompatibleBaseUrlBox.Text.Trim();
+            var apiKey = OpenAiCompatibleApiKeyBox.Password.Trim();
+            if (folder.Length == 0 || baseUrl.Length == 0 || apiKey.Length == 0)
             {
-                StatusText.Text = "Database folder and Qwen API key are required.";
+                StatusText.Text = "Database folder, OpenAI-compatible URL, and API key are required.";
                 return;
             }
 
             ContinueButton.IsEnabled = false;
-            StatusText.Text = "Verifying storage and Qwen...";
+            StatusText.Text = "Verifying storage and AI provider...";
             try
             {
                 Directory.CreateDirectory(folder);
                 var probe = Path.Combine(folder, $".crster-access-{Guid.NewGuid():N}.tmp");
                 await File.WriteAllTextAsync(probe, "probe");
                 File.Delete(probe);
-                using (var client = new QwenClient(apiKey))
-                    _ = await client.EmbedRetrievalQueryAsync("Crster Utility setup", CancellationToken.None);
-                App.Settings.Configure(folder, apiKey);
-                var settings = App.Settings.Current.Clone();
-                settings.UseQwenApiKeyForCli = UseQwenApiKeyForCliBox.IsChecked == true;
-                App.Settings.Save(settings);
+                using (var client = new OpenAiCompatibleClient(baseUrl, apiKey))
+                    _ = await client.ListModelsAsync(CancellationToken.None);
+                App.Settings.Configure(folder, baseUrl, apiKey);
                 SetupCompleted?.Invoke(this, EventArgs.Empty);
                 Close();
             }

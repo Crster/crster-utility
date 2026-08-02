@@ -25,8 +25,8 @@ namespace App.Services
         public async Task<List<NotebookSearchResult>> SearchAsync(string query, int maximumResults = 10, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(query)) return [];
-            using var qwen = new QwenClient(App.Settings.Current.QwenApiKey);
-            var embedding = await qwen.EmbedRetrievalQueryAsync(query, cancellationToken);
+            using var openAiCompatible = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
+            var embedding = await openAiCompatible.EmbedRetrievalQueryAsync(query, cancellationToken);
             var ranked = Database.Notes.FindAll()
                 .Where(item => item.Embedding.Length > 0)
                 .Select(item => (Item: item, Score: Cosine(embedding, BytesToFloats(item.Embedding))))
@@ -80,13 +80,13 @@ namespace App.Services
             if (content.Length == 0) throw new ArgumentException("Note content is required.", nameof(content));
 
             var embeddingText = NotebookFormat.CreateEmbeddingText(content);
-            using var qwen = new QwenClient(App.Settings.Current.QwenApiKey);
+            using var openAiCompatible = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
             var document = new NoteDocument
             {
                 Value = content,
                 Embedding = string.IsNullOrWhiteSpace(embeddingText)
                     ? []
-                    : FloatsToBytes(await qwen.EmbedNoteAsync(embeddingText, cancellationToken)),
+                    : FloatsToBytes(await openAiCompatible.EmbedNoteAsync(embeddingText, cancellationToken)),
                 Timestamp = DateTime.UtcNow
             };
             Database.Notes.Insert(document);
@@ -98,7 +98,7 @@ namespace App.Services
             var incoming = entries.ToList();
             var existing = Database.Notes.FindAll().ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
             var prepared = new List<NoteDocument>();
-            using var qwen = new QwenClient(App.Settings.Current.QwenApiKey);
+            using var openAiCompatible = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
             try
             {
                 foreach (var entry in incoming)
@@ -115,7 +115,7 @@ namespace App.Services
                     var embeddingText = NotebookFormat.CreateEmbeddingText(entry.Content);
                     var embedding = string.IsNullOrWhiteSpace(embeddingText)
                         ? []
-                        : await qwen.EmbedNoteAsync(embeddingText, CancellationToken.None);
+                        : await openAiCompatible.EmbedNoteAsync(embeddingText, CancellationToken.None);
                     prepared.Add(new NoteDocument
                     {
                         Id = entry.Key,

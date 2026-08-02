@@ -34,16 +34,16 @@ namespace App.Services
             var todos = Database.Todos.Find(todo => !todo.IsDone).ToList();
             if (todos.Count == 0) return [];
 
-            using var qwen = new QwenClient(App.Settings.Current.QwenApiKey);
+            using var openAiCompatible = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
             foreach (var todo in todos.Where(todo => todo.Embedding.Length == 0))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var embedding = await qwen.EmbedRetrievalDocumentAsync(todo.Category, todo.Value, cancellationToken);
+                var embedding = await openAiCompatible.EmbedRetrievalDocumentAsync(todo.Category, todo.Value, cancellationToken);
                 todo.Embedding = NotebookDatabaseService.FloatsToBytes(embedding);
                 Database.Todos.Update(todo);
             }
 
-            var queryEmbedding = await qwen.EmbedRetrievalQueryAsync(query, cancellationToken);
+            var queryEmbedding = await openAiCompatible.EmbedRetrievalQueryAsync(query, cancellationToken);
             return todos
                 .Where(todo => todo.Embedding.Length > 0)
                 .Select(todo => (Todo: todo, Score: NotebookDatabaseService.Cosine(
@@ -58,8 +58,8 @@ namespace App.Services
 
         public async Task RefreshEmbeddingAsync(TodoDocument todo, CancellationToken cancellationToken = default)
         {
-            using var qwen = new QwenClient(App.Settings.Current.QwenApiKey);
-            var embedding = await qwen.EmbedRetrievalDocumentAsync(todo.Category, todo.Value, cancellationToken);
+            using var openAiCompatible = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
+            var embedding = await openAiCompatible.EmbedRetrievalDocumentAsync(todo.Category, todo.Value, cancellationToken);
             todo.Embedding = NotebookDatabaseService.FloatsToBytes(embedding);
             Database.Todos.Update(todo);
         }

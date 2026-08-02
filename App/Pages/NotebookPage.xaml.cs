@@ -122,9 +122,9 @@ namespace App.Pages
                 SaveStatusText.Text = "Select text in the note editor to improve it.";
                 return;
             }
-            if (string.IsNullOrWhiteSpace(App.Settings.Current.QwenApiKey))
+            if (string.IsNullOrWhiteSpace(App.Settings.Current.OpenAiCompatibleApiKey))
             {
-                SaveStatusText.Text = "A Qwen API key is required to improve text.";
+                SaveStatusText.Text = "An AI provider API key is required to improve text.";
                 return;
             }
 
@@ -134,7 +134,7 @@ namespace App.Pages
             {
                 var selectionStart = NoteEditor.SelectionStart;
                 var selectedText = NoteEditor.SelectedText;
-                using var client = new QwenClient(App.Settings.Current.QwenApiKey);
+                using var client = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
                 var improved = await client.ImproveWritingAsync(selectedText, _pageCancellation.Token);
                 _pageCancellation.Token.ThrowIfCancellationRequested();
                 if (NoteEditor.SelectionStart != selectionStart || !string.Equals(NoteEditor.SelectedText, selectedText, StringComparison.Ordinal))

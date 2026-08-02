@@ -9,10 +9,10 @@ namespace App.Services
 {
     internal sealed class SmartToolService
     {
-        private readonly QwenClient _client;
+        private readonly OpenAiCompatibleClient _client;
         private readonly SecretaryToolService _secretaryTools;
 
-        public SmartToolService(QwenClient client, SecretaryToolService secretaryTools)
+        public SmartToolService(OpenAiCompatibleClient client, SecretaryToolService secretaryTools)
         {
             _client = client;
             _secretaryTools = secretaryTools;
@@ -48,7 +48,7 @@ namespace App.Services
         private async Task<ToolResult> SearchWebAsync(string query, CancellationToken token)
         {
             var model = App.Settings.Current.HighCostModel;
-            QwenTurnResult result;
+            OpenAiCompatibleTurnResult result;
             try
             {
                 result = await _client.CreateGroundedInteractionAsync(

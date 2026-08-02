@@ -11,10 +11,10 @@ namespace App.Services
 {
     internal sealed class TechnicianSessionOrchestrator
     {
-        private readonly QwenClient _client;
+        private readonly OpenAiCompatibleClient _client;
         private readonly ChatLogService _log;
 
-        public TechnicianSessionOrchestrator(QwenClient client, ChatLogService log)
+        public TechnicianSessionOrchestrator(OpenAiCompatibleClient client, ChatLogService log)
         {
             _client = client;
             _log = log;
@@ -24,10 +24,10 @@ namespace App.Services
             ? App.Settings.Current.HighCostModel
             : App.Settings.Current.LowCostModel;
 
-        public static QwenThinkingLevel Thinking(TechnicianModelTier tier) => tier is TechnicianModelTier.Escalated
+        public static OpenAiCompatibleThinkingLevel Thinking(TechnicianModelTier tier) => tier is TechnicianModelTier.Escalated
             or TechnicianModelTier.HighThinking
-            ? QwenThinkingLevel.High
-            : QwenThinkingLevel.Disabled;
+            ? OpenAiCompatibleThinkingLevel.High
+            : OpenAiCompatibleThinkingLevel.Disabled;
 
         public async Task<string> CompactAsync(TechnicianCompactionInput input, CancellationToken token)
         {
@@ -59,13 +59,13 @@ namespace App.Services
             var result = await _client.CreateSimpleInteractionAsync(
                 App.Settings.Current.LowCostModel,
                 [],
-                [QwenClient.CreateUserStep(prompt, [])],
+                [OpenAiCompatibleClient.CreateUserStep(prompt, [])],
                 instruction,
                 null,
                 token,
-                QwenThinkingLevel.Disabled);
+                OpenAiCompatibleThinkingLevel.Disabled);
             await LogInternalResponseAsync("compaction", App.Settings.Current.LowCostModel, result);
-            if (string.IsNullOrWhiteSpace(result.Text)) throw new InvalidOperationException("Qwen returned empty continuation context.");
+            if (string.IsNullOrWhiteSpace(result.Text)) throw new InvalidOperationException("The AI provider returned empty continuation context.");
             await _log.WriteAsync("technician.compacted", ("length", result.Text.Length));
             return result.Text.Trim();
         }
@@ -74,12 +74,12 @@ namespace App.Services
             _log.WriteJsonAsync(ChatPersonality.Technician, $"internal.{operation}.request", new JsonObject
             {
                 ["model"] = model,
-                ["thinking_level"] = QwenThinkingLevel.Disabled.ToString(),
+                ["thinking_level"] = OpenAiCompatibleThinkingLevel.Disabled.ToString(),
                 ["system_instruction"] = instruction,
                 ["input"] = request
             });
 
-        private Task LogInternalResponseAsync(string operation, string model, QwenTurnResult result) =>
+        private Task LogInternalResponseAsync(string operation, string model, OpenAiCompatibleTurnResult result) =>
             _log.WriteJsonAsync(ChatPersonality.Technician, $"internal.{operation}.response", new JsonObject
             {
                 ["model"] = model,

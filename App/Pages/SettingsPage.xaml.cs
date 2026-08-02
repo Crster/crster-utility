@@ -50,7 +50,8 @@ namespace App.Pages
             await SynchronizeStartupSettingAsync();
             StartupToggle.IsOn = _settings.StartWithWindows;
             NotebookPathBox.Text = _settings.DatabaseFolder;
-            QwenApiKeyBox.Password = _settings.QwenApiKey;
+            OpenAiCompatibleBaseUrlBox.Text = _settings.OpenAiCompatibleBaseUrl;
+            OpenAiCompatibleApiKeyBox.Password = _settings.OpenAiCompatibleApiKey;
             CityBox.Text = _settings.City;
             CountryBox.Text = _settings.Country;
             SnapshotShortcutBox.ItemsSource = SnapshotShortcuts;
@@ -85,7 +86,7 @@ namespace App.Pages
             SetModelBoxesEnabled(false);
             try
             {
-                using var client = new QwenClient(_settings.QwenApiKey);
+                using var client = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
                 var models = await client.ListModelsAsync(System.Threading.CancellationToken.None);
                 SetModelChoices(EmbeddingModelBox, models.Where(model => model.SupportsEmbedding), _settings.EmbeddingModel);
                 SetModelChoices(LowCostModelBox, models.Where(model => model.SupportsChat && !model.SupportsImageGeneration), _settings.LowCostModel);
@@ -95,11 +96,11 @@ namespace App.Pages
             }
             catch (Exception exception)
             {
-                StatusText.Text = $"Qwen models could not be loaded: {exception.Message}";
+                StatusText.Text = $"AI models could not be loaded: {exception.Message}";
             }
         }
 
-        private static void SetModelChoices(ComboBox box, IEnumerable<QwenModel> models, string selectedId)
+        private static void SetModelChoices(ComboBox box, IEnumerable<OpenAiCompatibleModel> models, string selectedId)
         {
             var choices = models.Select(model => new ModelChoice(model.Id, string.IsNullOrWhiteSpace(model.Description) ? model.DisplayName : $"{model.DisplayName} — {model.Description}"))
                 .OrderBy(choice => choice.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
@@ -170,7 +171,21 @@ namespace App.Pages
             catch (Exception exception) { StatusText.Text = $"Database move failed: {exception.Message}"; }
         }
 
-        private void QwenApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e) { if (!_loading) Save(settings => settings.QwenApiKey = QwenApiKeyBox.Password.Trim()); }
+        private void OpenAiCompatibleApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e) { if (!_loading) Save(settings => settings.OpenAiCompatibleApiKey = OpenAiCompatibleApiKeyBox.Password.Trim()); }
+        private void OpenAiCompatibleBaseUrlBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            try
+            {
+                Save(settings => settings.OpenAiCompatibleBaseUrl = OpenAiCompatibleBaseUrlBox.Text.Trim());
+                OpenAiCompatibleBaseUrlBox.Text = _settings.OpenAiCompatibleBaseUrl;
+            }
+            catch (InvalidOperationException exception)
+            {
+                OpenAiCompatibleBaseUrlBox.Text = _settings.OpenAiCompatibleBaseUrl;
+                StatusText.Text = exception.Message;
+            }
+        }
         private void EmbeddingModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && EmbeddingModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.EmbeddingModel = choice.Id); }
         private void LowCostModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && LowCostModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.LowCostModel = choice.Id); }
         private void HighCostModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && HighCostModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.HighCostModel = choice.Id); }

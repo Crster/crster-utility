@@ -156,9 +156,9 @@ namespace App.Pages
         {
             var prompt = PromptBox.Text.Trim();
             if (_isBusy || prompt.Length == 0) return;
-            if (string.IsNullOrWhiteSpace(App.Settings.Current.QwenApiKey))
+            if (string.IsNullOrWhiteSpace(App.Settings.Current.OpenAiCompatibleApiKey))
             {
-                await ShowErrorAsync("Qwen API key required", "Add a Qwen API key in Settings before using Artist.");
+                await ShowErrorAsync("AI provider required", "Add an OpenAI-compatible URL and API key in Settings before using Artist.");
                 return;
             }
 
@@ -185,7 +185,7 @@ namespace App.Pages
                 if (_pendingAttachment is not null) contextImages.Add(_pendingAttachment);
 
                 SetBusy(true);
-                using var client = new QwenClient(App.Settings.Current.QwenApiKey);
+                using var client = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
                 var generated = await client.GenerateImageAsync(generationPrompt, contextImages, _pageCancellation.Token);
                 _pageCancellation.Token.ThrowIfCancellationRequested();
                 await SetImageAsync(generated);

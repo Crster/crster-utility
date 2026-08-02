@@ -22,7 +22,7 @@ namespace App.Services
         {
             try
             {
-                using var client = new QwenClient(App.Settings.Current.QwenApiKey);
+                using var client = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
                 var database = App.Settings.Database;
                 foreach (var note in database.Notes.FindAll())
                 {

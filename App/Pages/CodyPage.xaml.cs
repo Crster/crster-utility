@@ -37,10 +37,6 @@ namespace App.Pages
     {
         private const int MaximumWorkspaceFileBytes = 1_000_000;
         private const int MaximumCommandFixContextCharacters = 12_000;
-        private const string QwenCodePackage = "@qwen-code/qwen-code@latest";
-        private const string QwenOpenAiApiRoot = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
-        private const string QwenClaudeApiRoot = "https://dashscope-intl.aliyuncs.com/api/v2/apps/claude-code-proxy";
-        private const string QwenCoderModel = "qwen3-coder-plus";
         private sealed record TerminalShell(string Name, string FileName, string Arguments);
         private sealed record AgentCliClient(
             string Name,
@@ -146,7 +142,6 @@ namespace App.Pages
         private int _searchVersion;
         private bool _loaded;
         private bool _isBusy;
-        private bool _isInstallingQwenCode;
         private bool _filesVisible;
         private bool _isFilesResizing;
         private bool _isTerminalResizing;
@@ -185,7 +180,6 @@ namespace App.Pages
             EditorTabs.SelectedItem = HomeTab;
             SetCodyChatDocked(false);
             _settings = await App.Settings.LoadAsync();
-            UseQwenApiKeyForCliBox.IsChecked = _settings.UseQwenApiKeyForCli;
             _agentProviders.AddRange(AgentCliDefinitions.Select(agent => new AgentProviderOption(agent.Name)));
             AgentProviderBox.DisplayMemberPath = nameof(AgentProviderOption.DisplayName);
             AgentProviderBox.ItemsSource = _agentProviders;
@@ -2411,9 +2405,9 @@ namespace App.Pages
         private async void ScanCommandsMenuItem_Click(object sender, RoutedEventArgs e)
         {
             if (!HasWorkspace()) return;
-            if (string.IsNullOrWhiteSpace(_settings.QwenApiKey))
+            if (string.IsNullOrWhiteSpace(_settings.OpenAiCompatibleApiKey))
             {
-                await ShowMessageAsync("Qwen API key required", "Add a Qwen API key in Settings before scanning commands.");
+                await ShowMessageAsync("AI provider required", "Add an OpenAI-compatible URL and API key in Settings before scanning commands.");
                 return;
             }
 
@@ -2448,7 +2442,7 @@ namespace App.Pages
 
         private async Task<List<CodyCommand>> DiscoverWorkspaceCommandsAsync()
         {
-            using var client = new QwenClient(_settings.QwenApiKey);
+            using var client = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
             var memory = new SecretaryMemoryService(client);
             using var secretaryTools = new SecretaryToolService(memory);
             var workspaceTools = new CodyToolService(client, secretaryTools, _ => Task.FromResult(false))
@@ -2469,7 +2463,7 @@ namespace App.Pages
             var history = new List<JsonObject>();
             IReadOnlyList<JsonObject> nextSteps =
             [
-                QwenClient.CreateUserStep(
+                OpenAiCompatibleClient.CreateUserStep(
                     "Inspect the selected workspace and discover its executable project scripts and manifest-backed commands. Return only a JSON array with objects shaped as {\"name\":\"Run dev server\",\"command\":\"npm run dev\"}.",
                     [])
             ];
@@ -2490,7 +2484,7 @@ namespace App.Pages
                     instruction,
                     declarations,
                     CancellationToken.None,
-                    QwenThinkingLevel.High);
+                    OpenAiCompatibleThinkingLevel.High);
                 foreach (var step in nextSteps) history.Add((JsonObject)step.DeepClone());
                 foreach (var step in result.Steps) history.Add((JsonObject)step.DeepClone());
                 if (result.FunctionCalls.Count == 0)
@@ -2514,12 +2508,12 @@ namespace App.Pages
                     var toolResult = allowedToolNames.Contains(call.Name)
                         ? await workspaceTools.ExecuteAsync(call.Name, call.Arguments, CancellationToken.None)
                         : new ToolResult(false, "{\"success\":false,\"error\":\"Only read-only workspace tools are available.\"}");
-                    functionResults.Add(QwenClient.CreateFunctionResult(call, toolResult));
+                    functionResults.Add(OpenAiCompatibleClient.CreateFunctionResult(call, toolResult));
                 }
                 nextSteps = functionResults;
             }
 
-            throw new InvalidOperationException("Qwen reached the command scan limit without returning a command list.");
+            throw new InvalidOperationException("The AI provider reached the command scan limit without returning a command list.");
         }
 
         private async void AddCommandButton_Click(object sender, RoutedEventArgs e)
@@ -2636,7 +2630,7 @@ namespace App.Pages
             ToolTipService.SetToolTip(
                 ScanCommandsButton,
                 ScanCommandsButton.IsEnabled
-                    ? "Discover executable scripts and project commands with Qwen"
+                    ? "Discover executable scripts and project commands with the AI provider"
                     : "Choose a workspace before scanning commands");
         }
 
@@ -3360,82 +3354,6 @@ namespace App.Pages
             AgentCliHost.Visibility = Visibility.Collapsed;
         }
 
-        private void UseQwenApiKeyForCliBox_Click(object sender, RoutedEventArgs e)
-        {
-            var settings = _settings.Clone();
-            settings.UseQwenApiKeyForCli = UseQwenApiKeyForCliBox.IsChecked == true;
-            App.Settings.Save(settings);
-            _settings = settings;
-        }
-
-        private async Task<bool> InstallQwenCodeAsync()
-        {
-            if (_isInstallingQwenCode) return false;
-            var qwenDefinition = AgentCliDefinitions.First(agent => agent.Name == "Qwen");
-            if (FindAgentCliExecutable(qwenDefinition) is not null) return true;
-
-            var npmExecutable = FindExecutable("npm.cmd") ?? FindExecutable("npm.exe");
-            if (npmExecutable is null)
-            {
-                await ShowMessageAsync("Node.js required", "Install Node.js, then try installing Qwen Code again.");
-                return false;
-            }
-
-            var dialog = new ContentDialog
-            {
-                XamlRoot = XamlRoot,
-                Title = "Install Qwen Code?",
-                Content = "Cody uses Qwen, but Qwen Code is not installed. Install it globally with npm now?",
-                PrimaryButtonText = "Install",
-                CloseButtonText = "Not now",
-                DefaultButton = ContentDialogButton.Primary
-            };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return false;
-
-            _isInstallingQwenCode = true;
-            LoadAvailableAgentClients();
-            try
-            {
-                var startInfo = new ProcessStartInfo(npmExecutable)
-                {
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                };
-                startInfo.ArgumentList.Add("install");
-                startInfo.ArgumentList.Add("--global");
-                startInfo.ArgumentList.Add(QwenCodePackage);
-
-                using var process = Process.Start(startInfo)
-                    ?? throw new InvalidOperationException("npm did not start.");
-                var standardOutput = process.StandardOutput.ReadToEndAsync();
-                var standardError = process.StandardError.ReadToEndAsync();
-                await process.WaitForExitAsync();
-                var output = await standardOutput;
-                var error = await standardError;
-                if (process.ExitCode != 0)
-                    throw new InvalidOperationException(string.IsNullOrWhiteSpace(error) ? output.Trim() : error.Trim());
-
-                if (FindAgentCliExecutable(qwenDefinition) is null)
-                {
-                    await ShowMessageAsync("Restart required", "Qwen Code was installed. Restart Crster Utility so the updated PATH is available.");
-                    return false;
-                }
-                return true;
-            }
-            catch (Exception exception) when (exception is InvalidOperationException or IOException or UnauthorizedAccessException)
-            {
-                await ShowMessageAsync("Could not install Qwen Code", exception.Message);
-                return false;
-            }
-            finally
-            {
-                _isInstallingQwenCode = false;
-                LoadAvailableAgentClients();
-            }
-        }
-
         private void LoadAvailableAgentClients()
         {
             _availableAgentClients.Clear();
@@ -3444,7 +3362,7 @@ namespace App.Pages
             AvailableAgentsRepeater.ItemsSource = _availableAgentClients.ToArray();
             var installedAgentCount = _availableAgentClients.Count(client => client.IsInstalled);
             AgentSelectionStatusText.Text = installedAgentCount == 0
-                ? "Choose Qwen Code to install it, or install another supported coding agent."
+                ? "Install a supported coding agent, then restart Crster Utility."
                 : HasWorkspace()
                     ? $"{installedAgentCount} installed agent{(installedAgentCount == 1 ? string.Empty : "s")} available."
                     : "Choose a workspace before starting an agent.";
@@ -3453,28 +3371,20 @@ namespace App.Pages
         private void AddAvailableAgentClient(AgentCliDefinition definition)
         {
             var executable = FindAgentCliExecutable(definition);
-            if (executable is not null || string.Equals(definition.Name, "Qwen", StringComparison.OrdinalIgnoreCase))
+            if (executable is not null)
                 _availableAgentClients.Add(new AgentCliClient(
                     definition.Name,
                     definition.DisplayName,
                     executable,
                     definition.Glyph,
-                    _isInstallingQwenCode
-                        ? "Installing Qwen Code…"
-                        : executable is null ? "Install Qwen Code" : "Installed and ready",
+                    "Installed and ready",
                     executable is not null,
-                    !_isInstallingQwenCode));
+                    true));
         }
 
         private async void LaunchAgentButton_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not Button { Tag: AgentCliClient client }) return;
-            if (!client.IsInstalled)
-            {
-                if (!await InstallQwenCodeAsync()) return;
-                client = _availableAgentClients.First(agent =>
-                    string.Equals(agent.Name, "Qwen", StringComparison.OrdinalIgnoreCase));
-            }
             if (!HasWorkspace())
             {
                 await ChangeWorkspaceAsync();
@@ -3534,33 +3444,7 @@ namespace App.Pages
 
         private string CreateAgentCliStartupCommandLine(string executable)
         {
-            var provider = AgentProviderBox.SelectedItem as AgentProviderOption;
-            if (!_settings.UseQwenApiKeyForCli || string.IsNullOrWhiteSpace(_settings.QwenApiKey))
-                return $"\"{executable.Replace("\"", "\\\"")}\"";
-
-            var environment = provider?.Name switch
-            {
-                "Qwen" => new Dictionary<string, string>
-                {
-                    ["OPENAI_API_KEY"] = _settings.QwenApiKey,
-                    ["OPENAI_BASE_URL"] = QwenOpenAiApiRoot,
-                    ["OPENAI_MODEL"] = QwenCoderModel
-                },
-                "Claude" => new Dictionary<string, string>
-                {
-                    ["ANTHROPIC_BASE_URL"] = QwenClaudeApiRoot,
-                    ["ANTHROPIC_AUTH_TOKEN"] = _settings.QwenApiKey
-                },
-                _ => null
-            };
-            if (environment is null || FindWindowsPowerShell() is not { } powerShell)
-                return $"\"{executable.Replace("\"", "\\\"")}\"";
-
-            var assignments = string.Join(
-                "; ",
-                environment.Select(pair =>
-                    $"$env:{pair.Key}=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{Convert.ToBase64String(Encoding.UTF8.GetBytes(pair.Value))}'))"));
-            return $"\"{powerShell.Replace("\"", "\\\"")}\" -NoLogo -NoProfile -NoExit -Command \"{assignments}; & '{executable.Replace("'", "''")}'\"";
+            return $"\"{executable.Replace("\"", "\\\"")}\"";
         }
 
         private static string? FindAgentCliExecutable(AgentCliDefinition definition)

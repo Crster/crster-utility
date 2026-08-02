@@ -3,66 +3,71 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Net.Http.Headers;
+using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using App.Models;
+using OpenAI;
+using OpenAI.Embeddings;
 
 namespace App.Services
 {
-    internal sealed class QwenClient : IDisposable
+    internal sealed class OpenAiCompatibleClient : IDisposable
     {
-        private const string ApiRoot = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
-        private const string NativeApiRoot = "https://dashscope-intl.aliyuncs.com/api/v1";
         private const int MaximumFunctionResultCharacters = 12_000;
-        private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
-        private readonly string _apiKey;
+        private readonly HttpClient _downloadClient = new() { Timeout = TimeSpan.FromMinutes(5) };
+        private readonly OpenAIClient _openAiClient;
 
-        public QwenClient(string apiKey) => _apiKey = apiKey;
+        public OpenAiCompatibleClient(string apiKey) : this(App.Settings.Current.OpenAiCompatibleBaseUrl, apiKey) { }
+
+        public OpenAiCompatibleClient(string baseUrl, string apiKey)
+        {
+            _openAiClient = new OpenAIClient(
+                new ApiKeyCredential(apiKey),
+                new OpenAIClientOptions { Endpoint = new Uri($"{baseUrl.TrimEnd('/')}/") });
+        }
 
         // Section: Models
-        public async Task<List<QwenModel>> ListModelsAsync(CancellationToken cancellationToken)
+        public async Task<List<OpenAiCompatibleModel>> ListModelsAsync(CancellationToken cancellationToken)
         {
-            using var request = CreateRequest(HttpMethod.Get, $"{ApiRoot}/models");
-            using var response = await _httpClient.SendAsync(request, cancellationToken);
-            var root = await ReadJsonAsync(response, cancellationToken);
-            var models = new List<QwenModel>();
-            foreach (var node in root["data"]?.AsArray() ?? [])
+            var models = new List<OpenAiCompatibleModel>();
+            var response = await _openAiClient.GetOpenAIModelClient().GetModelsAsync(cancellationToken);
+            foreach (var availableModel in response.Value)
             {
-                var id = node?["id"]?.GetValue<string>() ?? string.Empty;
+                var id = availableModel.Id;
                 if (string.IsNullOrWhiteSpace(id)) continue;
-                models.Add(new QwenModel
+                models.Add(new OpenAiCompatibleModel
                 {
                     Id = id,
                     DisplayName = id,
                     SupportsEmbedding = id.Contains("embedding", StringComparison.OrdinalIgnoreCase),
                     SupportsImageGeneration = id.Contains("image", StringComparison.OrdinalIgnoreCase)
                         || id.StartsWith("wan", StringComparison.OrdinalIgnoreCase),
-                    SupportsChat = id.StartsWith("qwen", StringComparison.OrdinalIgnoreCase)
-                        && !id.Contains("embedding", StringComparison.OrdinalIgnoreCase)
+                    SupportsChat = !id.Contains("embedding", StringComparison.OrdinalIgnoreCase)
                         && !id.Contains("image", StringComparison.OrdinalIgnoreCase),
-                    SupportsThinking = id.Contains('3')
+                    SupportsThinking = true
                 });
             }
-            AddDefaultModel(models, "qwen-flash", supportsChat: true);
-            AddDefaultModel(models, "qwen-plus", supportsChat: true);
-            AddDefaultModel(models, "text-embedding-v4", supportsEmbedding: true);
-            AddDefaultModel(models, "qwen-image-2.0", supportsImageGeneration: true);
+            AddDefaultModel(models, App.Settings.Current.LowCostModel, supportsChat: true);
+            AddDefaultModel(models, App.Settings.Current.HighCostModel, supportsChat: true);
+            AddDefaultModel(models, App.Settings.Current.EmbeddingModel, supportsEmbedding: true);
+            AddDefaultModel(models, App.Settings.Current.ArtistModel, supportsImageGeneration: true);
             return models.OrderBy(model => model.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         private static void AddDefaultModel(
-            ICollection<QwenModel> models,
+            ICollection<OpenAiCompatibleModel> models,
             string id,
             bool supportsChat = false,
             bool supportsEmbedding = false,
             bool supportsImageGeneration = false)
         {
             if (models.Any(model => string.Equals(model.Id, id, StringComparison.OrdinalIgnoreCase))) return;
-            models.Add(new QwenModel
+            models.Add(new OpenAiCompatibleModel
             {
                 Id = id,
                 DisplayName = id,
@@ -97,20 +102,13 @@ namespace App.Services
         private async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken)
         {
             if (text.Length > 24_000) text = text[..24_000];
-            var body = new JsonObject
+            var options = new EmbeddingGenerationOptions
             {
-                ["model"] = App.Settings.Current.EmbeddingModel,
-                ["input"] = text,
-                ["dimensions"] = 768
+                Dimensions = 768
             };
-            using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/embeddings");
-            request.Content = JsonContent(body);
-            using var response = await _httpClient.SendAsync(request, cancellationToken);
-            var root = await ReadJsonAsync(response, cancellationToken);
-            return root["data"]?[0]?["embedding"]?.AsArray()
-                .Select(value => value?.GetValue<float>() ?? 0f)
-                .ToArray()
-                ?? throw new InvalidOperationException("Qwen returned no embedding values.");
+            var client = _openAiClient.GetEmbeddingClient(App.Settings.Current.EmbeddingModel);
+            var response = await client.GenerateEmbeddingAsync(text, options, cancellationToken);
+            return response.Value.ToFloats().ToArray();
         }
 
         // Section: Text and tools
@@ -124,18 +122,18 @@ namespace App.Services
                 null,
                 cancellationToken);
             return string.IsNullOrWhiteSpace(result.Text)
-                ? throw new InvalidOperationException("Qwen returned no improved text.")
+                ? throw new InvalidOperationException("The AI provider returned no improved text.")
                 : result.Text.Trim();
         }
 
-        public async Task<QwenTurnResult> CreateSimpleInteractionAsync(
+        public async Task<OpenAiCompatibleTurnResult> CreateSimpleInteractionAsync(
             string model,
             IReadOnlyList<JsonObject> history,
             IReadOnlyList<JsonObject> newSteps,
             string systemInstruction,
             JsonArray? tools,
             CancellationToken cancellationToken,
-            QwenThinkingLevel thinkingLevel = QwenThinkingLevel.Default)
+            OpenAiCompatibleThinkingLevel thinkingLevel = OpenAiCompatibleThinkingLevel.Default)
         {
             var messages = new JsonArray
             {
@@ -148,12 +146,8 @@ namespace App.Services
             {
                 ["model"] = model,
                 ["messages"] = messages,
-                ["stream"] = false,
-                ["enable_thinking"] = thinkingLevel is not (QwenThinkingLevel.Disabled or QwenThinkingLevel.Default)
+                ["stream"] = false
             };
-            if (tools?.OfType<JsonObject>().Any(tool =>
-                string.Equals(tool["type"]?.GetValue<string>(), "google_search", StringComparison.Ordinal)) == true)
-                body["enable_search"] = true;
             if (tools is { Count: > 0 }) body["tools"] = ConvertTools(tools);
 
             JsonObject root;
@@ -171,13 +165,13 @@ namespace App.Services
                 }
                 catch (InvalidOperationException retryException) when (IsInvalidModelJsonError(retryException.Message))
                 {
-                    throw new InvalidOperationException("Qwen returned invalid tool-call JSON twice. No local tools were run; retry the request.", retryException);
+                    throw new InvalidOperationException("The AI provider returned invalid tool-call JSON twice. No local tools were run; retry the request.", retryException);
                 }
             }
             return ParseChatCompletion(root);
         }
 
-        public async Task<QwenTurnResult> CreateGroundedInteractionAsync(
+        public async Task<OpenAiCompatibleTurnResult> CreateGroundedInteractionAsync(
             string model,
             string prompt,
             string systemInstruction,
@@ -190,9 +184,7 @@ namespace App.Services
                 {
                     new JsonObject { ["role"] = "system", ["content"] = systemInstruction },
                     new JsonObject { ["role"] = "user", ["content"] = prompt }
-                },
-                ["enable_search"] = true,
-                ["search_options"] = new JsonObject { ["search_strategy"] = "agent" }
+                }
             };
             return ParseChatCompletion(await SendChatAsync(body, cancellationToken));
         }
@@ -234,7 +226,7 @@ namespace App.Services
             return new JsonObject { ["type"] = "user_input", ["content"] = content };
         }
 
-        public static JsonObject CreateFunctionResult(QwenFunctionCall call, ToolResult result)
+        public static JsonObject CreateFunctionResult(OpenAiCompatibleFunctionCall call, ToolResult result)
         {
             var allowFullCommandOutput = call.Name is "run_workspace_command" or "run_elevated_workspace_command"
                 && call.Arguments["full"]?.GetValue<bool>() == true;
@@ -312,20 +304,24 @@ namespace App.Services
 
         private async Task<JsonObject> SendChatAsync(JsonObject body, CancellationToken cancellationToken)
         {
-            using var request = CreateRequest(HttpMethod.Post, $"{ApiRoot}/chat/completions");
-            request.Content = JsonContent(body);
-            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            return await ReadJsonAsync(response, cancellationToken);
+            var model = body["model"]?.GetValue<string>()
+                ?? throw new InvalidOperationException("An AI model is required.");
+            using var content = BinaryContent.Create(BinaryData.FromString(body.ToJsonString()));
+            var response = await _openAiClient.GetChatClient(model).CompleteChatAsync(
+                content,
+                new RequestOptions { CancellationToken = cancellationToken });
+            return JsonNode.Parse(response.GetRawResponse().Content.ToString()) as JsonObject
+                ?? throw new InvalidOperationException("The AI provider returned an invalid JSON response.");
         }
 
-        private static QwenTurnResult ParseChatCompletion(JsonObject root)
+        private static OpenAiCompatibleTurnResult ParseChatCompletion(JsonObject root)
         {
-            var result = new QwenTurnResult { InteractionId = root["id"]?.GetValue<string>() };
+            var result = new OpenAiCompatibleTurnResult { InteractionId = root["id"]?.GetValue<string>() };
             var usage = root["usage"] as JsonObject;
             result.InputTokens = usage?["prompt_tokens"]?.GetValue<int>();
             result.OutputTokens = usage?["completion_tokens"]?.GetValue<int>();
             var message = root["choices"]?[0]?["message"] as JsonObject
-                ?? throw new InvalidOperationException("Qwen returned no assistant message.");
+                ?? throw new InvalidOperationException("The AI provider returned no assistant message.");
             result.Text = ReadTextContent(message["content"]);
             result.Thinking = message["reasoning_content"]?.GetValue<string>() ?? string.Empty;
             if (!string.IsNullOrWhiteSpace(result.Text))
@@ -342,8 +338,8 @@ namespace App.Services
                 var argumentsText = function["arguments"]?.GetValue<string>() ?? "{}";
                 JsonObject arguments;
                 try { arguments = JsonNode.Parse(argumentsText) as JsonObject ?? new JsonObject(); }
-                catch (JsonException exception) { throw new InvalidOperationException("Qwen generated invalid tool-call JSON.", exception); }
-                var functionCall = new QwenFunctionCall(
+                catch (JsonException exception) { throw new InvalidOperationException("The AI provider generated invalid tool-call JSON.", exception); }
+                var functionCall = new OpenAiCompatibleFunctionCall(
                     call?["id"]?.GetValue<string>() ?? throw new InvalidOperationException("A function call did not include an id."),
                     function["name"]?.GetValue<string>() ?? string.Empty,
                     arguments);
@@ -384,113 +380,26 @@ namespace App.Services
             CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(prompt)) throw new ArgumentException("An image prompt is required.", nameof(prompt));
-            var content = new JsonArray();
-            foreach (var image in contextImages)
+            if (contextImages.Count > 1) throw new NotSupportedException("The configured OpenAI-compatible image API supports one reference image per edit.");
+            var client = _openAiClient.GetImageClient(App.Settings.Current.ArtistModel);
+            OpenAI.Images.GeneratedImage image;
+            if (contextImages.Count == 0)
+                image = (await client.GenerateImageAsync(prompt.Trim(), null, cancellationToken)).Value;
+            else
             {
-                if (image.Data.Length == 0) throw new ArgumentException("A context image is empty.", nameof(contextImages));
-                content.Add(new JsonObject
-                {
-                    ["image"] = $"data:{image.MimeType};base64,{Convert.ToBase64String(image.Data)}"
-                });
+                var context = contextImages[0];
+                if (context.Data.Length == 0) throw new ArgumentException("The context image is empty.", nameof(contextImages));
+                using var stream = new MemoryStream(context.Data, writable: false);
+                image = (await client.GenerateImageEditAsync(stream, $"reference{MimeTypeExtension(context.MimeType)}", prompt.Trim(), null, cancellationToken)).Value;
             }
-            content.Add(new JsonObject { ["text"] = prompt.Trim() });
-            var body = new JsonObject
-            {
-                ["model"] = App.Settings.Current.ArtistModel,
-                ["input"] = new JsonObject
-                {
-                    ["messages"] = new JsonArray
-                    {
-                        new JsonObject { ["role"] = "user", ["content"] = content }
-                    }
-                },
-                ["parameters"] = new JsonObject { ["n"] = 1, ["size"] = "1328*1328" }
-            };
-            using var request = CreateRequest(
-                HttpMethod.Post,
-                $"{NativeApiRoot}/services/aigc/multimodal-generation/generation");
-            request.Content = JsonContent(body);
-            using var response = await _httpClient.SendAsync(request, cancellationToken);
-            var root = await ReadJsonAsync(response, cancellationToken);
-            var imageUrl = FindImageUrl(root)
-                ?? throw new InvalidOperationException("Qwen completed the request without returning an image.");
-            if (imageUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-            {
-                var comma = imageUrl.IndexOf(',');
-                if (comma < 0) throw new InvalidOperationException("Qwen returned an invalid image.");
-                var mimeType = imageUrl[5..imageUrl.IndexOf(';')];
-                return new GeneratedImage(Convert.FromBase64String(imageUrl[(comma + 1)..]), mimeType);
-            }
-            using var imageResponse = await _httpClient.GetAsync(imageUrl, cancellationToken);
-            if (!imageResponse.IsSuccessStatusCode) await ThrowApiErrorAsync(imageResponse, cancellationToken);
-            return new GeneratedImage(
-                await imageResponse.Content.ReadAsByteArrayAsync(cancellationToken),
-                imageResponse.Content.Headers.ContentType?.MediaType ?? "image/png");
-        }
-
-        private static string? FindImageUrl(JsonNode? node)
-        {
-            if (node is JsonObject obj)
-            {
-                foreach (var key in new[] { "image", "url", "image_url" })
-                    if (obj[key] is JsonValue value && value.TryGetValue<string>(out var text)
-                        && (text.StartsWith("http", StringComparison.OrdinalIgnoreCase)
-                            || text.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase)))
-                        return text;
-                foreach (var child in obj.Select(property => property.Value))
-                {
-                    var found = FindImageUrl(child);
-                    if (found is not null) return found;
-                }
-            }
-            else if (node is JsonArray array)
-                foreach (var child in array)
-                {
-                    var found = FindImageUrl(child);
-                    if (found is not null) return found;
-                }
-            return null;
+            if (image.ImageBytes is not null) return new GeneratedImage(image.ImageBytes.ToArray(), "image/png");
+            if (image.ImageUri is null) throw new InvalidOperationException("The AI provider returned no image.");
+            using var response = await _downloadClient.GetAsync(image.ImageUri, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            return new GeneratedImage(await response.Content.ReadAsByteArrayAsync(cancellationToken), response.Content.Headers.ContentType?.MediaType ?? "image/png");
         }
 
         // Section: HTTP
-        private HttpRequestMessage CreateRequest(HttpMethod method, string uri)
-        {
-            var request = new HttpRequestMessage(method, uri);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-            return request;
-        }
-
-        private static StringContent JsonContent(JsonNode node) =>
-            new(node.ToJsonString(), Encoding.UTF8, "application/json");
-
-        private static async Task<JsonObject> ReadJsonAsync(HttpResponseMessage response, CancellationToken cancellationToken)
-        {
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            if (!response.IsSuccessStatusCode) throw new InvalidOperationException(ReadError(content, response));
-            return JsonNode.Parse(content) as JsonObject
-                ?? throw new InvalidOperationException("Qwen returned an invalid JSON response.");
-        }
-
-        private static async Task ThrowApiErrorAsync(HttpResponseMessage response, CancellationToken cancellationToken)
-        {
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            throw new InvalidOperationException(ReadError(content, response));
-        }
-
-        private static string ReadError(string content, HttpResponseMessage response)
-        {
-            var fallback = $"Qwen request failed ({(int)response.StatusCode}).";
-            try
-            {
-                var root = JsonNode.Parse(content);
-                var message = root?["error"]?["message"]?.GetValue<string>()
-                    ?? root?["message"]?.GetValue<string>()
-                    ?? root?["output"]?["message"]?.GetValue<string>();
-                return string.IsNullOrWhiteSpace(message) ? fallback : message;
-            }
-            catch (JsonException) { return fallback; }
-        }
-
         private static string TruncateFunctionResult(string value) => value.Length <= MaximumFunctionResultCharacters
             ? value
             : $"Tool response exceeded {MaximumFunctionResultCharacters:N0} characters and was truncated. Request a narrower range or more specific command.\n\n{value[..MaximumFunctionResultCharacters]}";
@@ -513,6 +422,13 @@ namespace App.Services
             _ => "application/octet-stream"
         };
 
-        public void Dispose() => _httpClient.Dispose();
+        private static string MimeTypeExtension(string mimeType) => mimeType.ToLowerInvariant() switch
+        {
+            "image/jpeg" => ".jpg",
+            "image/webp" => ".webp",
+            _ => ".png"
+        };
+
+        public void Dispose() => _downloadClient.Dispose();
     }
 }

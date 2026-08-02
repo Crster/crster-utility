@@ -14,10 +14,11 @@
                 <StackPanel Spacing="16">
                     <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Spacing="3"><TextBlock Text="Start with Windows" FontWeight="SemiBold"/><TextBlock Text="Launch Crster Utility hidden in the system tray after sign-in." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel><ToggleSwitch x:Name="StartupToggle" Grid.Column="1" Toggled="StartupToggle_Toggled"/></Grid>
                     <StackPanel Spacing="6"><TextBlock Text="Database folder" FontWeight="SemiBold"/><Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="NotebookPathBox" IsReadOnly="True"/><Button Grid.Column="1" Content="Browse" Click="NotebookBrowseButton_Click"/></Grid><TextBlock Text="Changing this location copies CrsterUtility.db and keeps the original as a backup." TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel>
-                    <StackPanel Spacing="6"><TextBlock Text="Qwen API key" FontWeight="SemiBold"/><PasswordBox x:Name="QwenApiKeyBox" PlaceholderText="Paste your Qwen API key" PasswordChanged="QwenApiKeyBox_PasswordChanged"/></StackPanel>
-                    <!-- Section: Qwen Models -->
+                    <StackPanel Spacing="6"><TextBlock Text="OpenAI-compatible URL" FontWeight="SemiBold"/><TextBox x:Name="OpenAiCompatibleBaseUrlBox" PlaceholderText="https://api.openai.com/v1" LostFocus="OpenAiCompatibleBaseUrlBox_LostFocus"/></StackPanel>
+                    <StackPanel Spacing="6"><TextBlock Text="API key" FontWeight="SemiBold"/><PasswordBox x:Name="OpenAiCompatibleApiKeyBox" PlaceholderText="Paste your API key" PasswordChanged="OpenAiCompatibleApiKeyBox_PasswordChanged"/></StackPanel>
+                    <!-- Section: AI Models -->
                     <StackPanel Spacing="8">
-                        <TextBlock Text="Qwen models" FontWeight="SemiBold"/>
+                        <TextBlock Text="AI models" FontWeight="SemiBold"/>
                         <TextBlock Text="Models available to this API key. Changes are saved immediately." TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                         <ComboBox x:Name="EmbeddingModelBox" Header="Embedding" DisplayMemberPath="Name" SelectionChanged="EmbeddingModelBox_SelectionChanged"/>
                         <ComboBox x:Name="LowCostModelBox" Header="Low Cost" DisplayMemberPath="Name" SelectionChanged="LowCostModelBox_SelectionChanged"/>

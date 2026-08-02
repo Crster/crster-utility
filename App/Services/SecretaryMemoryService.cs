@@ -13,9 +13,9 @@ namespace App.Services
         {
             "personal", "career", "knowledge", "opinion", "idea", "relationship", "guide", "milestone"
         };
-        private readonly QwenClient _client;
+        private readonly OpenAiCompatibleClient _client;
 
-        public SecretaryMemoryService(QwenClient client) => _client = client;
+        public SecretaryMemoryService(OpenAiCompatibleClient client) => _client = client;
 
         public IReadOnlyList<NoteDocument> FindNotes(string query, int maximum = 20)
         {
