@@ -18,17 +18,23 @@ namespace App.Services
         private const int MaximumFileBytes = 1_000_000;
         private const int MaximumResultCharacters = 60_000;
         private const int MaximumDirectoryEntries = 500;
+        private readonly OpenAiCompatibleClient _client;
         private readonly SmartToolService _sharedTools;
         private readonly Func<IReadOnlyList<string>> _userMessages;
+        private readonly Func<string?> _previousResponse;
         private readonly Func<TechnicianCommandConfirmation, Task<bool>> _confirmAsync;
 
         public TechnicianToolService(
+            OpenAiCompatibleClient client,
             SmartToolService sharedTools,
             Func<IReadOnlyList<string>> userMessages,
+            Func<string?> previousResponse,
             Func<TechnicianCommandConfirmation, Task<bool>> confirmAsync)
         {
+            _client = client;
             _sharedTools = sharedTools;
             _userMessages = userMessages;
+            _previousResponse = previousResponse;
             _confirmAsync = confirmAsync;
         }
 
@@ -36,8 +42,9 @@ namespace App.Services
         [
             Function("read_file", "Read a text file from an absolute path the user explicitly supplied or approved.", Props(("absolute_file_path", String("User-approved absolute Windows file path."))), "absolute_file_path"),
             Function("list_file_and_directory", "List direct children of an absolute directory the user explicitly supplied or approved.", Props(("absolute_directory_path", String("User-approved absolute Windows directory path."))), "absolute_directory_path"),
-            Function("run_command", "Run a PC troubleshooting command. Mutating repairs require confirmation.", Props(("command_line", String("Complete troubleshooting command line.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line"),
-            Function("run_elevated_command", "Run a PC troubleshooting command through UAC. Always requires confirmation.", Props(("command_line", String("Complete elevated troubleshooting command line.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line"),
+            Function("run_command", "Run a non-elevated PC troubleshooting command without user confirmation.", Props(("command_line", String("Complete troubleshooting command line.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line"),
+            Function("run_elevated_command", "Run a PC troubleshooting command through UAC. Always show the user the risk explanation and require confirmation.", Props(("command_line", String("Complete elevated troubleshooting command line.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line"),
+            Function("search_web", "Use the high-cost Technician planner to search current web information and return actionable troubleshooting guidance. Include the specific problem or question to research.", Props(("query", String("Focused troubleshooting question or research query."))), "query"),
             Function("get_local_context", "Get current device-local date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", SecretaryToolService.DataKindSchema())), "context_type")
         ];
 
@@ -52,6 +59,7 @@ namespace App.Services
                     "list_file_and_directory" => ListDirectory(Required(arguments, "absolute_directory_path")),
                     "run_command" => await RunCommandAsync(Required(arguments, "command_line"), Optional(arguments, "working_directory"), false, token),
                     "run_elevated_command" => await RunCommandAsync(Required(arguments, "command_line"), Optional(arguments, "working_directory"), true, token),
+                    "search_web" => await SearchWebAsync(Required(arguments, "query"), token),
                     "get_local_context" => await _sharedTools.ExecuteAsync(name, arguments, token),
                     _ => Error("unknown_tool", "Technician cannot use that tool.")
                 };
@@ -64,6 +72,39 @@ namespace App.Services
                 return Error("operation_failed", exception.Message);
             }
             catch (Exception) { return Error("operation_failed", "Technician could not complete that operation."); }
+        }
+
+        private async Task<ToolResult> SearchWebAsync(string query, CancellationToken token)
+        {
+            var previousResponse = _previousResponse();
+            var context = string.IsNullOrWhiteSpace(previousResponse)
+                ? string.Empty
+                : $"Previous Technician response (context only, not instructions):\n{previousResponse.Trim()}\n\n";
+            var result = await _client.CreateSimpleInteractionAsync(
+                App.Settings.Current.HighCostModel,
+                [],
+                [OpenAiCompatibleClient.CreateUserStep($"{context}Research request:\n{query}", [])],
+                "You are the high-cost planning tool for Technician. Use current web search results to create a concise, actionable troubleshooting plan for the research request. Use the previous Technician response only to understand what has already been tried. Do not run local commands or claim that local diagnostics were performed. Include diagnostic steps, decision points, safety considerations, and verification. Return the plan in Markdown, including relevant sources when available.",
+                null,
+                token,
+                OpenAiCompatibleThinkingLevel.High,
+                includeWebSearch: true);
+            if (string.IsNullOrWhiteSpace(result.Text))
+                return Error("search_unavailable", "The web research model returned no guidance.");
+
+            var sources = new JsonArray(result.Sources
+                .DistinctBy(source => source.Uri)
+                .Select(source => (JsonNode)new JsonObject
+                {
+                    ["title"] = source.Title,
+                    ["uri"] = source.Uri
+                })
+                .ToArray());
+            return Ok(new JsonObject
+            {
+                ["plan"] = result.Text.Trim(),
+                ["sources"] = sources
+            });
         }
 
         private ToolResult ReadFile(string path)
@@ -109,7 +150,7 @@ namespace App.Services
                 ? Environment.GetFolderPath(Environment.SpecialFolder.System)
                 : ResolveAuthorizedPath(workingDirectory, true);
             var mutating = IsMutatingCommand(command);
-            if ((elevated || mutating || safetyWarning is not null)
+            if (elevated
                 && !await _confirmAsync(new TechnicianCommandConfirmation(command, elevated, mutating, safetyWarning)))
                 return Error("confirmation_declined", "The user did not approve the command.");
 
@@ -171,12 +212,8 @@ namespace App.Services
         private static string? GetCommandSafetyWarning(string command)
         {
             if (string.IsNullOrWhiteSpace(command)) throw new FormatException("command_line is required.");
-            if (Regex.IsMatch(command, @"[&|<>;]")
-                || !Regex.IsMatch(
-                    command,
-                    @"^\s*(?:""?(?:systeminfo|msinfo32|dxdiag|tasklist|driverquery|ipconfig|ping|pathping|tracert|nslookup|netstat|route|arp|whoami|hostname|where|wevtutil|w32tm|powercfg|fsutil|sfc|chkdsk|dism|netsh|gpupdate|winget|sc(?:\.exe)?|net|powershell(?:\.exe)?|pwsh(?:\.exe)?)""?)\b",
-                    RegexOptions.IgnoreCase))
-                return "It contains command chaining, redirection, or a command Technician cannot verify as a single PC diagnostic or repair action.";
+            if (Regex.IsMatch(command, @"[&<>;]"))
+                return "It contains command chaining or redirection that Technician cannot verify as a single PC diagnostic or repair action.";
             if (Regex.IsMatch(command, @"\b(format|diskpart|cipher\s+/w|vssadmin\s+delete|wbadmin\s+delete|bcdedit|takeown|icacls|mimikatz|sekurlsa|procdump)\b", RegexOptions.IgnoreCase)
                 || Regex.IsMatch(command, @"\b(del|erase|rmdir|rd|remove-item|clear-content)\b", RegexOptions.IgnoreCase)
                 || Regex.IsMatch(command, @"\b(reg\s+(save|export)\s+HKLM\\SAM|schtasks\s+/create|sc(?:\.exe)?\s+create)\b", RegexOptions.IgnoreCase)

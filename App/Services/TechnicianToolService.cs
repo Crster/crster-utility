@@ -1400,6 +1400,34 @@ namespace App.Services
 
         internal static ProcessStartInfo CreateCommandStartInfo(string command, string workingDirectory)
         {
+            var powershellMatch = Regex.Match(
+                command,
+                @"^\s*(?<executable>""?(?:powershell|pwsh)(?:\.exe)?""?)\s+(?:-\S+\s+)*-Command\s+(?<quote>[""'])(?<script>[\s\S]*)\k<quote>\s*$",
+                RegexOptions.IgnoreCase);
+            if (!powershellMatch.Success)
+            {
+                powershellMatch = Regex.Match(
+                    command,
+                    @"^\s*(?<executable>""?(?:powershell|pwsh)(?:\.exe)?""?)\s+(?:-\S+\s+)*-Command\s+(?<script>[\s\S]+?)\s*$",
+                    RegexOptions.IgnoreCase);
+            }
+            if (powershellMatch.Success)
+            {
+                var powershell = new ProcessStartInfo(powershellMatch.Groups["executable"].Value.Trim('"'))
+                {
+                    WorkingDirectory = workingDirectory,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                powershell.ArgumentList.Add("-NoProfile");
+                powershell.ArgumentList.Add("-NonInteractive");
+                powershell.ArgumentList.Add("-Command");
+                powershell.ArgumentList.Add(powershellMatch.Groups["script"].Value);
+                return powershell;
+            }
+
             var startInfo = new ProcessStartInfo(Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe")
             {
                 WorkingDirectory = workingDirectory,
@@ -1420,7 +1448,7 @@ namespace App.Services
             var truncated = !full && (stdout.Length > DefaultCommandOutputEdgeCharacters * 2 || stderr.Length > DefaultCommandOutputEdgeCharacters * 2);
             return Ok(new JsonObject
             {
-                ["stdio"] = full ? stdout : TruncateOutput(stdout),
+                ["stdout"] = full ? stdout : TruncateOutput(stdout),
                 ["stderr"] = full ? stderr : TruncateOutput(stderr),
                 ["return_code"] = exitCode,
                 ["truncated"] = truncated

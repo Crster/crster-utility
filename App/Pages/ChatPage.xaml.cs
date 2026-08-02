@@ -92,11 +92,14 @@ namespace App.Pages
             _secretaryTools = new SecretaryToolService(_secretaryMemory);
             _smartTools = new SmartToolService(_secretaryTools);
             _technicianTools = new TechnicianToolService(
+                _client,
                 _smartTools,
                 () => _sessions[ChatPersonality.Technician].Messages
                     .Where(message => message.Kind == ChatItemKind.User)
                     .Select(message => message.Content)
                     .ToArray(),
+                () => _sessions[ChatPersonality.Technician].Messages
+                    .LastOrDefault(message => message.Kind == ChatItemKind.Assistant)?.Content,
                 ConfirmTechnicianActionAsync);
             RenderSession();
         }
@@ -208,7 +211,6 @@ namespace App.Pages
                         ["input"] = new JsonArray(nextSteps.Select(step => step.DeepClone()).ToArray()),
                         ["tools"] = tools?.DeepClone()
                     });
-                    var usesHostedWebSearch = _personality is ChatPersonality.Smart or ChatPersonality.Technician;
                     var result = await _client!.CreateSimpleInteractionAsync(
                         model,
                         Session.History,
@@ -217,8 +219,8 @@ namespace App.Pages
                         tools,
                         operationCancellation.Token,
                         thinkingLevel,
-                        usesHostedWebSearch,
-                        usesHostedWebSearch ? QueueStreamedAssistantText : null);
+                        _personality == ChatPersonality.Smart,
+                        _personality == ChatPersonality.Smart ? QueueStreamedAssistantText : null);
                     requestTimer.Stop();
                     await _chatLog.WriteAsync("request.completed",
                         ("personality", _personality),
