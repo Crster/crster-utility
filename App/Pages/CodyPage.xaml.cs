@@ -151,6 +151,7 @@ namespace App.Pages
         private bool _isFilesResizing;
         private bool _isTerminalResizing;
         private bool _isInteractiveTerminalReady;
+        private bool _resizeInteractiveTerminalWhenPanelSettles;
         private bool _loadingTerminalShells;
         private string? _savedTerminalShellName;
         private double _filesPanelWidth = 280;
@@ -3243,14 +3244,6 @@ namespace App.Pages
             _isTerminalResizing = TerminalSplitter.CapturePointer(e.Pointer);
             _terminalResizeStartY = e.GetCurrentPoint(this).Position.Y;
             _terminalResizeStartHeight = TerminalRow.ActualHeight;
-            if (_isTerminalResizing && _terminalControl is { Visibility: Visibility.Visible } terminal)
-            {
-                terminal.Width = terminal.ActualWidth;
-                terminal.Height = terminal.ActualHeight;
-                LogTerminalDiagnostic("resize_terminal_suspended",
-                    ("width", terminal.ActualWidth),
-                    ("height", terminal.ActualHeight));
-            }
             LogTerminalDiagnostic("resize_pressed", ("captured", _isTerminalResizing), ("height", _terminalResizeStartHeight));
             e.Handled = _isTerminalResizing;
         }
@@ -3262,7 +3255,6 @@ namespace App.Pages
                 _terminalResizeStartHeight - (e.GetCurrentPoint(this).Position.Y - _terminalResizeStartY),
                 160,
                 600);
-            TerminalRow.Height = new GridLength(_terminalPanelHeight);
             e.Handled = true;
         }
 
@@ -3276,39 +3268,48 @@ namespace App.Pages
             _isTerminalResizing = false;
             TerminalSplitter.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
-            LogTerminalDiagnostic("resize_released", ("height", TerminalRow.ActualHeight));
-            var terminal = _terminalControl;
-            if (terminal is null
+            _resizeInteractiveTerminalWhenPanelSettles = true;
+            TerminalRow.Height = new GridLength(_terminalPanelHeight);
+            LogTerminalDiagnostic("resize_released", ("height", _terminalPanelHeight));
+        }
+
+        private void TerminalPanel_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (!_resizeInteractiveTerminalWhenPanelSettles) return;
+
+            _resizeInteractiveTerminalWhenPanelSettles = false;
+            _ = DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                () => ResizeInteractiveTerminal(_terminalControl));
+        }
+
+        private void ResizeInteractiveTerminal(EasyTerminalControl? terminal)
+        {
+            if (!_isInteractiveTerminalReady
+                || terminal is null
+                || !ReferenceEquals(_terminalControl, terminal)
                 || TerminalPanel.Visibility != Visibility.Visible
                 || !ReferenceEquals(TerminalTabs.SelectedItem, InteractiveTerminalTab))
                 return;
-            _ = DispatcherQueue.TryEnqueue(() =>
+
+            try
             {
-                if (ReferenceEquals(_terminalControl, terminal))
-                {
-                    ResizeInteractiveTerminal(terminal);
-                    terminal.Focus(FocusState.Programmatic);
-                }
-            });
+                var hostTop = InteractiveTerminalHost.TransformToVisual(TerminalPanel)
+                    .TransformPoint(new global::Windows.Foundation.Point()).Y;
+                var width = TerminalPanel.ActualWidth;
+                var height = TerminalPanel.ActualHeight - hostTop;
+                if (width <= 0 || height <= 0) return;
+
+                InteractiveTerminalHost.Height = height;
+                terminal.Width = width;
+                terminal.Height = height;
+                LogTerminalDiagnostic("resize_terminal", ("width", width), ("height", height));
+            }
+            catch (ArgumentException)
+            {
+                // The native terminal can detach while its tab is closing.
+            }
         }
-
-        private void ResizeInteractiveTerminal(EasyTerminalControl terminal)
-        {
-            var width = InteractiveTerminalHost.ActualWidth;
-            var height = InteractiveTerminalHost.ActualHeight;
-            if (!_isInteractiveTerminalReady
-                || !ReferenceEquals(_terminalControl, terminal)
-                || width <= 0
-                || height <= 0)
-                return;
-
-            terminal.Width = width;
-            terminal.Height = height;
-            LogTerminalDiagnostic("resize_terminal_restored", ("width", width), ("height", height));
-        }
-
-        private void TerminalPanel_SizeChanged(object sender, SizeChangedEventArgs e) =>
-            LogTerminalDiagnostic("panel_size_changed", ("width", e.NewSize.Width), ("height", e.NewSize.Height));
 
         // Section: Agent CLI terminal
         private void AgentCliHost_SizeChanged(object sender, SizeChangedEventArgs e) => ResizeAgentCliTerminal();
@@ -3686,7 +3687,12 @@ namespace App.Pages
             _isInteractiveTerminalReady = true;
             LogTerminalDiagnostic("resize_enabled");
             if (TerminalPanel.Visibility == Visibility.Visible)
+            {
                 TerminalSplitter.IsHitTestVisible = true;
+                _ = DispatcherQueue.TryEnqueue(
+                    Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                    () => ResizeInteractiveTerminal(terminal));
+            }
         }
 
         private EasyTerminalControl CreateTerminalControl()

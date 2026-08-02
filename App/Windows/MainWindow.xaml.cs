@@ -43,6 +43,7 @@ namespace App.Windows
         {
             InitializeComponent();
             this.ExtendsContentIntoTitleBar = true;
+            SetTitleBar(titleBar);
 
             AppWindow.Resize(new SizeInt32(800, 720));
             CenterOnCurrentScreen();
