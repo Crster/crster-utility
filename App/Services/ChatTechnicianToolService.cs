@@ -42,9 +42,8 @@ namespace App.Services
         [
             Function("read_file", "Read a text file from an absolute path the user explicitly supplied or approved.", Props(("absolute_file_path", String("User-approved absolute Windows file path."))), "absolute_file_path"),
             Function("list_file_and_directory", "List direct children of an absolute directory the user explicitly supplied or approved.", Props(("absolute_directory_path", String("User-approved absolute Windows directory path."))), "absolute_directory_path"),
-            Function("ask_user_approval", "Ask the user to approve a dangerous or risky command before executing it. This only asks for approval; it never runs the command. Continue only when the result contains approved=true.", Props(("command_line", String("Exact complete troubleshooting command line that may be dangerous or risky."))), "command_line"),
-            Function("run_command", "Run a non-elevated PC troubleshooting command after approval when it is dangerous or risky.", Props(("command_line", String("Complete troubleshooting command line.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line"),
-            Function("run_elevated_command", "Run a PC troubleshooting command through UAC. Always show the user the risk explanation and require confirmation.", Props(("command_line", String("Complete elevated troubleshooting command line.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line"),
+            Function("run_command", "Run a non-elevated PC troubleshooting command. Request Moderate or High risk when user confirmation is required.", Props(("command_line", String("Complete troubleshooting command line.")), ("risk", String("Command risk level: Low, Moderate, or High.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line", "risk"),
+            Function("run_elevated_command", "Run a PC troubleshooting command through UAC. Always show the user the risk explanation and require confirmation.", Props(("command_line", String("Complete elevated troubleshooting command line.")), ("risk", String("Command risk level: Low, Moderate, or High.")), ("working_directory", String("Optional user-approved absolute working directory."))), "command_line", "risk"),
             Function("search_web", "Use the high-cost Technician planner to search current web information and return actionable troubleshooting guidance. Include the specific problem or question to research.", Props(("query", String("Focused troubleshooting question or research query."))), "query"),
             Function("get_local_context", "Get current device-local date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", SecretaryToolService.DataKindSchema())), "context_type")
         ];
@@ -58,9 +57,8 @@ namespace App.Services
                 {
                     "read_file" => ReadFile(Required(arguments, "absolute_file_path")),
                     "list_file_and_directory" => ListDirectory(Required(arguments, "absolute_directory_path")),
-                    "ask_user_approval" => await AskUserApprovalAsync(Required(arguments, "command_line")),
-                    "run_command" => await RunCommandAsync(Required(arguments, "command_line"), Optional(arguments, "working_directory"), false, token),
-                    "run_elevated_command" => await RunCommandAsync(Required(arguments, "command_line"), Optional(arguments, "working_directory"), true, token),
+                    "run_command" => await RunCommandAsync(Required(arguments, "command_line"), RequiredRisk(arguments), Optional(arguments, "working_directory"), false, token),
+                    "run_elevated_command" => await RunCommandAsync(Required(arguments, "command_line"), RequiredRisk(arguments), Optional(arguments, "working_directory"), true, token),
                     "search_web" => await SearchWebAsync(Required(arguments, "query"), token),
                     "get_local_context" => await _sharedTools.ExecuteAsync(name, arguments, token),
                     _ => Error("unknown_tool", "Technician cannot use that tool.")
@@ -144,7 +142,7 @@ namespace App.Services
             return Ok(new JsonObject { ["path"] = fullPath, ["items"] = new JsonArray(items), ["truncated"] = truncated });
         }
 
-        private async Task<ToolResult> RunCommandAsync(string command, string workingDirectory, bool elevated, CancellationToken token)
+        private async Task<ToolResult> RunCommandAsync(string command, string risk, string workingDirectory, bool elevated, CancellationToken token)
         {
             command = NormalizeCommandLine(command);
             var safetyWarning = GetCommandSafetyWarning(command);
@@ -152,7 +150,9 @@ namespace App.Services
                 ? Environment.GetFolderPath(Environment.SpecialFolder.System)
                 : ResolveAuthorizedPath(workingDirectory, true);
             var mutating = IsMutatingCommand(command);
-            if (elevated
+            if ((elevated
+                || risk is "Moderate" or "High"
+                || safetyWarning is not null)
                 && !await _confirmAsync(new TechnicianCommandConfirmation(command, elevated, mutating, safetyWarning)))
                 return Error("confirmation_declined", "The user did not approve the command.");
 
@@ -168,21 +168,6 @@ namespace App.Services
             var errorTask = process.StandardError.ReadToEndAsync(token);
             await process.WaitForExitAsync(token);
             return CommandResult(await outputTask, await errorTask, process.ExitCode);
-        }
-
-        private async Task<ToolResult> AskUserApprovalAsync(string command)
-        {
-            command = NormalizeCommandLine(command);
-            var safetyWarning = GetCommandSafetyWarning(command);
-            var confirmation = new TechnicianCommandConfirmation(
-                command,
-                false,
-                IsMutatingCommand(command),
-                safetyWarning);
-            var approved = await _confirmAsync(confirmation);
-            return approved
-                ? Ok(new JsonObject { ["approved"] = true, ["command_line"] = command })
-                : Error("confirmation_declined", "The user did not approve the command.");
         }
 
         private string ResolveAuthorizedPath(string path, bool requireDirectory)
@@ -317,6 +302,15 @@ namespace App.Services
         private static string Truncate(string value) => value.Length <= MaximumResultCharacters ? value : value[..MaximumResultCharacters];
         private static string Required(JsonObject arguments, string name) => Optional(arguments, name) is { Length: > 0 } value ? value : throw new FormatException($"{name} is required.");
         private static string Optional(JsonObject arguments, string name) => arguments[name]?.GetValue<string>()?.Trim() ?? string.Empty;
+        private static string RequiredRisk(JsonObject arguments)
+        {
+            var risk = Required(arguments, "risk");
+            return risk switch
+            {
+                "Low" or "Moderate" or "High" => risk,
+                _ => throw new FormatException("risk must be Low, Moderate, or High.")
+            };
+        }
         private static JsonObject String(string description) => new() { ["type"] = "string", ["description"] = description };
         private static JsonObject Props(params (string Name, JsonObject Schema)[] properties) { var result = new JsonObject(); foreach (var property in properties) result[property.Name] = property.Schema; return result; }
         private static JsonObject Function(string name, string description, JsonObject properties, params string[] required) { var parameters = new JsonObject { ["type"] = "object", ["properties"] = properties }; if (required.Length > 0) parameters["required"] = new JsonArray(required.Select(value => (JsonNode)value).ToArray()); return new JsonObject { ["type"] = "function", ["name"] = name, ["description"] = description, ["parameters"] = parameters }; }

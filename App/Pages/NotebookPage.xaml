@@ -90,7 +90,7 @@
                       BorderThickness="0">
                     <ListView.ItemTemplate>
                         <DataTemplate>
-                            <controls:Noteblock Loaded="Block_Loaded" />
+                            <controls:Noteblock Loaded="Block_Loaded" DataContextChanged="Block_DataContextChanged" />
                         </DataTemplate>
                     </ListView.ItemTemplate>
                     <ListView.ItemContainerStyle>

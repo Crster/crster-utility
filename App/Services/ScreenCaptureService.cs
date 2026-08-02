@@ -70,6 +70,8 @@ namespace App.Services
                 var accessResult = await AppCapability.Create("graphicsCaptureProgrammatic").RequestAccessAsync();
                 if (accessResult != AppCapabilityAccessStatus.Allowed)
                 {
+                    if (accessResult == AppCapabilityAccessStatus.DeniedByUser)
+                        DisableSnapshotShortcut();
                     return null;
                 }
 
@@ -81,6 +83,14 @@ namespace App.Services
             {
                 return null;
             }
+        }
+
+        private static void DisableSnapshotShortcut()
+        {
+            if (string.IsNullOrEmpty(App.Settings.Current.SnapshotShortcut)) return;
+            var settings = App.Settings.Current.Clone();
+            settings.SnapshotShortcut = string.Empty;
+            App.Settings.Save(settings);
         }
     }
 }

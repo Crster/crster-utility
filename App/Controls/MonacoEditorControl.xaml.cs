@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -192,7 +191,6 @@ namespace App.Controls
             catch (COMException exception) when (
                 exception.HResult is unchecked((int)0x8007139F) or unchecked((int)0x80010108))
             {
-                Debug.WriteLine($"[Monaco] Ignored WebView2 shutdown message: {exception.Message}");
             }
         }
 

@@ -104,15 +104,18 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <AssemblyName>CrsterUtility.App</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <GenerateAppInstallerFile>True</GenerateAppInstallerFile>
-    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <GenerateAppInstallerFile Condition="'$(AppInstallerUri)' != ''">True</GenerateAppInstallerFile>
+    <GenerateAppInstallerFile Condition="'$(AppInstallerUri)' == ''">False</GenerateAppInstallerFile>
+    <AppxPackageSigningEnabled>True</AppxPackageSigningEnabled>
     <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
-    <AppxAutoIncrementPackageRevision>False</AppxAutoIncrementPackageRevision>
+    <AppxAutoIncrementPackageRevision>True</AppxAutoIncrementPackageRevision>
     <GenerateTestArtifacts>False</GenerateTestArtifacts>
     <AppxBundle>Auto</AppxBundle>
     <AppxBundlePlatforms>x86|x64</AppxBundlePlatforms>
-    <AppInstallerUri>D:\CrsterSite\CrsterUtility\Installer</AppInstallerUri>
-    <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
-    <AppxPackageDir>D:\CrsterSite\CrsterUtility\Installer\</AppxPackageDir>
+    <HoursBetweenUpdateChecks>720</HoursBetweenUpdateChecks>
+    <AppxPackageName>CrsterUtility</AppxPackageName>
+    <AppxPackageDir>$(MSBuildProjectDirectory)\..\Installer\</AppxPackageDir>
+    <AppxPackageTestDir>$(AppxPackageDir)CrsterUtility\</AppxPackageTestDir>
+    <PackageCertificateThumbprint>82A0FF055313B2D668F0AD20F057BF9D32B60708</PackageCertificateThumbprint>
   </PropertyGroup>
 </Project>

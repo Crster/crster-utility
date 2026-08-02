@@ -185,7 +185,17 @@ namespace App.Pages
 
         private void Block_Loaded(object sender, RoutedEventArgs e)
         {
-            if (sender is not Noteblock { DataContext: NotebookEntry entry } block || _attachmentStorage is null) return;
+            ConfigureBlock(sender as Noteblock);
+        }
+
+        private void Block_DataContextChanged(FrameworkElement sender, DataContextChangedEventArgs args)
+        {
+            ConfigureBlock(sender as Noteblock);
+        }
+
+        private void ConfigureBlock(Noteblock? block)
+        {
+            if (block is not { DataContext: NotebookEntry entry } || _attachmentStorage is null) return;
             block.Configure(entry, _attachmentStorage);
             block.EditRequested -= Block_EditRequested;
             block.EditRequested += Block_EditRequested;

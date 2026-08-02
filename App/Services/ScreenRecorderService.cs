@@ -29,7 +29,6 @@ namespace App.Services
     {
         internal const string DefaultMicrophoneDeviceId = "{default}";
         private const int MaxMicQueueDepth = 64;
-        private const int TraceSampleModulo = 60;
 
         private sealed record CapturedFrame(long Id, Direct3D11CaptureFrame Frame);
 
@@ -114,25 +113,6 @@ namespace App.Services
             }
         }
 
-        [Conditional("RECORDER_DIAGNOSTICS")]
-        private static void Trace(string message)
-        {
-        }
-
-        [Conditional("RECORDER_DIAGNOSTICS")]
-        private void TraceMemorySnapshot(string reason)
-        {
-            var process = Process.GetCurrentProcess();
-            Trace(
-                $"{reason} memManaged={GC.GetTotalMemory(false):N0}B " +
-                $"allocated={GC.GetTotalAllocatedBytes(false):N0}B " +
-                $"private={process.PrivateMemorySize64:N0}B workingSet={process.WorkingSet64:N0}B handles={process.HandleCount} " +
-                $"gc=[{GC.CollectionCount(0)},{GC.CollectionCount(1)},{GC.CollectionCount(2)}] " +
-                $"videoSlot={(_latestFrame is null ? 0 : 1)} pendingSamples={_pendingSamples.Count} micQueue={_micAudioQueue?.Count ?? 0} micQueuedBytes={Interlocked.Read(ref _micQueuedBytes):N0} " +
-                $"frames={_frameCount} dropped={_droppedFrames} throttled={_throttledFrames} micReceived={_micSamplesReceived} " +
-                $"micQueued={_micSamplesQueued} micProcessed={_micSamplesProcessed} micDroppedBuffers={_micDroppedBuffers} " +
-                $"loopbackReceived={_loopbackSamplesReceived} loopbackWritten={_loopbackSamplesWritten} tempBytes={GetCurrentRecordingSizeBytes():N0}");
-        }
 
         public async Task RecordAsync(
             GraphicsCaptureItem item,
@@ -167,8 +147,6 @@ namespace App.Services
             string audioTempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}_audio.wav");
             _videoTempPath = videoTempPath;
             _audioBaseTempPath = audioTempPath;
-            Trace($"RecordAsync start output='{outputFilePath}' size={width}x{height} bitrate={bitrateBps} fps={frameRate} cursor={includeCursor}");
-            Trace($"Temp paths video='{videoTempPath}' audio='{audioTempPath}'");
 
             try
             {
@@ -201,7 +179,6 @@ namespace App.Services
                     BufferTime = TimeSpan.FromSeconds(0)
                 };
                 _mediaStreamSource.SampleRequested += OnSampleRequested;
-                Trace("MediaStreamSource created and SampleRequested handler attached");
 
                 // Output profile: MP4 with H.264 video at the exact capture size.
                 var outputProperties = new VideoEncodingProperties
@@ -226,26 +203,21 @@ namespace App.Services
                     item.Size);
 
                 _framePool.FrameArrived += OnFrameArrived;
-                Trace("Frame pool created and FrameArrived handler attached");
 
                 _session = _framePool.CreateCaptureSession(item);
                 _session.IsCursorCaptureEnabled = includeCursor;
-                Trace("Capture session created");
 
                 _transcoder = new MediaTranscoder();
                 _transcoder.HardwareAccelerationEnabled = true;
-                Trace("MediaTranscoder created with hardware acceleration enabled");
 
                 using var stream = await tempVideoFile.OpenAsync(FileAccessMode.ReadWrite);
                 _transcodeOp = await _transcoder.PrepareMediaStreamSourceTranscodeAsync(
                     _mediaStreamSource, stream, profile);
-                Trace($"PrepareMediaStreamSourceTranscodeAsync completed canTranscode={_transcodeOp.CanTranscode}");
 
                 if (!_transcodeOp.CanTranscode)
                     throw new InvalidOperationException("MFT Encoder could not initialize with these configurations.");
 
                 RecordingStarted?.Invoke(this, outputFilePath);
-                Trace("RecordingStarted event fired");
 
                 _frameStopwatch = System.Diagnostics.Stopwatch.StartNew();
                 _frameCount = 0;
@@ -263,14 +235,11 @@ namespace App.Services
                 // Start loopback + mic audio recording
                 StartAudioRecording(audioTempPath, microphoneDeviceId);
                 _session.StartCapture();
-                Trace("Capture started; waiting for transcoder completion");
 
                 await _transcodeOp.TranscodeAsync().AsTask();
-                Trace("TranscodeAsync completed");
             }
             catch (Exception ex)
             {
-                Trace($"RecordAsync exception: {ex.GetType().Name}: {ex.Message}");
                 _isRecording = false;
                 Cleanup();
                 await StopAudioRecordingAsync();
@@ -292,7 +261,6 @@ namespace App.Services
                 {
                     _finalElapsed = _frameStopwatch?.Elapsed ?? TimeSpan.Zero;
                     _isRecording = false;
-                    Trace($"RecordAsync finalizing elapsed={_finalElapsed} frames={_frameCount} dropped={_droppedFrames} micReceived={_micSamplesReceived} micQueued={_micSamplesQueued} micProcessed={_micSamplesProcessed} loopbackReceived={_loopbackSamplesReceived} loopbackWritten={_loopbackSamplesWritten}");
                     Cleanup();
                     await StopAudioRecordingAsync();
                     
@@ -305,7 +273,6 @@ namespace App.Services
                         }
                         finally
                         {
-                            Trace("Mux task finished, firing RecordingStopped");
                             RecordingStopped?.Invoke(this, outputFilePath);
                         }
                     });
@@ -315,7 +282,6 @@ namespace App.Services
 
         public void Stop()
         {
-            Trace("Stop requested");
             lock (_lock)
             {
                 if (_isRecording)
@@ -336,7 +302,6 @@ namespace App.Services
             }
             _session = null;
             _framePool = null;
-            Trace("Stop completed");
         }
 
         public void Dispose()
@@ -351,7 +316,6 @@ namespace App.Services
             if (frame == null)
             {
                 _droppedFrames++;
-                Trace($"FrameArrived with null frame; dropped={_droppedFrames}");
                 return;
             }
 
@@ -363,7 +327,6 @@ namespace App.Services
                 if (!_isRecording)
                 {
                     frame.Dispose();
-                    Trace($"FrameArrived ignored because recording is no longer active frameId={frameId}");
                     return;
                 }
 
@@ -386,13 +349,8 @@ namespace App.Services
             {
                 previousFrame.Frame.Dispose();
                 _droppedFrames++;
-                Trace($"Video slot replaced stale frame id={previousFrame.Id} dropped={_droppedFrames}");
             }
 
-            if (frameId % TraceSampleModulo == 0)
-            {
-                Trace($"Frame accepted frameId={frameId} frameCount={_frameCount} dropped={_droppedFrames} throttled={_throttledFrames}");
-            }
         }
 
         private async void OnSampleRequested(MediaStreamSource sender, MediaStreamSourceSampleRequestedEventArgs args)
@@ -434,10 +392,6 @@ namespace App.Services
                         frameHandedOff = true;
 
                         _frameCount++;
-                        if (_frameCount % TraceSampleModulo == 0)
-                        {
-                            Trace($"SampleRequested produced frameId={capturedFrame.Id} frameCount={_frameCount} elapsed={Elapsed}");
-                        }
                     }
                     finally
                     {
@@ -450,24 +404,20 @@ namespace App.Services
                             }
 
                             capturedFrame.Frame.Dispose();
-                            Trace($"SampleRequested disposed unsubmitted frameId={capturedFrame.Id}");
                         }
                     }
                 }
                 else
                 {
                     args.Request.Sample = null;
-                    Trace("SampleRequested had no frame available");
                 }
             }
             catch (OperationCanceledException)
             {
-                Trace("SampleRequested canceled");
                 args.Request.Sample = null;
             }
             catch
         {
-            Trace("SampleRequested failed");
             args.Request.Sample = null;
         }
         finally
@@ -480,10 +430,6 @@ namespace App.Services
         {
             if (_pendingSamples.TryRemove(sender, out var capturedFrame))
             {
-                if (capturedFrame.Id % TraceSampleModulo == 0)
-                {
-                    Trace($"Sample processed frameId={capturedFrame.Id} pendingSamples={_pendingSamples.Count}");
-                }
                 capturedFrame.Frame.Dispose();
             }
 
@@ -492,8 +438,6 @@ namespace App.Services
 
         private void Cleanup()
         {
-            Trace("Cleanup start");
-            TraceMemorySnapshot("Cleanup-begin");
             lock (_lock)
             {
                 _isRecording = false;
@@ -516,7 +460,6 @@ namespace App.Services
             var queuedFrame = Interlocked.Exchange(ref _latestFrame, null);
             if (queuedFrame != null)
             {
-                Trace($"Cleanup disposing queued frame id={queuedFrame.Id}");
                 queuedFrame.Frame.Dispose();
             }
 
@@ -525,7 +468,6 @@ namespace App.Services
                 if (_pendingSamples.TryRemove(entry.Key, out var capturedFrame))
                 {
                     entry.Key.Processed -= _sampleProcessedHandler;
-                    Trace($"Cleanup disposing pending sample frame id={capturedFrame.Id}");
                     capturedFrame.Frame.Dispose();
                 }
             }
@@ -549,8 +491,6 @@ namespace App.Services
             _frameStopwatch = null;
             _videoTempPath = null;
             _audioBaseTempPath = null;
-            TraceMemorySnapshot("Cleanup-end");
-            Trace("Cleanup complete");
         }
 
         // ==========================================
@@ -565,7 +505,6 @@ namespace App.Services
             _micAudioQueue = new ConcurrentQueue<byte[]>();
             _micQueuedBytes = 0;
             _micDroppedBuffers = 0;
-            Trace($"StartAudioRecording base='{audioBasePath}' loopback='{loopbackPath}' mic='{micPath}'");
 
             // 1. Device Sound Loopback - Independent writer
             try
@@ -573,7 +512,6 @@ namespace App.Services
                 _loopbackCapture = new WasapiLoopbackCapture();
                 var waveFormat = _loopbackCapture.WaveFormat;
                 _loopbackWriter = new WaveFileWriter(loopbackPath, waveFormat);
-                Trace($"Loopback capture created format={waveFormat.Encoding} {waveFormat.SampleRate}Hz {waveFormat.Channels}ch {waveFormat.BitsPerSample}bit");
 
                 _loopbackRecordTask = Task.Run(() =>
                 {
@@ -589,15 +527,10 @@ namespace App.Services
                                     _loopbackWriter?.Write(e.Buffer, 0, e.BytesRecorded);
                                     _loopbackSamplesWritten++;
                                 }
-                                if (_loopbackSamplesReceived % TraceSampleModulo == 0)
-                                {
-                                    Trace($"Loopback callback bytes={e.BytesRecorded} received={_loopbackSamplesReceived} written={_loopbackSamplesWritten}");
-                                }
                             }
                         };
 
                         _loopbackCapture.StartRecording();
-                        Trace("Loopback recording started");
                         // Keep task alive while recording
                         while (_isAudioRecording)
                         {
@@ -609,7 +542,6 @@ namespace App.Services
             }
             catch
             {
-                Trace("Loopback recording setup failed");
                 _loopbackCapture?.Dispose();
                 _loopbackCapture = null;
             }
@@ -623,7 +555,6 @@ namespace App.Services
                 _micCapture = new WasapiCapture(microphone);
                 _micWaveFormat = _micCapture.WaveFormat;
                 _micWriter = new WaveFileWriter(micPath, _micWaveFormat);
-                Trace($"Mic capture created format={_micWaveFormat.Encoding} {_micWaveFormat.SampleRate}Hz {_micWaveFormat.Channels}ch {_micWaveFormat.BitsPerSample}bit");
 
                 // Start background processing task for mic audio
                 _micProcessingTask = Task.Run(async () =>
@@ -640,11 +571,6 @@ namespace App.Services
                                     _micWriter?.Write(buffer, 0, buffer.Length);
                                     _micSamplesProcessed++;
                                 }
-                                if (_micSamplesProcessed % TraceSampleModulo == 0)
-                                {
-                                    Trace($"Mic processing wrote buffer len={buffer.Length} processed={_micSamplesProcessed} queued={_micSamplesQueued}");
-                                }
-                                
                             }
                             else
                             {
@@ -693,28 +619,18 @@ namespace App.Services
                                 queue.Enqueue(boostedBuffer);
                             }
                             _micSamplesQueued++;
-                            if (_micSamplesReceived % TraceSampleModulo == 0)
-                            {
-                                Trace($"Mic callback bytes={e.BytesRecorded} received={_micSamplesReceived} queued={_micSamplesQueued} queueDepth={_micAudioQueue?.Count ?? 0} queuedBytes={Interlocked.Read(ref _micQueuedBytes):N0} droppedBuffers={_micDroppedBuffers}");
-                            }
                         }
                         else
                         {
                             _micEmptyCallbacks++;
-                            if (_micEmptyCallbacks % TraceSampleModulo == 0)
-                            {
-                                Trace($"Mic callback empty count={_micEmptyCallbacks}");
-                            }
                         }
                     }
                 };
 
                 _micCapture.StartRecording();
-                Trace("Mic recording started");
             }
             catch (Exception exception)
             {
-                Trace("Mic recording setup failed");
                 _micCapture?.Dispose();
                 _micCapture = null;
                 throw new InvalidOperationException("The configured microphone could not be started.", exception);
@@ -765,8 +681,6 @@ namespace App.Services
 
         private async Task StopAudioRecordingAsync()
         {
-            Trace("StopAudioRecordingAsync start");
-            TraceMemorySnapshot("StopAudio-begin");
             _isAudioRecording = false;
 
             if (_loopbackRecordTask != null)
@@ -808,8 +722,6 @@ namespace App.Services
                     Interlocked.Add(ref _micQueuedBytes, -buffer.Length);
                     Array.Clear(buffer, 0, buffer.Length);
                 }
-                Trace("Mic audio queue drained");
-                TraceMemorySnapshot("StopAudio-afterMicDrain");
             }
 
             try
@@ -829,8 +741,6 @@ namespace App.Services
                 _micCapture?.Dispose();
                 _micCapture = null;
             }
-            TraceMemorySnapshot("StopAudio-end");
-            Trace("StopAudioRecordingAsync complete");
         }
 
         private static ISampleProvider MakeStereo(ISampleProvider source, int sourceChannels)
@@ -853,8 +763,6 @@ namespace App.Services
         {
             try
             {
-                Trace($"MuxAudioVideoAsync start video='{videoPath}' audio='{audioPath}' output='{outputPath}'");
-                TraceMemorySnapshot("Mux-start");
                 string loopbackPath = audioPath.Replace(".wav", "_loopback.wav");
                 string micPath = audioPath.Replace(".wav", "_mic.wav");
                 string mixedAudioPath = audioPath.Replace(".wav", "_mixed.wav");
@@ -865,34 +773,28 @@ namespace App.Services
 
                 if (!hasVideo)
                 {
-                    Trace("MuxAudioVideoAsync missing video file");
                     throw new FileNotFoundException("Video file was not recorded successfully.");
                 }
 
                 // Fast path: no audio, just copy video
                 if (!hasLoopback && !hasMic)
                 {
-                    Trace("MuxAudioVideoAsync no audio tracks found; copying video only");
                     if (File.Exists(outputPath)) File.Delete(outputPath);
                     File.Copy(videoPath, outputPath);
-                    TraceMemorySnapshot("Mux-copy-video-only");
                     return;
                 }
 
                 global::Windows.Media.Editing.MediaComposition? composition = new();
-                TraceMemorySnapshot("Mux-composition-created");
 
                 var videoFile = await StorageFile.GetFileFromPathAsync(videoPath);
                 global::Windows.Media.Editing.MediaClip? videoClip = await global::Windows.Media.Editing.MediaClip.CreateFromFileAsync(videoFile);
                 composition.Clips.Add(videoClip);
-                TraceMemorySnapshot("Mux-video-clip-added");
 
                 string? audioTrackPath = null;
                 if (hasLoopback && hasMic)
                 {
                     await MixWavFilesAsync(loopbackPath, micPath, mixedAudioPath);
                     audioTrackPath = mixedAudioPath;
-                    TraceMemorySnapshot("Mux-mixed-audio-created");
                 }
                 else if (hasLoopback)
                 {
@@ -908,11 +810,9 @@ namespace App.Services
                 {
                     if (audioTrackPath != null)
                     {
-                        Trace($"MuxAudioVideoAsync using audioTrackPath='{audioTrackPath}'");
                         var audioFile = await StorageFile.GetFileFromPathAsync(audioTrackPath);
                         audioTrack = await global::Windows.Media.Editing.BackgroundAudioTrack.CreateFromFileAsync(audioFile);
                         composition.BackgroundAudioTracks.Add(audioTrack);
-                        TraceMemorySnapshot("Mux-audio-track-added");
                     }
 
                     await RenderCompositionAsync(composition, outputPath, width, height, bitrateBps, frameRate);
@@ -930,12 +830,10 @@ namespace App.Services
                     GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: false);
                     GC.WaitForPendingFinalizers();
                     GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: false);
-                    TraceMemorySnapshot("Mux-media-resources-released");
                 }
             }
             catch (OperationCanceledException)
             {
-                Trace("MuxAudioVideoAsync canceled");
                 if (File.Exists(videoPath) && !File.Exists(outputPath))
                 {
                     File.Copy(videoPath, outputPath, true);
@@ -943,7 +841,6 @@ namespace App.Services
             }
             catch
             {
-                Trace("MuxAudioVideoAsync failed; falling back to raw video");
                 if (File.Exists(videoPath) && !File.Exists(outputPath))
                 {
                     File.Copy(videoPath, outputPath, true);
@@ -951,8 +848,6 @@ namespace App.Services
             }
             finally
             {
-                Trace("MuxAudioVideoAsync cleanup start");
-                TraceMemorySnapshot("Mux-cleanup-start");
                 try
                 {
                     if (File.Exists(videoPath)) File.Delete(videoPath);
@@ -965,8 +860,6 @@ namespace App.Services
                     if (File.Exists(mixedAudioPath)) File.Delete(mixedAudioPath);
                 }
                 catch { }
-                TraceMemorySnapshot("Mux-cleanup-end");
-                Trace("MuxAudioVideoAsync cleanup complete");
             }
         }
 
@@ -988,11 +881,8 @@ namespace App.Services
             profile.Audio = AudioEncodingProperties.CreateAac(44100, 2, 192000);
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(300));
-            TraceMemorySnapshot("Mux-before-render");
             var saveOp = composition.RenderToFileAsync(destFile, global::Windows.Media.Editing.MediaTrimmingPreference.Precise, profile);
             await saveOp.AsTask(cts.Token);
-            TraceMemorySnapshot("Mux-after-render");
-            Trace("MuxAudioVideoAsync render complete");
         }
 
         private static async Task MixWavFilesAsync(string firstPath, string secondPath, string outputPath)

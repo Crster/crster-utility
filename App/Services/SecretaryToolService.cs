@@ -30,7 +30,8 @@ namespace App.Services
             Function("save_note", "Save a note the user explicitly asks to keep.", Props(("note_text", String("Exact note content to save."))), "note_text"),
             Function("save_memo", "Use only to remember an explicit, durable user detail that will improve future help. Never save secrets, credentials, guesses, or inferred claims.", Props(("memo_text", String("Exact user-provided detail to remember."))), "memo_text"),
             Function("remove_memo", "Forget one saved memo identified by its key. Search memory first when the key is unknown.", Props(("memo_key", String("Exact memo key returned by search_memory."))), "memo_key"),
-            Function("save_todo", "Save a todo the user explicitly asks to keep. Category defaults to General.", Props(("todo_text", String("Task text to save.")), ("category_name", String("Optional category name.")), ("notification_cron", String("Optional five-field cron expression interpreted in local time."))), "todo_text"),
+            Function("list_todo_categories", "List the available todo categories. Call this before save_todo so an existing suitable category can be reused before creating a new one.", new JsonObject()),
+            Function("save_todo", "Save a todo the user explicitly asks to keep. Call list_todo_categories first and prefer a suitable existing category before creating a new one. Category defaults to General.", Props(("todo_text", String("Task text to save.")), ("category_name", String("Existing category returned by list_todo_categories, or a concise new category when none fits.")), ("notification_cron", String("Optional five-field cron expression interpreted in local time."))), "todo_text"),
             Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", DataKindSchema())), "context_type")
         };
 
@@ -50,6 +51,7 @@ namespace App.Services
                     "save_note" => await SaveNoteAsync(RequiredString(arguments, "note_text"), token),
                     "save_memo" => await WriteMemoAsync(RequiredString(arguments, "memo_text"), token),
                     "remove_memo" => DeleteMemo(RequiredString(arguments, "memo_key")),
+                    "list_todo_categories" => ListTodoCategories(),
                     "save_todo" => await WriteTodoAsync(RequiredString(arguments, "todo_text"), OptionalString(arguments, "category_name") is { Length: > 0 } category ? category : "General", OptionalString(arguments, "notification_cron"), token),
                     "get_local_context" => await GetDataAsync(RequiredString(arguments, "context_type"), token),
                     _ => Error("unknown_tool", $"Secretary cannot use the tool “{name}”.")
@@ -142,6 +144,18 @@ namespace App.Services
             _memory.DeleteMemo(key)
                 ? Ok("Deleted the memo.", new JsonObject { ["key"] = key })
                 : Error("memo_not_found", "No memo with that key was found.");
+
+        private ToolResult ListTodoCategories()
+        {
+            var categories = new JsonArray(_todos.ListCategories()
+                .Select(category => (JsonNode)new JsonObject
+                {
+                    ["name"] = category.Id,
+                    ["description"] = category.Description
+                })
+                .ToArray());
+            return Ok("Returned the available todo categories.", new JsonObject { ["categories"] = categories });
+        }
 
         private async Task<ToolResult> WriteTodoAsync(string value, string category, string notify, CancellationToken token)
         {
@@ -263,6 +277,7 @@ namespace App.Services
             if (description is not null) schema["description"] = description;
             return schema;
         }
+
         internal static JsonObject DataKindSchema() => new()
         {
             ["type"] = "string",

@@ -109,7 +109,6 @@ namespace App.Pages
             ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".ico"
         };
         private readonly ChatSessionStorageService _sessionStorage = new();
-        private readonly ChatLogService _diagnosticLog = new();
         private readonly List<WorkspaceFileItem> _workspaceFiles = [];
         private readonly List<WorkspaceTreeEntry> _workspaceRoots = [];
         private readonly HashSet<string> _loadedWorkspaceDirectories = new(StringComparer.OrdinalIgnoreCase);
@@ -617,7 +616,6 @@ namespace App.Pages
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                Debug.WriteLine($"[Workspace] Could not update {fullPath}: {exception.Message}");
             }
         }
 
@@ -2198,8 +2196,7 @@ namespace App.Pages
                 HomeTab.Visibility = Visibility.Collapsed;
                 CodyChatDock.Visibility = Visibility.Visible;
                 EditorColumn.Width = new GridLength(1, GridUnitType.Star);
-                var availableWidth = ActualWidth > 0 ? ActualWidth : 1100;
-                CodyChatColumn.Width = new GridLength(Math.Clamp(availableWidth * 0.32, 300, 400));
+                CodyChatColumn.Width = new GridLength(1, GridUnitType.Star);
                 return;
             }
 
@@ -2431,7 +2428,6 @@ namespace App.Pages
             }
             catch (Exception exception) when (exception is AgentCliNotFoundException or DirectoryNotFoundException or InvalidOperationException or JsonException)
             {
-                Debug.WriteLine($"[Cody] Could not load agent models: {exception.Message}");
             }
 
             UpdateAgentActionButtons();
@@ -3291,7 +3287,6 @@ namespace App.Pages
 
         private void ShowTerminal(bool startInteractiveSession = true)
         {
-            LogTerminalDiagnostic("show", ("startInteractiveSession", startInteractiveSession), ("hasSession", _terminalControl is not null));
             TerminalButton.IsChecked = true;
             TerminalPanel.Visibility = Visibility.Visible;
             TerminalSplitter.Visibility = Visibility.Visible;
@@ -3311,7 +3306,6 @@ namespace App.Pages
 
         private void HideTerminal()
         {
-            LogTerminalDiagnostic("hide", ("height", TerminalRow.ActualHeight));
             if (TerminalPanel.Visibility == Visibility.Visible)
                 _terminalPanelHeight = TerminalRow.ActualHeight;
 
@@ -3621,7 +3615,6 @@ namespace App.Pages
             _isTerminalResizing = TerminalSplitter.CapturePointer(e.Pointer);
             _terminalResizeStartY = e.GetCurrentPoint(this).Position.Y;
             _terminalResizeStartHeight = TerminalRow.ActualHeight;
-            LogTerminalDiagnostic("resize_pressed", ("captured", _isTerminalResizing), ("height", _terminalResizeStartHeight));
             e.Handled = _isTerminalResizing;
         }
 
@@ -3647,7 +3640,6 @@ namespace App.Pages
             e.Handled = true;
             _resizeInteractiveTerminalWhenPanelSettles = true;
             TerminalRow.Height = new GridLength(_terminalPanelHeight);
-            LogTerminalDiagnostic("resize_released", ("height", _terminalPanelHeight));
         }
 
         private void TerminalPanel_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -3680,7 +3672,6 @@ namespace App.Pages
                 InteractiveTerminalHost.Height = height;
                 terminal.Width = width;
                 terminal.Height = height;
-                LogTerminalDiagnostic("resize_terminal", ("width", width), ("height", height));
             }
             catch (ArgumentException)
             {
@@ -3797,9 +3788,8 @@ namespace App.Pages
                 ResizeAgentCliTerminal();
                 _ = DispatcherQueue.TryEnqueue(() => terminal.Terminal.Focus(FocusState.Programmatic));
             }
-            catch (Exception exception)
+            catch (Exception)
             {
-                Debug.WriteLine($"[Cody][Agent CLI] Could not start: {exception.Message}");
             }
         }
 
@@ -3914,7 +3904,6 @@ namespace App.Pages
             if (_terminalControl is not null) return true;
             try
             {
-                LogTerminalDiagnostic("session_creating", ("shell", GetTerminalTypeName()));
                 var terminal = CreateTerminalControl();
                 var activationCommand = CreateActivationCommand(
                     GetTerminalTypeName(),
@@ -3926,20 +3915,17 @@ namespace App.Pages
                     new PointerEventHandler((_, args) =>
                     {
                         var updateKind = args.GetCurrentPoint(terminal.Terminal).Properties.PointerUpdateKind;
-                        Debug.WriteLine($"[Cody][Terminal] Pointer released: {updateKind}.");
                         if (updateKind == global::Microsoft.UI.Input.PointerUpdateKind.RightButtonReleased)
                             ShowInteractiveTerminalContextMenu(terminal, args.GetCurrentPoint(TerminalPanel).Position);
                     }),
                     true);
                 terminal.Terminal.Loaded += (_, _) =>
                 {
-                    LogTerminalDiagnostic("control_loaded");
                     AttachTerminalContextMenuHook(terminal);
                     EnableInteractiveTerminalResizeWhenReady(terminal);
                 };
                 terminalSession.TermReady += (_, _) =>
                 {
-                    LogTerminalDiagnostic("session_ready");
                     if (activationCommand is not null)
                         terminalSession.WriteToTerm($"{activationCommand.Command}\r");
 
@@ -3956,12 +3942,10 @@ namespace App.Pages
                 };
                 _terminalControl = terminal;
                 InteractiveTerminalHost.Children.Add(terminal);
-                LogTerminalDiagnostic("session_hosted");
                 return true;
             }
             catch (Exception exception)
             {
-                LogTerminalDiagnostic("session_failed", ("exception", exception.GetType().Name), ("message", exception.Message));
                 AppendTerminal($"[error] Could not start {GetTerminalTypeName()}: {exception.Message}\r\n");
                 return false;
             }
@@ -3973,14 +3957,9 @@ namespace App.Pages
                 || !terminal.ConPTYTerm.TermProcIsStarted
                 || !terminal.Terminal.IsLoaded)
             {
-                LogTerminalDiagnostic("resize_not_ready",
-                    ("isCurrent", ReferenceEquals(_terminalControl, terminal)),
-                    ("processStarted", terminal.ConPTYTerm.TermProcIsStarted),
-                    ("controlLoaded", terminal.Terminal.IsLoaded));
                 return;
             }
 
-            LogTerminalDiagnostic("resize_enable_delayed");
             await Task.Delay(TimeSpan.FromSeconds(1));
             if (!ReferenceEquals(_terminalControl, terminal)
                 || !terminal.ConPTYTerm.TermProcIsStarted
@@ -3988,7 +3967,6 @@ namespace App.Pages
                 return;
 
             _isInteractiveTerminalReady = true;
-            LogTerminalDiagnostic("resize_enabled");
             if (TerminalPanel.Visibility == Visibility.Visible)
             {
                 TerminalSplitter.IsHitTestVisible = true;
@@ -4025,12 +4003,10 @@ namespace App.Pages
             var elapsed = requestTime - _lastTerminalContextMenuRequest;
             if (elapsed is >= 0 and < 250)
             {
-                Debug.WriteLine($"[Cody][Terminal] Ignored duplicate context-menu request after {elapsed} ms.");
                 return;
             }
 
             _lastTerminalContextMenuRequest = requestTime;
-            Debug.WriteLine("[Cody][Terminal] Showing context menu.");
             var menu = new MenuFlyout();
             var copyAll = new MenuFlyoutItem { Text = "Copy all" };
             copyAll.Click += (_, _) => CopyInteractiveTerminalText(terminal);
@@ -4061,9 +4037,8 @@ namespace App.Pages
                 var text = await clipboard.GetTextAsync();
                 if (!string.IsNullOrEmpty(text)) terminal.ConPTYTerm.WriteToTerm(text);
             }
-            catch (COMException exception)
+            catch (COMException)
             {
-                Debug.WriteLine($"[Cody][Terminal] Paste failed: {exception.Message}");
             }
             finally
             {
@@ -4105,43 +4080,36 @@ namespace App.Pages
 
         private void AttachTerminalContextMenuHook(EasyTerminalControl terminal)
         {
-            Debug.WriteLine("[Cody][Terminal] Attaching native context-menu hook.");
             var container = terminal.Terminal.GetType()
                 .GetField("termContainer", BindingFlags.Instance | BindingFlags.NonPublic)?
                 .GetValue(terminal.Terminal);
             if (container is null)
             {
-                Debug.WriteLine("[Cody][Terminal] Native hook unavailable: termContainer was not found.");
                 return;
             }
 
             var containerType = container.GetType();
-            Debug.WriteLine($"[Cody][Terminal] Native container type: {containerType.FullName}.");
             var handle = containerType
                 .GetProperty("Hwnd", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?
                 .GetValue(container);
             if (handle is not IntPtr windowHandle || windowHandle == IntPtr.Zero)
             {
-                Debug.WriteLine($"[Cody][Terminal] Native hook unavailable: terminal HWND value was '{handle ?? "null"}'.");
                 return;
             }
 
             if (_terminalWindowHandle != IntPtr.Zero)
             {
-                Debug.WriteLine($"[Cody][Terminal] Native hook already attached to 0x{_terminalWindowHandle:X}.");
                 return;
             }
 
             _terminalWindowSubclassProcedure = TerminalWindowSubclass;
             if (!SetWindowSubclass(windowHandle, _terminalWindowSubclassProcedure, UIntPtr.Zero, IntPtr.Zero))
             {
-                Debug.WriteLine($"[Cody][Terminal] SetWindowSubclass failed for 0x{windowHandle:X}; error={Marshal.GetLastWin32Error()}.");
                 _terminalWindowSubclassProcedure = null;
                 return;
             }
 
             _terminalWindowHandle = windowHandle;
-            Debug.WriteLine($"[Cody][Terminal] Native hook attached to 0x{windowHandle:X}.");
         }
 
         private IntPtr TerminalWindowSubclass(IntPtr windowHandle, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr subclassId, IntPtr referenceData)
@@ -4155,12 +4123,10 @@ namespace App.Pages
                 }
                 else if (message == 0x0204 || message == 0x0206 || message == 0x007B)
                 {
-                    Debug.WriteLine($"[Cody][Terminal] Suppressed native context-menu message 0x{message:X4}.");
                     return IntPtr.Zero;
                 }
                 else if (message == 0x0205)
                 {
-                    Debug.WriteLine("[Cody][Terminal] Native right-button release received.");
                     var terminalPosition = new global::Windows.Foundation.Point(
                         (short)(lParam.ToInt64() & 0xFFFF),
                         (short)((lParam.ToInt64() >> 16) & 0xFFFF));
@@ -4387,7 +4353,6 @@ namespace App.Pages
 
         private void CancelTerminal()
         {
-            LogTerminalDiagnostic("session_cancelling", ("hasSession", _terminalControl is not null));
             var terminal = _terminalControl;
             _terminalControl = null;
             _isInteractiveTerminalReady = false;
@@ -4422,15 +4387,6 @@ namespace App.Pages
 
             // Disconnect while the native terminal is still hosted; removing it first races WinUI teardown.
             InteractiveTerminalHost.Children.Clear();
-            LogTerminalDiagnostic("session_cancelled");
-        }
-
-        private void LogTerminalDiagnostic(string eventName, params (string Name, object? Value)[] properties)
-        {
-            var details = string.Join(" ", properties.Select(property => $"{property.Name}={property.Value}"));
-            Debug.WriteLine($"[Cody][Terminal] {eventName} {details}".TrimEnd());
-            var logProperties = properties.Append(("personality", (object?)ChatPersonality.Cody)).ToArray();
-            _ = _diagnosticLog.WriteAsync($"cody_terminal.{eventName}", logProperties);
         }
 
         private static void StopTerminalSession(EasyTerminalControl terminal)
