@@ -105,7 +105,8 @@ namespace App.Pages
             var microphoneDeviceId = App.Settings.Current.RecordingMicrophoneDeviceId;
             try
             {
-                await ScreenRecorderService.EnsureMicrophoneAccessAsync(microphoneDeviceId);
+                if (!await ScreenRecorderService.EnsureMicrophoneAccessAsync(microphoneDeviceId))
+                    return;
             }
             catch (Exception exception)
             {

@@ -97,15 +97,21 @@ namespace App.Services
             _sampleProcessedHandler = OnSampleProcessed;
         }
 
-        public static async Task EnsureMicrophoneAccessAsync(string? microphoneDeviceId)
+        public static async Task<bool> EnsureMicrophoneAccessAsync(string? microphoneDeviceId)
         {
             if (string.IsNullOrWhiteSpace(microphoneDeviceId))
-                return;
+                return true;
 
-            var accessStatus = await AppCapability.Create("microphone").RequestAccessAsync();
-            if (accessStatus != AppCapabilityAccessStatus.Allowed)
-                throw new InvalidOperationException(
-                    "Microphone access is disabled. Allow Crster Utility to use the microphone in Windows Privacy & security settings.");
+            try
+            {
+                var accessStatus = await AppCapability.Create("microphone").RequestAccessAsync();
+                return accessStatus == AppCapabilityAccessStatus.Allowed;
+            }
+            catch (Exception)
+            {
+                // Cancelling the Windows permission prompt is a normal user outcome.
+                return false;
+            }
         }
 
         [Conditional("RECORDER_DIAGNOSTICS")]

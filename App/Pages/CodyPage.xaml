@@ -76,7 +76,9 @@
                                  Click="RunButton_Click"
                                  ToolTipService.ToolTip="Run the selected workspace command">
                         <SplitButton.Flyout>
-                            <Flyout Placement="BottomEdgeAlignedRight">
+                            <Flyout Placement="BottomEdgeAlignedRight"
+                                    Opening="RunCommandFlyout_Opening"
+                                    Closed="RunCommandFlyout_Closed">
                                 <StackPanel MinWidth="280" Spacing="4">
                                     <StackPanel x:Name="RunCommandItemsPanel" Spacing="2"/>
                                     <Border Height="1" Margin="0,4"

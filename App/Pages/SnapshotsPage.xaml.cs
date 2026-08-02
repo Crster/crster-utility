@@ -42,7 +42,7 @@ namespace App.Pages
         internal static async Task CaptureFromHotkeyAsync()
         {
             var snapshot = await ScreenCaptureService.CaptureAsync(App.Settings.Current.SnapshotCaptureMouseCursor);
-            if (snapshot is null) throw new Exception("Failed to capture desktop");
+            if (snapshot is null) return;
 
             var editSnapshotWindow = new EditSnapshotWindow(snapshot);
             editSnapshotWindow.Closed += (_, _) => snapshot.Dispose();
@@ -67,7 +67,17 @@ namespace App.Pages
 
             Snapshot = await ScreenCaptureService.CaptureAsync(App.Settings.Current.SnapshotCaptureMouseCursor);
 
-            if (Snapshot is null) throw new Exception("Failed to capture desktop");
+            if (Snapshot is null)
+            {
+                if (IsMainWindowVisible)
+                {
+                    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW);
+                    App.MainWindow.Activate();
+                    IsMainWindowVisible = false;
+                }
+
+                return;
+            }
 
             EditSnapshotWindow editSnapshotWindow = new EditSnapshotWindow(Snapshot);
             editSnapshotWindow.Closed += EditSnapshotWindow_Closed;

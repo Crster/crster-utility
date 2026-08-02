@@ -148,6 +148,8 @@ namespace App.Pages
         private bool _isInteractiveTerminalReady;
         private bool _resizeInteractiveTerminalWhenPanelSettles;
         private bool _loadingTerminalShells;
+        private bool _agentCliHostWasVisibleBeforePopup;
+        private EasyTerminalControl? _agentCliTerminalDetachedForPopup;
         private string? _savedTerminalShellName;
         private double _filesPanelWidth = 280;
         private double _terminalPanelHeight = 230;
@@ -2402,6 +2404,16 @@ namespace App.Pages
         }
 
         // Section: Run commands
+        private void RunCommandFlyout_Opening(object sender, object e)
+        {
+            HideAgentCliForPopup();
+        }
+
+        private void RunCommandFlyout_Closed(object sender, object e)
+        {
+            RestoreAgentCliAfterPopup();
+        }
+
         private async void ScanCommandsMenuItem_Click(object sender, RoutedEventArgs e)
         {
             if (!HasWorkspace()) return;
@@ -2622,7 +2634,7 @@ namespace App.Pages
                 row.Children.Add(remove);
                 RunCommandItemsPanel.Children.Add(row);
             }
-            RunCommandButton.Content = _selectedCommand?.Name ?? "Run command";
+            RunCommandButton.Content = _selectedCommand?.Name ?? "Scan workspace";
             ToolTipService.SetToolTip(
                 RunCommandButton,
                 _selectedCommand?.Command ?? "Add or select a workspace command");
@@ -2851,6 +2863,7 @@ namespace App.Pages
         {
             if (_selectedCommand is null)
             {
+                ScanCommandsMenuItem_Click(sender, new RoutedEventArgs());
                 return;
             }
             await RunCommandInTerminalTabAsync(_selectedCommand);
@@ -4071,7 +4084,15 @@ namespace App.Pages
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Close
             };
-            return await dialog.ShowAsync() == ContentDialogResult.Primary;
+            HideAgentCliForPopup();
+            try
+            {
+                return await dialog.ShowAsync() == ContentDialogResult.Primary;
+            }
+            finally
+            {
+                RestoreAgentCliAfterPopup();
+            }
         }
 
         private async Task ShowMessageAsync(string title, string message)
@@ -4083,7 +4104,40 @@ namespace App.Pages
                 Content = message,
                 CloseButtonText = "Close"
             };
-            await dialog.ShowAsync();
+            HideAgentCliForPopup();
+            try
+            {
+                await dialog.ShowAsync();
+            }
+            finally
+            {
+                RestoreAgentCliAfterPopup();
+            }
+        }
+
+        private void HideAgentCliForPopup()
+        {
+            _agentCliHostWasVisibleBeforePopup = AgentCliHost.Visibility == Visibility.Visible;
+            if (!_agentCliHostWasVisibleBeforePopup || _agentCliTerminal is not { } terminal) return;
+
+            _agentCliTerminalDetachedForPopup = terminal;
+            AgentCliHost.Children.Remove(terminal);
+            AgentCliHost.Visibility = Visibility.Collapsed;
+        }
+
+        private void RestoreAgentCliAfterPopup()
+        {
+            if (_agentCliTerminalDetachedForPopup is { } terminal
+                && ReferenceEquals(_agentCliTerminal, terminal))
+            {
+                AgentCliHost.Children.Add(terminal);
+                ResizeAgentCliTerminal();
+                if (_agentCliHostWasVisibleBeforePopup)
+                    AgentCliHost.Visibility = Visibility.Visible;
+            }
+
+            _agentCliTerminalDetachedForPopup = null;
+            _agentCliHostWasVisibleBeforePopup = false;
         }
 
         private sealed record WorkspaceFileItem(string Name, string RelativePath, string FullPath);
