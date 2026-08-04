@@ -145,15 +145,21 @@ namespace App.Services
         private async Task<ToolResult> RunCommandAsync(string command, string risk, string workingDirectory, bool elevated, CancellationToken token)
         {
             command = NormalizeCommandLine(command);
-            var safetyWarning = GetCommandSafetyWarning(command);
             var directory = string.IsNullOrWhiteSpace(workingDirectory)
                 ? Environment.GetFolderPath(Environment.SpecialFolder.System)
                 : ResolveAuthorizedPath(workingDirectory, true);
-            var mutating = IsMutatingCommand(command);
-            if ((elevated
-                || risk is "Moderate" or "High"
-                || safetyWarning is not null)
-                && !await _confirmAsync(new TechnicianCommandConfirmation(command, elevated, mutating, safetyWarning)))
+            // Ask for explicit confirmation only when the command is elevated or the risk is not Low.
+            var needsConfirmation = elevated || !string.Equals(risk, "Low", StringComparison.OrdinalIgnoreCase);
+            var mutating = risk is "Moderate" or "High";
+            string? safetyWarning = null;
+            if (elevated)
+                safetyWarning = "This command will run with elevated privileges (UAC) and may modify system state.";
+            else if (string.Equals(risk, "High", StringComparison.OrdinalIgnoreCase))
+                safetyWarning = "High-risk command: may cause data loss or system instability.";
+            else if (string.Equals(risk, "Moderate", StringComparison.OrdinalIgnoreCase))
+                safetyWarning = "Moderate-risk command: may change system settings.";
+
+            if (needsConfirmation && !await _confirmAsync(new TechnicianCommandConfirmation(command, elevated, mutating, safetyWarning)))
                 return Error("confirmation_declined", "The user did not approve the command.");
 
             if (elevated)
@@ -209,19 +215,6 @@ namespace App.Services
                 if ((File.Exists(current) || Directory.Exists(current)) && File.GetAttributes(current).HasFlag(FileAttributes.ReparsePoint))
                     throw new UnauthorizedAccessException("Reparse-point paths are not supported.");
             }
-        }
-
-        private static string? GetCommandSafetyWarning(string command)
-        {
-            if (string.IsNullOrWhiteSpace(command)) throw new FormatException("command_line is required.");
-            if (Regex.IsMatch(command, @"[&<>;]"))
-                return "It contains command chaining or redirection that Technician cannot verify as a single PC diagnostic or repair action.";
-            if (Regex.IsMatch(command, @"\b(format|diskpart|cipher\s+/w|vssadmin\s+delete|wbadmin\s+delete|bcdedit|takeown|icacls|mimikatz|sekurlsa|procdump)\b", RegexOptions.IgnoreCase)
-                || Regex.IsMatch(command, @"\b(del|erase|rmdir|rd|remove-item|clear-content)\b", RegexOptions.IgnoreCase)
-                || Regex.IsMatch(command, @"\b(reg\s+(save|export)\s+HKLM\\SAM|schtasks\s+/create|sc(?:\.exe)?\s+create)\b", RegexOptions.IgnoreCase)
-                || Regex.IsMatch(command, @"\b(invoke-expression|encodedcommand|invoke-webrequest|invoke-restmethod|curl|wget|certutil\s+-urlcache|ftp|scp)\b", RegexOptions.IgnoreCase))
-                return "It includes an operation that may delete data, weaken security, persist changes, or download and execute untrusted content.";
-            return null;
         }
 
         private static JsonObject NormalizeArguments(JsonObject arguments)
@@ -285,11 +278,6 @@ namespace App.Services
             .Replace('\u2212', '-')
             .Trim();
         }
-
-        private static bool IsMutatingCommand(string command) => Regex.IsMatch(
-            command,
-            @"\b(sfc|chkdsk|dism|repair-volume|set-|enable-|disable-|restart-|start-|stop-|update-|install-|uninstall-|winget|netsh|gpupdate|ipconfig\s+/flushdns|reg\s+(add|delete|import)|sc(?:\.exe)?\s+(start|stop|config)|net\s+(start|stop))\b",
-            RegexOptions.IgnoreCase);
 
         private static ToolResult CommandResult(string stdout, string stderr, int exitCode) => Ok(new JsonObject
         {
