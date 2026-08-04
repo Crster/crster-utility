@@ -15,12 +15,26 @@
                     <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Spacing="3"><TextBlock Text="Start with Windows" FontWeight="SemiBold"/><TextBlock Text="Launch Crster Utility hidden in the system tray after sign-in." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel><ToggleSwitch x:Name="StartupToggle" Grid.Column="1" Toggled="StartupToggle_Toggled"/></Grid>
                     <StackPanel Spacing="6"><TextBlock Text="Database folder" FontWeight="SemiBold"/><Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="NotebookPathBox" IsReadOnly="True"/><Button Grid.Column="1" Content="Browse" Click="NotebookBrowseButton_Click"/></Grid><TextBlock Text="Changing this location copies CrsterUtility.db and keeps the original as a backup." TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel>
                     <StackPanel Spacing="6"><TextBlock Text="OpenAI-compatible URL" FontWeight="SemiBold"/><TextBox x:Name="OpenAiCompatibleBaseUrlBox" PlaceholderText="https://api.openai.com/v1" LostFocus="OpenAiCompatibleBaseUrlBox_LostFocus"/></StackPanel>
-                    <StackPanel Spacing="6"><TextBlock Text="API key" FontWeight="SemiBold"/><PasswordBox x:Name="OpenAiCompatibleApiKeyBox" PlaceholderText="Paste your API key" PasswordChanged="OpenAiCompatibleApiKeyBox_PasswordChanged"/></StackPanel>
+                    <StackPanel Spacing="6"><TextBlock Text="API key" FontWeight="SemiBold"/><PasswordBox x:Name="OpenAiCompatibleApiKeyBox" PlaceholderText="Paste your API key" PasswordChanged="OpenAiCompatibleApiKeyBox_PasswordChanged" LostFocus="OpenAiCompatibleApiKeyBox_LostFocus"/></StackPanel>
                     <!-- Section: AI Models -->
                     <StackPanel Spacing="8">
                         <TextBlock Text="AI models" FontWeight="SemiBold"/>
                         <TextBlock Text="Models available to this API key. Changes are saved immediately." TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <ComboBox x:Name="EmbeddingModelBox" Header="Embedding" DisplayMemberPath="Name" SelectionChanged="EmbeddingModelBox_SelectionChanged"/>
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <ComboBox x:Name="EmbeddingModelBox" Header="Embedding" HorizontalAlignment="Stretch" DisplayMemberPath="Name" SelectionChanged="EmbeddingModelBox_SelectionChanged"/>
+                            <Button x:Name="RebuildEmbeddingsButton" Grid.Column="1" VerticalAlignment="Bottom"
+                                    Click="RebuildEmbeddingsButton_Click"
+                                    ToolTipService.ToolTip="Clear and regenerate every note, memo, and todo embedding with the selected model"
+                                    AutomationProperties.Name="Rebuild embeddings">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ProgressRing x:Name="RebuildEmbeddingsProgress" Width="16" Height="16" IsActive="False" Visibility="Collapsed"/>
+                                    <TextBlock x:Name="RebuildEmbeddingsLabel" Text="Rebuild"/>
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                        <TextBlock Text="Changing the embedding model does not update stored vectors. Rebuild to regenerate them."
+                                   TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                         <ComboBox x:Name="LowCostModelBox" Header="Low Cost" DisplayMemberPath="Name" SelectionChanged="LowCostModelBox_SelectionChanged"/>
                         <ComboBox x:Name="HighCostModelBox" Header="High Cost" DisplayMemberPath="Name" SelectionChanged="HighCostModelBox_SelectionChanged"/>
                         <ComboBox x:Name="ArtistModelBox" Header="Artist" DisplayMemberPath="Name" SelectionChanged="ArtistModelBox_SelectionChanged"/>

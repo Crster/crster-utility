@@ -85,10 +85,8 @@ namespace App.Services
             }
             settings.OpenAiCompatibleBaseUrl = ValidateBaseUrl(settings.OpenAiCompatibleBaseUrl);
             WriteBootstrap(settings.DatabaseFolder, settings.OpenAiCompatibleBaseUrl, settings.OpenAiCompatibleApiKey);
-            var embeddingModelChanged = !string.Equals(Current.EmbeddingModel, settings.EmbeddingModel, StringComparison.OrdinalIgnoreCase);
             Current = settings;
             Changed?.Invoke(this, settings);
-            if (embeddingModelChanged) EmbeddingMaintenanceService.InvalidateAndRebuild();
         }
 
         public Task SaveAsync(AppSettings settings) { Save(settings); return Task.CompletedTask; }

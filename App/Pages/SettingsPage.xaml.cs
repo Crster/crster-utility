@@ -19,6 +19,7 @@ namespace App.Pages
     {
         private bool _loading;
         private AppSettings _settings = null!;
+        private string _loadedModelEndpoint = string.Empty;
 
         private sealed record MicrophoneChoice(string Id, string Name)
         {
@@ -109,9 +110,23 @@ namespace App.Pages
             }
         }
 
+        /// <summary>Reloads the model lists when the endpoint the current lists came from is no longer the saved one.</summary>
+        private async Task ReloadModelsIfEndpointChangedAsync()
+        {
+            if (string.Equals(_loadedModelEndpoint, ModelEndpointKey(_settings), StringComparison.Ordinal)) return;
+            var wasLoading = _loading;
+            _loading = true;
+            try { await LoadModelsAsync(); }
+            finally { _loading = wasLoading; }
+        }
+
+        private static string ModelEndpointKey(AppSettings settings) =>
+            $"{settings.OpenAiCompatibleBaseUrl}\n{settings.OpenAiCompatibleApiKey}";
+
         private async Task LoadModelsAsync()
         {
             SetModelBoxesEnabled(false);
+            _loadedModelEndpoint = string.Empty;
             try
             {
                 using var client = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
@@ -120,6 +135,7 @@ namespace App.Pages
                 SetModelChoices(LowCostModelBox, models.Where(model => model.SupportsChat && !model.SupportsImageGeneration), _settings.LowCostModel);
                 SetModelChoices(HighCostModelBox, models.Where(model => model.SupportsChat && !model.SupportsImageGeneration), _settings.HighCostModel);
                 SetModelChoices(ArtistModelBox, models.Where(model => model.SupportsImageGeneration), _settings.ArtistModel);
+                _loadedModelEndpoint = ModelEndpointKey(_settings);
                 SetModelBoxesEnabled(true);
             }
             catch (Exception exception)
@@ -144,6 +160,7 @@ namespace App.Pages
             LowCostModelBox.IsEnabled = enabled;
             HighCostModelBox.IsEnabled = enabled;
             ArtistModelBox.IsEnabled = enabled;
+            RebuildEmbeddingsButton.IsEnabled = enabled && !EmbeddingMaintenanceService.IsRunning;
         }
 
         private async Task LoadMicrophonesAsync()
@@ -200,7 +217,12 @@ namespace App.Pages
         }
 
         private void OpenAiCompatibleApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e) { if (!_loading) Save(settings => settings.OpenAiCompatibleApiKey = OpenAiCompatibleApiKeyBox.Password.Trim()); }
-        private void OpenAiCompatibleBaseUrlBox_LostFocus(object sender, RoutedEventArgs e)
+        private async void OpenAiCompatibleApiKeyBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            if (_loading) return;
+            await ReloadModelsIfEndpointChangedAsync();
+        }
+        private async void OpenAiCompatibleBaseUrlBox_LostFocus(object sender, RoutedEventArgs e)
         {
             if (_loading) return;
             try
@@ -212,9 +234,35 @@ namespace App.Pages
             {
                 OpenAiCompatibleBaseUrlBox.Text = _settings.OpenAiCompatibleBaseUrl;
                 StatusText.Text = exception.Message;
+                return;
             }
+            await ReloadModelsIfEndpointChangedAsync();
         }
         private void EmbeddingModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && EmbeddingModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.EmbeddingModel = choice.Id); }
+        private async void RebuildEmbeddingsButton_Click(object sender, RoutedEventArgs e)
+        {
+            SetRebuildEmbeddingsBusy(true);
+            StatusText.Text = "Rebuilding embeddings…";
+            try
+            {
+                var rebuilt = await EmbeddingMaintenanceService.RebuildAllAsync(System.Threading.CancellationToken.None);
+                StatusText.Text = $"Rebuilt {rebuilt} embedding{(rebuilt == 1 ? string.Empty : "s")} with {_settings.EmbeddingModel}.";
+            }
+            catch (Exception exception)
+            {
+                StatusText.Text = $"Embeddings could not be rebuilt: {exception.Message}";
+            }
+            finally { SetRebuildEmbeddingsBusy(false); }
+        }
+
+        private void SetRebuildEmbeddingsBusy(bool isBusy)
+        {
+            RebuildEmbeddingsButton.IsEnabled = !isBusy;
+            RebuildEmbeddingsLabel.Text = isBusy ? "Rebuilding" : "Rebuild";
+            RebuildEmbeddingsProgress.IsActive = isBusy;
+            RebuildEmbeddingsProgress.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
+        }
+
         private void LowCostModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && LowCostModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.LowCostModel = choice.Id); }
         private void HighCostModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && HighCostModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.HighCostModel = choice.Id); }
         private void ArtistModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && ArtistModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.ArtistModel = choice.Id); }
