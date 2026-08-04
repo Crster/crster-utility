@@ -82,6 +82,7 @@ namespace App.Pages
         private CodyCommand? _selectedCommand;
         private int _searchVersion;
         private bool _loaded;
+        private bool _unloaded;
         private bool _isBusy;
         private bool _filesVisible;
         private bool _isFilesResizing;
@@ -139,6 +140,7 @@ namespace App.Pages
 
         private void CodyPage_Unloaded(object sender, RoutedEventArgs e)
         {
+            _unloaded = true;
             PrepareForWindowClose();
         }
 
@@ -1540,6 +1542,20 @@ namespace App.Pages
             await ShowAgentPromptAsync($"Ask Cody about {entry.Name}", context);
         }
 
+        private async Task SendCommandToCodyAsync(CodyCommand command)
+        {
+            if (!HasActiveAgent()) return;
+
+            var commandContext = string.IsNullOrWhiteSpace(command.WorkingDirectory)
+                ? $"Command: {command.Name}\r\n{command.Command}"
+                : $"Command: {command.Name}\r\n{command.Command}\r\nWorking directory: {command.WorkingDirectory}";
+            var context =
+                "This request was sent from the Commands menu for a configured workspace command.\r\n"
+                + "If the command setup needs correction, first call list_workspace_commands, then call update_workspace_command. Do not write .crster/cody.json.\r\n\r\n"
+                + commandContext;
+            await ShowAgentPromptAsync($"Ask Cody about {command.Name}", context);
+        }
+
         private async Task PasteWorkspaceEntryAsync()
         {
             var source = _copiedWorkspacePath;
@@ -2443,7 +2459,11 @@ namespace App.Pages
 
             _agentClient = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
             _agentSecretaryTools = new SecretaryToolService(new SecretaryMemoryService(_agentClient));
-            _agentTools = new CodyToolService(_agentClient, _agentSecretaryTools, ConfirmAgentActionAsync)
+            _agentTools = new CodyToolService(
+                _agentClient,
+                _agentSecretaryTools,
+                ConfirmAgentActionAsync,
+                ExecuteWorkspaceCommandConfigurationAsync)
             {
                 WorkspacePath = _settings.CodyWorkspace
             };
@@ -2714,6 +2734,11 @@ namespace App.Pages
                 ToolTipService.SetToolTip(select, tooltip);
                 AutomationProperties.SetName(select, $"Select {command.Name}: {tooltip}");
                 select.Click += CommandMenuItem_Click;
+                var commandMenu = new MenuFlyout();
+                var sendToCody = new MenuFlyoutItem { Text = "Send to Cody" };
+                sendToCody.Click += async (_, _) => await SendCommandToCodyAsync(command);
+                commandMenu.Items.Add(sendToCody);
+                select.ContextFlyout = commandMenu;
                 var remove = new Button
                 {
                     Content = new FontIcon { Glyph = "\uE74D", FontSize = 12 },
@@ -2959,6 +2984,9 @@ namespace App.Pages
 
         private async void RunButton_Click(SplitButton sender, SplitButtonClickEventArgs args)
         {
+            // Cody can update .crster\cody.json while diagnosing command output. Reload it at
+            // execution time so the next run uses that corrected configuration.
+            LoadWorkspaceCommands();
             if (_selectedCommand is null)
             {
                 ScanCommandsMenuItem_Click(sender, new RoutedEventArgs());
@@ -3018,6 +3046,120 @@ namespace App.Pages
                 AppendTerminal($"[settings] Could not save .crster\\cody.json: {exception.Message}\r\n");
             }
         }
+
+        /// <summary>Executes Commands-menu tools on the UI thread, where their state and controls are owned.</summary>
+        private Task<ToolResult> ExecuteWorkspaceCommandConfigurationAsync(string name, JsonObject arguments)
+        {
+            if (DispatcherQueue.HasThreadAccess)
+                return Task.FromResult(ExecuteWorkspaceCommandConfiguration(name, arguments));
+
+            var completion = new TaskCompletionSource<ToolResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!DispatcherQueue.TryEnqueue(() =>
+            {
+                try
+                {
+                    completion.TrySetResult(ExecuteWorkspaceCommandConfiguration(name, arguments));
+                }
+                catch (Exception exception)
+                {
+                    completion.TrySetResult(CommandConfigurationError("operation_failed", exception.Message));
+                }
+            }))
+            {
+                completion.TrySetResult(CommandConfigurationError("operation_unavailable", "Cody's Commands menu is no longer available."));
+            }
+            return completion.Task;
+        }
+
+        private ToolResult ExecuteWorkspaceCommandConfiguration(string name, JsonObject arguments) => name switch
+        {
+            "list_workspace_commands" => ListWorkspaceCommands(),
+            "update_workspace_command" => UpdateWorkspaceCommand(arguments),
+            _ => CommandConfigurationError("unknown_tool", $"Cody cannot use the Commands-menu tool '{name}'.")
+        };
+
+        private ToolResult ListWorkspaceCommands()
+        {
+            var commands = new JsonArray(_commands.Select(CommandToJson).Cast<JsonNode?>().ToArray());
+            return CommandConfigurationSuccess(new JsonObject
+            {
+                ["commands"] = commands,
+                ["selected_command"] = _selectedCommand?.Command ?? string.Empty
+            });
+        }
+
+        private ToolResult UpdateWorkspaceCommand(JsonObject arguments)
+        {
+            var currentCommand = CommandConfigurationText(arguments, "current_command");
+            var name = CommandConfigurationText(arguments, "name");
+            var commandLine = CommandConfigurationText(arguments, "command");
+            var workingDirectory = CommandConfigurationText(arguments, "working_directory");
+            if (string.IsNullOrWhiteSpace(currentCommand)
+                || string.IsNullOrWhiteSpace(name)
+                || string.IsNullOrWhiteSpace(commandLine)
+                || workingDirectory is null)
+                return CommandConfigurationError(
+                    "invalid_arguments",
+                    "current_command, name, command, and working_directory are all required; use an empty working_directory for the workspace root.");
+
+            var index = _commands.FindIndex(saved =>
+                saved.Command.Equals(currentCommand, StringComparison.OrdinalIgnoreCase));
+            if (index < 0)
+                return CommandConfigurationError(
+                    "command_not_found",
+                    "No saved command matches current_command. Call list_workspace_commands again and use its exact command line.");
+            if (_commands.Where((_, commandIndex) => commandIndex != index).Any(saved =>
+                saved.Command.Equals(commandLine, StringComparison.OrdinalIgnoreCase)))
+                return CommandConfigurationError(
+                    "duplicate_command",
+                    "Another saved command already uses that command line.");
+
+            var original = _commands[index];
+            var replacement = new CodyCommand(name, commandLine, workingDirectory);
+            var wasSelected = ReferenceEquals(_selectedCommand, original);
+            _commands[index] = replacement;
+            if (wasSelected) _selectedCommand = replacement;
+            SaveWorkspaceCommands();
+            RefreshRunMenu();
+            return CommandConfigurationSuccess(new JsonObject
+            {
+                ["command"] = CommandToJson(replacement),
+                ["is_selected"] = wasSelected
+            }) with
+            {
+                DiffOld = FormatCommandConfiguration(original),
+                DiffNew = FormatCommandConfiguration(replacement)
+            };
+        }
+
+        private static string? CommandConfigurationText(JsonObject arguments, string name) =>
+            arguments[name] is JsonValue value && value.TryGetValue<string>(out var text)
+                ? text.Trim()
+                : null;
+
+        private static JsonObject CommandToJson(CodyCommand command) => new()
+        {
+            ["name"] = command.Name,
+            ["command"] = command.Command,
+            ["working_directory"] = command.WorkingDirectory
+        };
+
+        private static string FormatCommandConfiguration(CodyCommand command) =>
+            $"Name: {command.Name}\r\nCommand: {command.Command}\r\nWorking directory: {command.WorkingDirectory}";
+
+        private static ToolResult CommandConfigurationSuccess(JsonObject result)
+        {
+            result.Insert(0, "success", true);
+            return new ToolResult(true, result.ToJsonString());
+        }
+
+        private static ToolResult CommandConfigurationError(string category, string error) =>
+            new(false, new JsonObject
+            {
+                ["success"] = false,
+                ["error_category"] = category,
+                ["error"] = error
+            }.ToJsonString());
 
         private string WorkspaceSettingsPath() =>
             Path.Combine(_settings.CodyWorkspace, ".crster", "cody.json");
@@ -3093,7 +3235,7 @@ namespace App.Pages
                 () =>
                 {
                     _startingInteractiveTerminal = false;
-                    if (IsInteractiveTerminalOnScreen()) StartInteractiveTerminal();
+                    if (!_unloaded && IsInteractiveTerminalOnScreen()) StartInteractiveTerminal();
                 });
             return false;
         }
@@ -3217,7 +3359,8 @@ namespace App.Pages
         }
 
         private bool IsInteractiveTerminalOnScreen() =>
-            TerminalPanel.Visibility == Visibility.Visible
+            !_unloaded
+            && TerminalPanel.Visibility == Visibility.Visible
             && ReferenceEquals(TerminalTabs.SelectedItem, InteractiveTerminalTab);
 
         private async Task RunCommandInTerminalTabAsync(CodyCommand command)
@@ -3234,13 +3377,16 @@ namespace App.Pages
 
             var terminalWasHidden = TerminalPanel.Visibility != Visibility.Visible;
             ShowTerminal(startInteractiveSession: false);
-            var output = new TextBlock
+            var output = new TextBox
             {
                 FontFamily = new FontFamily("Cascadia Mono"),
                 FontSize = 12,
                 Foreground = new SolidColorBrush(Colors.LightGray),
                 TextWrapping = TextWrapping.Wrap,
-                IsTextSelectionEnabled = true
+                IsReadOnly = true,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(0),
+                Background = new SolidColorBrush(Colors.Transparent)
             };
             var scroller = new ScrollViewer
             {
@@ -3248,11 +3394,13 @@ namespace App.Pages
                 Padding = new Thickness(16, 10, 16, 10),
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto
             };
+            // The selectable TextBlock handles the right-click, so attach the menu to it
+            // directly rather than to its ScrollViewer parent.
+            output.ContextFlyout = CreateTerminalCommandOutputMenu(command, output);
             var tab = new TabViewItem
             {
                 Header = command.Name,
-                Content = scroller,
-                ContextFlyout = CreateTerminalCommandTabMenu(command, output)
+                Content = scroller
             };
             TerminalTabs.TabItems.Add(tab);
             TerminalTabs.SelectedItem = tab;
@@ -3322,33 +3470,69 @@ namespace App.Pages
             return true;
         }
 
-        private static void AppendTerminalCommandOutput(TextBlock output, ScrollViewer scroller, string text)
+        private static void AppendTerminalCommandOutput(TextBox output, ScrollViewer scroller, string text)
         {
             output.Text += text;
             scroller.UpdateLayout();
             scroller.ChangeView(null, scroller.ScrollableHeight, null, true);
         }
 
-        private MenuFlyout CreateTerminalCommandTabMenu(CodyCommand command, TextBlock output)
+        private MenuFlyout CreateTerminalCommandOutputMenu(CodyCommand command, TextBox output)
         {
             var menu = new MenuFlyout();
-            var requestFix = new MenuFlyoutItem
+            var copy = new MenuFlyoutItem { Text = "Copy" };
+            copy.Click += (_, _) => CopyTerminalCommandOutput(output.SelectedText);
+            menu.Items.Add(copy);
+
+            var copyAll = new MenuFlyoutItem { Text = "Copy all" };
+            copyAll.Click += (_, _) => CopyTerminalCommandOutput(output.Text);
+            menu.Items.Add(copyAll);
+            menu.Items.Add(new MenuFlyoutSeparator());
+
+            var sendAllToCody = new MenuFlyoutItem
             {
-                Text = "Request a fix",
+                Text = "Send all to Cody",
                 IsEnabled = HasActiveAgent()
             };
-            menu.Opening += (_, _) => requestFix.IsEnabled = HasActiveAgent();
-            requestFix.Click += async (_, _) => await RequestFixForCommandAsync(command, output.Text);
-            menu.Items.Add(requestFix);
+            var sendSelectedToCody = new MenuFlyoutItem
+            {
+                Text = "Send selected to Cody",
+                IsEnabled = HasActiveAgent() && !string.IsNullOrEmpty(output.SelectedText)
+            };
+            menu.Opening += (_, _) =>
+            {
+                copy.IsEnabled = !string.IsNullOrEmpty(output.SelectedText);
+                sendAllToCody.IsEnabled = HasActiveAgent();
+                sendSelectedToCody.IsEnabled = HasActiveAgent() && !string.IsNullOrEmpty(output.SelectedText);
+            };
+            sendAllToCody.Click += async (_, _) => await SendCommandOutputToCodyAsync(command, output.Text);
+            sendSelectedToCody.Click += async (_, _) => await SendCommandOutputToCodyAsync(command, output.SelectedText);
+            menu.Items.Add(sendAllToCody);
+            menu.Items.Add(sendSelectedToCody);
             return menu;
         }
 
-        private async Task RequestFixForCommandAsync(CodyCommand command, string output)
+        private static void CopyTerminalCommandOutput(string output)
+        {
+            if (string.IsNullOrWhiteSpace(output)) return;
+
+            var package = new DataPackage();
+            package.SetText(output);
+            Clipboard.SetContent(package);
+            Clipboard.Flush();
+        }
+
+        private async Task SendCommandOutputToCodyAsync(CodyCommand command, string output)
         {
             if (!HasActiveAgent()) return;
             if (_isBusy)
             {
-                await ShowMessageAsync("Cody is busy", "Wait for the current request to finish before requesting a fix.");
+                await ShowMessageAsync("Cody is busy", "Wait for the current request to finish before sending command output.");
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                await ShowMessageAsync("No command output", "Run the command before sending its output to Cody.");
                 return;
             }
 
@@ -3356,9 +3540,10 @@ namespace App.Pages
                 ? output
                 : $"[Earlier console output omitted]\r\n{output[^MaximumCommandFixContextCharacters..]}";
             var prompt =
-                $"Fix the issue revealed by the workspace command \"{command.Name}\".\n\n"
+                "This output was produced by running a configured workspace command from the Commands menu. "
+                + "Diagnose and apply the needed fix. If the command, its arguments, or its working directory needs adjustment, first call list_workspace_commands, then call update_workspace_command. Do not write .crster/cody.json.\n\n"
+                + $"Console output from the workspace command \"{command.Name}\":\n\n"
                 + $"Command: {command.Command}\n\n"
-                + "Use this console output as supporting context. Inspect the relevant files and make the smallest complete fix.\n\n"
                 + supportingOutput;
             SendPromptToCody(prompt);
         }
@@ -3842,6 +4027,8 @@ namespace App.Pages
 
         private static bool IsControlKeyDown() => (GetKeyState(0x11) & 0x8000) != 0;
 
+        private static bool IsShiftKeyDown() => (GetKeyState(0x10) & 0x8000) != 0;
+
         private static void CopyInteractiveTerminalText(EasyTerminalControl terminal)
         {
             var text = terminal.ConPTYTerm.GetConsoleText();
@@ -4139,16 +4326,13 @@ namespace App.Pages
                 MinWidth = 520,
                 MinHeight = 84,
                 MaxHeight = 180,
-                Header = "What would you like Cody to do?",
                 PlaceholderText = "For example: Revert this selection to its previous version."
             };
-            var content = new StackPanel { Spacing = 8 };
-            content.Children.Add(requestBox);
             var dialog = new ContentDialog
             {
                 XamlRoot = XamlRoot,
                 Title = title,
-                Content = content,
+                Content = requestBox,
                 PrimaryButtonText = "Ask Cody",
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Primary,
@@ -4156,10 +4340,22 @@ namespace App.Pages
             };
             requestBox.TextChanged += (_, _) =>
                 dialog.IsPrimaryButtonEnabled = !string.IsNullOrWhiteSpace(requestBox.Text);
+            requestBox.Loaded += (_, _) => requestBox.Focus(FocusState.Programmatic);
+
+            var submittedViaEnter = false;
+            requestBox.KeyDown += (_, e) =>
+            {
+                if (e.Key != global::Windows.System.VirtualKey.Enter || IsShiftKeyDown()) return;
+                e.Handled = true;
+                if (!dialog.IsPrimaryButtonEnabled) return;
+                submittedViaEnter = true;
+                dialog.Hide();
+            };
 
             var result = await dialog.ShowAsync();
             var request = requestBox.Text.Trim();
-            if (result != ContentDialogResult.Primary || request.Length == 0 || !HasActiveAgent()) return;
+            if ((result != ContentDialogResult.Primary && !submittedViaEnter)
+                || request.Length == 0 || !HasActiveAgent()) return;
 
             SendPromptToCody($"Request: {request}\r\n{context}");
         }

@@ -71,7 +71,7 @@ namespace App.Models
         string? DiffOld = null,
         string? DiffNew = null);
 
-    /// <summary>DiffOld/DiffNew are UI-only (before/after file text for edit tools); they are never sent back
+    /// <summary>DiffOld/DiffNew are UI-only before/after text for change tools; they are never sent back
     /// to the model, which only ever sees Output.</summary>
     internal sealed record ToolResult(
         bool Success,

@@ -736,6 +736,7 @@ namespace App.Controls
             "read_workspace_file" => "Read",
             "write_workspace_file" => "Write",
             "patch_workspace_file" => "Edit",
+            "update_workspace_command" => "Update command",
             "delete_workspace_entry" => "Delete",
             "search_workspace_files" => "Search",
             "list_workspace_entries" => "List",
@@ -747,7 +748,7 @@ namespace App.Controls
         private static string ToolGlyph(string toolName) => toolName switch
         {
             "read_workspace_file" => "",
-            "write_workspace_file" or "patch_workspace_file" => "",
+            "write_workspace_file" or "patch_workspace_file" or "update_workspace_command" => "",
             "delete_workspace_entry" => "",
             "search_workspace_files" => "",
             "list_workspace_entries" => "",
@@ -758,7 +759,7 @@ namespace App.Controls
         /// <summary>Per-action accent so write/delete/run tools are distinguishable at a glance.</summary>
         private static string ToolAccentBrush(string toolName) => toolName switch
         {
-            "write_workspace_file" or "patch_workspace_file" => "SystemFillColorCautionBrush",
+            "write_workspace_file" or "patch_workspace_file" or "update_workspace_command" => "SystemFillColorCautionBrush",
             "delete_workspace_entry" => "SystemFillColorCriticalBrush",
             "run_workspace_command" or "run_elevated_workspace_command" => "SystemFillColorAttentionBrush",
             _ => "TextFillColorSecondaryBrush"

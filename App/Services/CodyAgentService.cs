@@ -48,7 +48,9 @@ namespace App.Services
             "search_workspace_files",
             "list_workspace_entries",
             "run_workspace_command",
-            "run_elevated_workspace_command"
+            "run_elevated_workspace_command",
+            "list_workspace_commands",
+            "update_workspace_command"
         };
 
         private readonly OpenAiCompatibleClient _client;
@@ -100,6 +102,7 @@ namespace App.Services
             - Verify with run_workspace_command when a build/lint/test command exists. Report failures honestly.
             - Multi-project workspace: set working_directory on run_workspace_command / run_elevated_workspace_command to the right project folder.
             - run_elevated_workspace_command only when admin rights are truly required.
+            - To correct a command saved in the Commands menu, call list_workspace_commands, then update_workspace_command. Never read, write, or patch .crster/cody.json directly.
             - Destructive/risky action -> ask for confirmation first. Declined -> stop, explain, do not route around it.
             - Never claim you read, ran, or checked something you did not.
             </method>
@@ -299,6 +302,8 @@ namespace App.Services
                 Text(arguments, "working_directory") is { Length: > 0 } dir
                     ? $"{Text(arguments, "command_line")} (in {dir})"
                     : Text(arguments, "command_line"),
+            "update_workspace_command" => Text(arguments, "command"),
+            "list_workspace_commands" => "saved Commands menu entries",
             _ => string.Empty
         };
 

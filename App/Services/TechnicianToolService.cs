@@ -47,12 +47,15 @@ namespace App.Services
         private readonly OpenAiCompatibleClient _client;
         private readonly SecretaryToolService _secretaryTools;
         private readonly Func<string, Task<bool>> _confirmAsync;
+        private readonly Func<string, JsonObject, Task<ToolResult>>? _workspaceCommandConfigurationAsync;
         public CodyToolService(OpenAiCompatibleClient client, SecretaryToolService secretaryTools,
-            Func<string, Task<bool>> confirmAsync)
+            Func<string, Task<bool>> confirmAsync,
+            Func<string, JsonObject, Task<ToolResult>>? workspaceCommandConfigurationAsync = null)
         {
             _client = client;
             _secretaryTools = secretaryTools;
             _confirmAsync = confirmAsync;
+            _workspaceCommandConfigurationAsync = workspaceCommandConfigurationAsync;
         }
 
         public string WorkspacePath { get; set; } = string.Empty;
@@ -69,6 +72,8 @@ namespace App.Services
                 Function("list_workspace_entries", "Use to discover filenames and directories when content search cannot locate the target. Lists direct children whose names match a pattern. Use \".\" and \".*\" for the workspace root.", Props(("workspace_path", String("Workspace-relative directory to list; use \".\" for the root.")), ("name_pattern", String("Case-insensitive .NET regular expression matched against entry names.")), ("include_hidden", Boolean("Include hidden, dot-prefixed, ignored, and generated entries; requires confirmation."))), "workspace_path", "name_pattern"),
                 Function("run_workspace_command", "Use to run one non-elevated Windows command for inspection, build, lint, or verification. Include the executable and every argument in one command line. If the workspace contains multiple projects (e.g. a backend and a frontend in separate folders), set working_directory to the specific project folder so the command finds the right executable and config files.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("working_directory", String("Workspace-relative folder to run the command in. Omit to run at the workspace root.")), ("return_full_output", Boolean("Return untruncated output; may require confirmation."))), "command_line"),
                 Function("run_elevated_workspace_command", "Use only when the requested Windows command requires administrator privileges. Runs through UAC and requires confirmation. If the workspace contains multiple projects, set working_directory to the specific project folder so the command finds the right executable and config files.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("working_directory", String("Workspace-relative folder to run the command in. Omit to run at the workspace root.")), ("return_full_output", Boolean("Return untruncated output; may require confirmation."))), "command_line"),
+                Function("list_workspace_commands", "List the commands saved in Cody's Commands menu, including their exact command line, working directory, and selected command. Use this before correcting a saved command. Do not read .crster/cody.json directly.", new JsonObject()),
+                Function("update_workspace_command", "Replace one existing saved Commands-menu entry after list_workspace_commands identifies it. Use the exact current_command returned by that tool, then provide the complete corrected name, command, and working_directory. This updates the menu and its saved configuration together; never write .crster/cody.json directly.", Props(("current_command", String("Exact existing command line returned by list_workspace_commands.")), ("name", String("Replacement display name.")), ("command", String("Complete corrected command line.")), ("working_directory", String("Replacement workspace-relative working directory; use an empty string for the workspace root."))), "current_command", "name", "command", "working_directory"),
                 Function("list_running_processes", "Use when the user asks which processes are currently running. Returns process names and numeric IDs.", new JsonObject()),
                 Function("terminate_process", "Use to stop one running process by its numeric ID. Always requires user confirmation.", Props(("process_id", Integer("Positive process ID returned by list_running_processes."))), "process_id"),
                 Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", SecretaryToolService.DataKindSchema())), "context_type")
@@ -101,6 +106,7 @@ namespace App.Services
                     "list_workspace_entries" => await ListFilesAsync(Required(arguments, "workspace_path"), RequiredContent(arguments, "name_pattern"), OptionalBoolean(arguments, "include_hidden")),
                     "run_workspace_command" => await ExecuteCommandAsync(Required(arguments, "command_line"), false, OptionalBoolean(arguments, "return_full_output"), Optional(arguments, "working_directory"), token),
                     "run_elevated_workspace_command" => await ExecuteCommandAsync(Required(arguments, "command_line"), true, OptionalBoolean(arguments, "return_full_output"), Optional(arguments, "working_directory"), token),
+                    "list_workspace_commands" or "update_workspace_command" => await ExecuteWorkspaceCommandConfigurationAsync(name, arguments),
                     "list_running_processes" => ListProcesses(),
                     "terminate_process" => await KillProcessAsync(OptionalInt(arguments, "process_id", 0)),
                     "google_search" => await GoogleSearchAsync(Required(arguments, "query"), token),
@@ -133,6 +139,11 @@ namespace App.Services
             }
         }
 
+        private Task<ToolResult> ExecuteWorkspaceCommandConfigurationAsync(string name, JsonObject arguments) =>
+            _workspaceCommandConfigurationAsync is null
+                ? Task.FromResult(Error("tool_unavailable", "Commands-menu configuration is unavailable in this context."))
+                : _workspaceCommandConfigurationAsync(name, arguments);
+
         private ToolResult ReadFile(string path, (int? Start, int? End) slice)
         {
             var fullPath = ResolveWorkspacePath(path);
@@ -160,6 +171,8 @@ namespace App.Services
         private ToolResult WriteFile(string path, string content, (int Start, int End)? range)
         {
             var fullPath = ResolveWorkspacePath(path);
+            if (IsWorkspaceCommandConfigurationPath(fullPath))
+                return Error("protected_configuration", "Use list_workspace_commands and update_workspace_command to change the Commands menu.");
             var previousContent = File.Exists(fullPath) ? File.ReadAllText(fullPath) : string.Empty;
             if (range is not null)
             {
@@ -176,6 +189,8 @@ namespace App.Services
         private ToolResult PatchFile(string path, JsonObject arguments)
         {
             var fullPath = ResolveWorkspacePath(path);
+            if (IsWorkspaceCommandConfigurationPath(fullPath))
+                return PatchError("protected_configuration", "Use list_workspace_commands and update_workspace_command to change the Commands menu.");
             if (!File.Exists(fullPath)) return PatchError("file_not_found", "The patch was not applied because the file does not exist.");
             var content = File.ReadAllText(fullPath);
             var edits = ParseDiffFencedEdits(RequiredContent(arguments, "search_replace_diff"));
@@ -1090,6 +1105,8 @@ namespace App.Services
         private async Task<ToolResult> DeleteFileAsync(string path)
         {
             var fullPath = ResolveWorkspacePath(path);
+            if (IsWorkspaceCommandConfigurationPath(fullPath))
+                return Error("protected_configuration", "Use update_workspace_command to change Commands-menu configuration.");
             if (!File.Exists(fullPath) && !Directory.Exists(fullPath)) return Error("path_not_found", "The file or directory does not exist.");
             if (!await _confirmAsync($"Delete '{fullPath}'? This cannot be undone.")) return Error("confirmation_declined", "The user did not approve deletion.");
             if (File.Exists(fullPath)) File.Delete(fullPath); else Directory.Delete(fullPath, false);
@@ -1438,9 +1455,28 @@ namespace App.Services
 
             var resolvedExecutable = ResolveExecutable(executable, workingDirectory);
             if (resolvedExecutable is null
-                || Path.GetExtension(resolvedExecutable).Equals(".cmd", StringComparison.OrdinalIgnoreCase)
-                || Path.GetExtension(resolvedExecutable).Equals(".bat", StringComparison.OrdinalIgnoreCase))
+                && !TryResolveUnquotedExecutablePath(command, workingDirectory, out resolvedExecutable, out arguments))
                 return false;
+
+            if (Path.GetExtension(resolvedExecutable).Equals(".cmd", StringComparison.OrdinalIgnoreCase)
+                || Path.GetExtension(resolvedExecutable).Equals(".bat", StringComparison.OrdinalIgnoreCase))
+            {
+                // Batch scripts need cmd.exe, but retain the executable/argument split so commands
+                // such as "npm run lint" do not become a fictitious executable named "npm run lint".
+                var commandProcessor = Environment.GetEnvironmentVariable("ComSpec");
+                if (string.IsNullOrWhiteSpace(commandProcessor))
+                    commandProcessor = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+                startInfo = new ProcessStartInfo(commandProcessor)
+                {
+                    Arguments = $"/d /s /c \"\"{resolvedExecutable}\"{(arguments.Length == 0 ? string.Empty : " " + arguments)}\"",
+                    WorkingDirectory = workingDirectory,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                return true;
+            }
 
             startInfo = new ProcessStartInfo(resolvedExecutable)
             {
@@ -1479,6 +1515,39 @@ namespace App.Services
 
             arguments = end < command.Length ? command[end..].TrimStart() : string.Empty;
             return !string.IsNullOrWhiteSpace(executable);
+        }
+
+        /// <summary>Accepts an unquoted absolute executable path containing spaces, such as a path copied from where.exe.</summary>
+        private static bool TryResolveUnquotedExecutablePath(
+            string command,
+            string workingDirectory,
+            out string resolvedExecutable,
+            out string arguments)
+        {
+            resolvedExecutable = string.Empty;
+            arguments = string.Empty;
+            var start = 0;
+            while (start < command.Length && char.IsWhiteSpace(command[start])) start++;
+            if (start == command.Length || !Path.IsPathFullyQualified(command[start..])) return false;
+
+            var fullCandidate = ResolveExecutable(command[start..].Trim(), workingDirectory);
+            if (fullCandidate is not null)
+            {
+                resolvedExecutable = fullCandidate;
+                return true;
+            }
+
+            for (var separator = command.Length - 1; separator > start; separator--)
+            {
+                if (!char.IsWhiteSpace(command[separator])) continue;
+                var candidate = command[start..separator].TrimEnd();
+                var resolved = ResolveExecutable(candidate, workingDirectory);
+                if (resolved is null) continue;
+                resolvedExecutable = resolved;
+                arguments = command[separator..].TrimStart();
+                return true;
+            }
+            return false;
         }
 
         private static bool ContainsShellOperator(string command)
@@ -1584,6 +1653,12 @@ namespace App.Services
             return fullPath;
         }
 
+        private bool IsWorkspaceCommandConfigurationPath(string fullPath) =>
+            string.Equals(
+                Path.GetFullPath(fullPath),
+                Path.Combine(Path.GetFullPath(WorkspacePath), ".crster", "cody.json"),
+                StringComparison.OrdinalIgnoreCase);
+
         private void EnsureWorkspace()
         {
             if (!HasWorkspace()) throw new InvalidOperationException("Choose an existing Technician workspace first.");
@@ -1593,7 +1668,8 @@ namespace App.Services
 
         private static bool RequiresWorkspace(string toolName) => toolName is
             "read_workspace_file" or "write_workspace_file" or "patch_workspace_file" or "delete_workspace_entry"
-            or "search_workspace_files" or "list_workspace_entries" or "run_workspace_command" or "run_elevated_workspace_command";
+            or "search_workspace_files" or "list_workspace_entries" or "run_workspace_command" or "run_elevated_workspace_command"
+            or "list_workspace_commands" or "update_workspace_command";
 
         private static void ValidateNoReparsePoints(string root, string path)
         {
