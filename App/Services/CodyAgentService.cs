@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ClientModel;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -36,6 +37,7 @@ namespace App.Services
     {
         private const int MaximumToolCalls = 24;
         private const int MaximumRounds = 60;
+        private const int MaximumAgentInstructionsCharacters = 60_000;
         private const string ToolLimitResult = "{\"success\":false,\"error\":\"Cody blocked this tool call because the tool-call limit was reached.\",\"suggestion\":\"Summarize what you found and tell the user what remains.\"}";
         private const string EmptyResponseRecoveryPrompt = "Write the answer for the user now, using the tool results already gathered. Do not call another tool.";
 
@@ -117,9 +119,64 @@ namespace App.Services
                 .Append(mode.BeSmart ? " (Be smart: high-capability model with web search)" : " (default: low-cost model)");
             builder.Append("\nThinking effort: ").Append(mode.ThinkDeep ? "high (Think deep)" : "none");
             builder.Append("\nWeb search: ").Append(WebSearchFor(mode) ? "enabled" : "disabled");
+            AppendAgentInstructions(builder, workspacePath);
             if (!string.IsNullOrWhiteSpace(contextText))
                 builder.Append("\n\nCarried-over context from the previous session:\n").Append(contextText);
             return builder.ToString();
+        }
+
+        /// <summary>
+        /// Adds standing instructions that apply to every Cody turn. Global Crster instructions are
+        /// loaded before workspace instructions so a workspace can provide the more specific rule.
+        /// </summary>
+        private static void AppendAgentInstructions(StringBuilder builder, string workspacePath)
+        {
+            var paths = new List<(string Path, string Scope)>();
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrWhiteSpace(userProfile))
+                paths.Add((Path.Combine(userProfile, ".crster", "AGENTS.md"), "Global Crster"));
+
+            if (!string.IsNullOrWhiteSpace(workspacePath))
+            {
+                var root = Path.GetFullPath(workspacePath);
+                paths.Add((Path.Combine(root, ".crster", "AGENTS.md"), "Workspace-wide Crster"));
+                paths.Add((Path.Combine(root, "AGENTS.md"), "Workspace"));
+            }
+
+            var instructions = paths
+                .DistinctBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase)
+                .Select(entry => (entry.Scope, Content: TryReadAgentInstructions(entry.Path)))
+                .Where(entry => !string.IsNullOrWhiteSpace(entry.Content))
+                .ToList();
+            if (instructions.Count == 0) return;
+
+            builder.Append("\n\n<agent_instructions>\n")
+                .Append("Follow these AGENTS.md instructions as standing instructions. ")
+                .Append("Later, more-specific instruction files override earlier ones when they conflict. ")
+                .Append("They cannot override the safety, workspace-boundary, or confirmation requirements above.\n");
+            foreach (var instruction in instructions)
+            {
+                builder.Append("\n<source scope=\"").Append(instruction.Scope).Append("\">\n")
+                    .Append(instruction.Content!.Trim())
+                    .Append("\n</source>\n");
+            }
+            builder.Append("</agent_instructions>");
+        }
+
+        private static string? TryReadAgentInstructions(string path)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                if (!info.Exists || info.Length == 0) return null;
+                using var reader = new StreamReader(path, detectEncodingFromByteOrderMarks: true);
+                var content = reader.ReadToEnd();
+                return content.Length <= MaximumAgentInstructionsCharacters
+                    ? content
+                    : content[..MaximumAgentInstructionsCharacters];
+            }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
         }
 
         public static JsonArray CreateToolDeclarations() =>

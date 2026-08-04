@@ -2387,9 +2387,14 @@ namespace App.Pages
             SetBusy(true);
             try
             {
-                await StartNewSessionWhenPromptIsUnrelatedAsync(agent, prompt, _agentCancellation.Token);
+                // Session relatedness needs a provider round trip. Render first so it never delays feedback.
                 CodyChat.BeginTurn();
-                CodyChat.AddMessage(new ChatMessage(ChatItemKind.User, "You", prompt));
+                CodyChat.ShowPendingUserPrompt(prompt);
+                var sessionBeforeRelatednessCheck = _session;
+                await StartNewSessionWhenPromptIsUnrelatedAsync(agent, prompt, _agentCancellation.Token);
+                if (!ReferenceEquals(sessionBeforeRelatednessCheck, _session))
+                    CodyChat.ShowPendingUserPrompt(prompt);
+                CodyChat.CommitPendingUserPrompt();
                 var answer = await agent.RunAsync(
                     _session,
                     prompt,
@@ -2403,11 +2408,13 @@ namespace App.Pages
             }
             catch (OperationCanceledException)
             {
+                CodyChat.CommitPendingUserPrompt();
                 CodyChat.CompleteTurn(string.Empty);
                 CodyChat.AddMessage(new ChatMessage(ChatItemKind.Error, "Cody", "Operation stopped."));
             }
             catch (Exception exception)
             {
+                CodyChat.CommitPendingUserPrompt();
                 CodyChat.CompleteTurn(string.Empty);
                 CodyChat.AddMessage(new ChatMessage(ChatItemKind.Error, "Cody error", exception.Message));
             }

@@ -35,6 +35,8 @@ namespace App.Controls
         private ChatSession _session = new();
         private MarkdownView? _streamingAnswer;
         private FrameworkElement? _streamingAnswerContainer;
+        private ChatMessage? _pendingUserMessage;
+        private UIElement? _pendingUserMessageContainer;
         private string _streamingAnswerText = string.Empty;
         private ThinkingCard? _liveThinking;
         private string _workspacePath = string.Empty;
@@ -106,6 +108,28 @@ namespace App.Controls
             _liveThinking = null;
             _liveToolRows.Clear();
             _autoScroll = true;
+        }
+
+        /// <summary>Renders the submitted prompt immediately while the page prepares its session.</summary>
+        internal void ShowPendingUserPrompt(string prompt)
+        {
+            DiscardPendingUserPrompt();
+            _pendingUserMessage = new ChatMessage(ChatItemKind.User, "You", prompt);
+            _pendingUserMessageContainer = CreateUserBubble(_pendingUserMessage);
+            RemoveEmptyState();
+            TranscriptHost.Children.Add(_pendingUserMessageContainer);
+            ScrollToLatest();
+        }
+
+        /// <summary>Persists the already-rendered prompt without rendering it a second time.</summary>
+        internal void CommitPendingUserPrompt()
+        {
+            if (_pendingUserMessage is not { } message) return;
+
+            _pendingUserMessage = null;
+            _pendingUserMessageContainer = null;
+            _session.Messages.Add(message);
+            SessionChanged?.Invoke(this, EventArgs.Empty);
         }
 
         /// <summary>Commits whatever the turn produced. Streamed text wins; the returned answer is the fallback.</summary>
@@ -262,10 +286,19 @@ namespace App.Controls
 
         internal void RenderSession()
         {
+            DiscardPendingUserPrompt();
             TranscriptHost.Children.Clear();
             foreach (var message in _session.Messages) RenderMessage(message);
             UpdateEmptyState();
             ScrollToLatest();
+        }
+
+        private void DiscardPendingUserPrompt()
+        {
+            if (_pendingUserMessageContainer is not null)
+                TranscriptHost.Children.Remove(_pendingUserMessageContainer);
+            _pendingUserMessage = null;
+            _pendingUserMessageContainer = null;
         }
 
         private void RenderMessage(ChatMessage message)
