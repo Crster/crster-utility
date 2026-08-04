@@ -1,0 +1,31 @@
+{
+  "Commands": [
+    {
+      "Name": "Build app",
+      "Command": "dotnet build App/App.csproj --configuration Debug --property:Platform=x64",
+      "WorkingDirectory": ""
+    },
+    {
+      "Name": "Clean and build app",
+      "Command": "dotnet clean App/App.csproj --configuration Debug --property:Platform=x64 \u0026\u0026 dotnet build App/App.csproj --configuration Debug --property:Platform=x64 --no-incremental",
+      "WorkingDirectory": ""
+    },
+    {
+      "Name": "Run app script",
+      "Command": "pwsh -ExecutionPolicy Bypass -File run-app.ps1",
+      "WorkingDirectory": ""
+    },
+    {
+      "Name": "Restore app dependencies",
+      "Command": "dotnet restore App/App.csproj",
+      "WorkingDirectory": ""
+    },
+    {
+      "Name": "Publish app",
+      "Command": "dotnet publish App/App.csproj --configuration Release --property:Platform=x64 --output ./Installer/CrsterUtility/",
+      "WorkingDirectory": ""
+    }
+  ],
+  "SelectedCommand": "pwsh -ExecutionPolicy Bypass -File run-app.ps1",
+  "SelectedTerminalShell": "PowerShell 7"
+}

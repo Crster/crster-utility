@@ -29,7 +29,7 @@ namespace App.Models
         Guid AttachmentId = default,
         string FileExtension = "",
         string TokenName = "");
-    internal sealed record OpenAiCompatibleFunctionCall(string Id, string Name, JsonObject Arguments);
+    internal sealed record OpenAiCompatibleFunctionCall(string Id, string Name, JsonObject Arguments, string? ArgumentsError = null);
     internal sealed record GeneratedImage(byte[] Data, string MimeType);
     internal sealed record GroundedSource(string Title, string Uri);
 
@@ -67,11 +67,17 @@ namespace App.Models
         GeneratedImage? Image = null,
         JsonObject? ToolArguments = null,
         bool? ToolSucceeded = null,
-        bool IncludeInContext = true);
+        bool IncludeInContext = true,
+        string? DiffOld = null,
+        string? DiffNew = null);
 
+    /// <summary>DiffOld/DiffNew are UI-only (before/after file text for edit tools); they are never sent back
+    /// to the model, which only ever sees Output.</summary>
     internal sealed record ToolResult(
         bool Success,
         string Output,
         string Status = "completed",
-        GeneratedImage? Image = null);
+        GeneratedImage? Image = null,
+        string? DiffOld = null,
+        string? DiffNew = null);
 }

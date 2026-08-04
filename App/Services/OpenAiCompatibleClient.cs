@@ -157,7 +157,9 @@ namespace App.Services
                     tools,
                     cancellationToken,
                     thinkingLevel,
-                    onTextDelta);
+                    includeWebSearch: true,
+                    onTextDelta,
+                    onThinkingDelta: null);
 
             var messages = new JsonArray
             {
@@ -195,6 +197,30 @@ namespace App.Services
             return ParseChatCompletion(root);
         }
 
+        /// <summary>Streams a turn through the Responses API. Web search, reasoning effort, and thinking deltas are opt-in.</summary>
+        public Task<OpenAiCompatibleTurnResult> CreateStreamingInteractionAsync(
+            string model,
+            IReadOnlyList<JsonObject> history,
+            IReadOnlyList<JsonObject> newSteps,
+            string systemInstruction,
+            JsonArray? tools,
+            CancellationToken cancellationToken,
+            OpenAiCompatibleThinkingLevel thinkingLevel,
+            bool includeWebSearch,
+            Action<string>? onTextDelta,
+            Action<string>? onThinkingDelta) =>
+            CreateResponsesInteractionAsync(
+                model,
+                history,
+                newSteps,
+                systemInstruction,
+                tools,
+                cancellationToken,
+                thinkingLevel,
+                includeWebSearch,
+                onTextDelta,
+                onThinkingDelta);
+
         private async Task<OpenAiCompatibleTurnResult> CreateResponsesInteractionAsync(
             string model,
             IReadOnlyList<JsonObject> history,
@@ -203,7 +229,9 @@ namespace App.Services
             JsonArray? tools,
             CancellationToken cancellationToken,
             OpenAiCompatibleThinkingLevel thinkingLevel,
-            Action<string>? onTextDelta)
+            bool includeWebSearch,
+            Action<string>? onTextDelta,
+            Action<string>? onThinkingDelta)
         {
             var options = new CreateResponseOptions
             {
@@ -213,7 +241,17 @@ namespace App.Services
             options.InputItems.Add(ResponseItem.CreateDeveloperMessageItem(systemInstruction));
             foreach (var step in history.Concat(newSteps))
                 options.InputItems.Add(CreateResponseInputItem(step));
-            options.Tools.Add(ResponseTool.CreateWebSearchTool());
+            if (ResolveReasoningEffort(thinkingLevel) is { } effortLevel)
+            {
+                options.ReasoningOptions = new ResponseReasoningOptions
+                {
+                    ReasoningEffortLevel = effortLevel,
+                    ReasoningSummaryVerbosity = ResponseReasoningSummaryVerbosity.Auto
+                };
+                options.MaxOutputTokenCount = 32000;
+            }
+            if (includeWebSearch)
+                options.Tools.Add(ResponseTool.CreateWebSearchTool());
             foreach (var tool in tools?.OfType<JsonObject>() ?? [])
             {
                 var name = tool["name"]?.GetValue<string>();
@@ -234,17 +272,21 @@ namespace App.Services
                     result.Text += textDelta.Delta;
                     onTextDelta?.Invoke(textDelta.Delta);
                 }
+                else if (update is StreamingResponseReasoningSummaryTextDeltaUpdate thinkingDelta)
+                {
+                    result.Thinking += thinkingDelta.Delta;
+                    onThinkingDelta?.Invoke(thinkingDelta.Delta);
+                }
                 else if (update is StreamingResponseOutputItemDoneUpdate outputItemDone
                     && outputItemDone.Item is FunctionCallResponseItem functionCall)
                 {
                     var argumentsText = functionCall.FunctionArguments.ToString();
-                    JsonObject arguments;
-                    try { arguments = JsonNode.Parse(argumentsText) as JsonObject ?? new JsonObject(); }
-                    catch (JsonException exception) { throw new InvalidOperationException("The AI provider generated invalid tool-call JSON.", exception); }
+                    var (arguments, argumentsError) = ParseFunctionArguments(argumentsText);
                     var call = new OpenAiCompatibleFunctionCall(
                         functionCall.CallId,
                         functionCall.FunctionName,
-                        arguments);
+                        arguments,
+                        argumentsError);
                     result.FunctionCalls.Add(call);
                     result.Steps.Add(new JsonObject
                     {
@@ -260,6 +302,20 @@ namespace App.Services
                     result.InputTokens = completed.Response.Usage?.InputTokenCount;
                     result.OutputTokens = completed.Response.Usage?.OutputTokenCount;
                 }
+                else if (update is StreamingResponseIncompleteUpdate incomplete)
+                {
+                    throw new InvalidOperationException(
+                        $"The AI provider cut the response short ({incomplete.Response.IncompleteStatusDetails?.Reason}). Try again with a lower reasoning effort or a shorter request.");
+                }
+                else if (update is StreamingResponseFailedUpdate failed)
+                {
+                    throw new InvalidOperationException(
+                        $"The AI provider failed to complete the response: {failed.Response.Error?.Message}");
+                }
+                else if (update is StreamingResponseErrorUpdate error)
+                {
+                    throw new InvalidOperationException($"The AI provider reported an error: {error.Message}");
+                }
             }
             if (!string.IsNullOrWhiteSpace(result.Text))
                 result.Steps.Insert(0, new JsonObject
@@ -269,6 +325,59 @@ namespace App.Services
                 });
             return result;
         }
+
+        /// <summary>Parses tool-call arguments leniently. Local/open-weight models sometimes wrap JSON in code
+        /// fences, leave a trailing comma, or truncate output; repair those before giving up. On failure the
+        /// arguments are an empty object and the error is returned so the caller can ask the model to retry
+        /// instead of aborting the whole turn.</summary>
+        private static (JsonObject Arguments, string? Error) ParseFunctionArguments(string argumentsText)
+        {
+            if (TryParseJsonObject(argumentsText, out var arguments)) return (arguments, null);
+
+            var repaired = argumentsText.Trim();
+            if (repaired.StartsWith("```", StringComparison.Ordinal))
+            {
+                repaired = repaired[3..].TrimStart();
+                if (repaired.StartsWith("json", StringComparison.OrdinalIgnoreCase)) repaired = repaired[4..];
+                var fenceEnd = repaired.LastIndexOf("```", StringComparison.Ordinal);
+                if (fenceEnd >= 0) repaired = repaired[..fenceEnd];
+                repaired = repaired.Trim();
+            }
+            var start = repaired.IndexOf('{');
+            var end = repaired.LastIndexOf('}');
+            if (start >= 0 && end > start) repaired = repaired[start..(end + 1)];
+            repaired = TrailingCommaPattern.Replace(repaired, "$1");
+
+            if (TryParseJsonObject(repaired, out arguments)) return (arguments, null);
+
+            var truncated = argumentsText.Length <= 300 ? argumentsText : argumentsText[..300] + "…";
+            return (new JsonObject(), $"invalid tool-call JSON: {truncated}");
+        }
+
+        private static bool TryParseJsonObject(string text, out JsonObject arguments)
+        {
+            try
+            {
+                arguments = JsonNode.Parse(text) as JsonObject ?? new JsonObject();
+                return true;
+            }
+            catch (JsonException)
+            {
+                arguments = new JsonObject();
+                return false;
+            }
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex TrailingCommaPattern =
+            new(",\\s*([}\\]])", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static ResponseReasoningEffortLevel? ResolveReasoningEffort(OpenAiCompatibleThinkingLevel thinkingLevel) => thinkingLevel switch
+        {
+            OpenAiCompatibleThinkingLevel.Minimal => ResponseReasoningEffortLevel.Minimal,
+            OpenAiCompatibleThinkingLevel.Low => ResponseReasoningEffortLevel.Low,
+            OpenAiCompatibleThinkingLevel.High => ResponseReasoningEffortLevel.High,
+            _ => null
+        };
 
         public ResponsesClient Responses => _openAiClient.GetResponsesClient();
 
@@ -433,13 +542,12 @@ namespace App.Services
                 var function = call?["function"] as JsonObject;
                 if (function is null) continue;
                 var argumentsText = function["arguments"]?.GetValue<string>() ?? "{}";
-                JsonObject arguments;
-                try { arguments = JsonNode.Parse(argumentsText) as JsonObject ?? new JsonObject(); }
-                catch (JsonException exception) { throw new InvalidOperationException("The AI provider generated invalid tool-call JSON.", exception); }
+                var (arguments, argumentsError) = ParseFunctionArguments(argumentsText);
                 var functionCall = new OpenAiCompatibleFunctionCall(
                     call?["id"]?.GetValue<string>() ?? throw new InvalidOperationException("A function call did not include an id."),
                     function["name"]?.GetValue<string>() ?? string.Empty,
-                    arguments);
+                    arguments,
+                    argumentsError);
                 result.FunctionCalls.Add(functionCall);
                 result.Steps.Add(new JsonObject
                 {

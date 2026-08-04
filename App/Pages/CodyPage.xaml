@@ -17,13 +17,19 @@
         <Border Padding="16,10" BorderThickness="0,0,0,1"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
-            <Grid ColumnSpacing="12">
+            <Grid x:Name="ToolbarGrid" VerticalAlignment="Top" SizeChanged="ToolbarGrid_SizeChanged">
+
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
-                <StackPanel Orientation="Horizontal" Spacing="6">
+                
+                <StackPanel x:Name="WorkspaceInfoStackPanel" Orientation="Horizontal" Spacing="14" Grid.Row="0" Grid.Column="0"
+                            HorizontalAlignment="Left" VerticalAlignment="Top">
                     <SplitButton x:Name="WorkspaceSplitButton" MinWidth="150" MaxWidth="260" Height="34"
                                  Padding="10,0" HorizontalAlignment="Left"
                                  Click="WorkspaceSplitButton_Click"
@@ -46,95 +52,86 @@
                             </MenuFlyout>
                         </SplitButton.Flyout>
                     </SplitButton>
+                    <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                        <FontIcon Glyph="&#xE943;" FontSize="12"
+                                  Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        <TextBlock x:Name="ModelStatusText" FontSize="12"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    </StackPanel>
                 </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" Visibility="Collapsed"
-                            VerticalAlignment="Center">
-                    <ComboBox x:Name="AgentProviderBox" Width="240" Height="34"
-                              SelectionChanged="AgentProviderBox_SelectionChanged"
-                              ToolTipService.ToolTip="Choose the installed coding agent"/>
-                    <ToggleButton x:Name="SmartButton" Height="34" Padding="10,0"
-                                  Checked="AgentModeToggle_Changed" Unchecked="AgentModeToggle_Changed"
-                                  ToolTipService.ToolTip="Use the high-capability model">
-                        <StackPanel Orientation="Horizontal" Spacing="7">
-                            <FontIcon Glyph="&#xE7BE;" FontSize="13"/>
-                            <TextBlock Text="Smart"/>
-                        </StackPanel>
-                    </ToggleButton>
-                    <ToggleButton x:Name="ThinkingButton" Height="34" Padding="10,0"
-                                  Checked="AgentModeToggle_Changed" Unchecked="AgentModeToggle_Changed"
-                                  ToolTipService.ToolTip="Use medium thinking effort">
-                        <StackPanel Orientation="Horizontal" Spacing="7">
-                            <FontIcon Glyph="&#xE945;" FontSize="13"/>
-                            <TextBlock Text="Thinking"/>
-                        </StackPanel>
-                    </ToggleButton>
-                </StackPanel>
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Center">
-                    <SplitButton x:Name="RunCommandButton" Height="34" Content="Run command"
-                                 Click="RunButton_Click"
-                                 ToolTipService.ToolTip="Run the selected workspace command">
-                        <SplitButton.Flyout>
-                            <Flyout Placement="BottomEdgeAlignedRight"
-                                    Opening="RunCommandFlyout_Opening"
-                                    Closed="RunCommandFlyout_Closed">
-                                <StackPanel MinWidth="280" Spacing="4">
-                                    <StackPanel x:Name="RunCommandItemsPanel" Spacing="2"/>
-                                    <Border Height="1" Margin="0,4"
-                                            Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-                                    <StackPanel Orientation="Horizontal" Spacing="4" Margin="4,0,4,2">
-                                        <HyperlinkButton x:Name="AddCommandButton" Padding="8,6"
-                                                         Click="AddCommandButton_Click"
-                                                         ToolTipService.ToolTip="Add a workspace command"
-                                                         AutomationProperties.Name="Add workspace command">
-                                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                                <FontIcon Glyph="&#xE710;" FontSize="12"/>
-                                                <TextBlock Text="Add command"/>
-                                            </StackPanel>
-                                        </HyperlinkButton>
-                                        <HyperlinkButton x:Name="ScanCommandsButton" Padding="8,6"
-                                                         Click="ScanCommandsMenuItem_Click"
-                                                         ToolTipService.ToolTip="Discover workspace commands"
-                                                         AutomationProperties.Name="Scan workspace commands">
-                                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                                <FontIcon Glyph="&#xE895;" FontSize="12"/>
-                                                <TextBlock Text="Scan workspace"/>
-                                            </StackPanel>
-                                        </HyperlinkButton>
+                
+                <StackPanel x:Name="ActionsStackPanel" Orientation="Horizontal" Spacing="6"
+                            Grid.Row="0" Grid.Column="1"
+                            HorizontalAlignment="Right" VerticalAlignment="Top">
+                        <ToggleButton x:Name="SmartToggle" Height="34" Padding="10,0"
+                                      Checked="ModeToggle_Changed" Unchecked="ModeToggle_Changed"
+                                      AutomationProperties.Name="Be smart">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xE7BE;" FontSize="12"/>
+                                <TextBlock Text="Be smart" FontSize="12"/>
+                            </StackPanel>
+                        </ToggleButton>
+                        <ToggleButton x:Name="ThinkToggle" Height="34" Padding="10,0"
+                                      Checked="ModeToggle_Changed" Unchecked="ModeToggle_Changed"
+                                      AutomationProperties.Name="Think deep">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xE945;" FontSize="12"/>
+                                <TextBlock Text="Think deep" FontSize="12"/>
+                            </StackPanel>
+                        </ToggleButton>
+                        <Button x:Name="ClearButton" Width="34" Height="34" Padding="0"
+                                Click="ClearButton_Click"
+                                ToolTipService.ToolTip="Clear history and start a new session"
+                                AutomationProperties.Name="Clear history and start a new session">
+                            <FontIcon Glyph="&#xEA99;" FontSize="12"/>
+                        </Button>
+                        <Border Width="1" Height="20" Margin="4,0"
+                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                        <SplitButton x:Name="RunCommandButton" Height="34" Content="Run command"
+                                     Click="RunButton_Click"
+                                     ToolTipService.ToolTip="Run the selected workspace command">
+                            <SplitButton.Flyout>
+                                <Flyout Placement="BottomEdgeAlignedRight">
+                                    <StackPanel MinWidth="280" Spacing="4">
+                                        <StackPanel x:Name="RunCommandItemsPanel" Spacing="2"/>
+                                        <Border Height="1" Margin="0,4"
+                                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                                        <StackPanel Orientation="Horizontal" Spacing="4" Margin="4,0,4,2">
+                                            <HyperlinkButton x:Name="AddCommandButton" Padding="8,6"
+                                                             Click="AddCommandButton_Click"
+                                                             ToolTipService.ToolTip="Add a workspace command"
+                                                             AutomationProperties.Name="Add workspace command">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <FontIcon Glyph="&#xE710;" FontSize="12"/>
+                                                    <TextBlock Text="Add command"/>
+                                                </StackPanel>
+                                            </HyperlinkButton>
+                                            <HyperlinkButton x:Name="ScanCommandsButton" Padding="8,6"
+                                                             Click="ScanCommandsMenuItem_Click"
+                                                             ToolTipService.ToolTip="Discover workspace commands"
+                                                             AutomationProperties.Name="Scan workspace commands">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <FontIcon Glyph="&#xE895;" FontSize="12"/>
+                                                    <TextBlock Text="Scan workspace"/>
+                                                </StackPanel>
+                                            </HyperlinkButton>
+                                        </StackPanel>
                                     </StackPanel>
-                                </StackPanel>
-                            </Flyout>
-                        </SplitButton.Flyout>
-                    </SplitButton>
-                    <Button x:Name="AgentSelectionButton" Height="34" Padding="10,0" Visibility="Collapsed"
-                            Click="AgentSelectionButton_Click"
-                            ToolTipService.ToolTip="End the current agent and choose another"
-                            AutomationProperties.Name="Choose a coding agent">
-                        <StackPanel Orientation="Horizontal" Spacing="7">
-                            <FontIcon Glyph="&#xE943;" FontSize="13"/>
-                            <TextBlock Text="Agents"/>
-                        </StackPanel>
-                    </Button>
-                    <ToggleButton x:Name="TerminalButton" Height="34" Padding="10,0"
-                                  Click="TerminalButton_Click" ToolTipService.ToolTip="Show or hide terminal (Ctrl+`)"
-                                  AutomationProperties.Name="Show or hide terminal">
-                        <StackPanel Orientation="Horizontal" Spacing="7">
-                            <FontIcon Glyph="&#xE756;" FontSize="13"/>
-                            <TextBlock Text="Terminal"/>
-                        </StackPanel>
-                    </ToggleButton>
-                    <Button x:Name="CopySessionButton" Width="34" Height="34" Padding="0" Visibility="Collapsed"
-                            Click="CopySessionButton_Click" ToolTipService.ToolTip="Copy Cody session">
-                        <FontIcon Glyph="&#xE8C8;" FontSize="13"/>
-                    </Button>
-                    <Button x:Name="ClearSessionButton" Width="34" Height="34" Padding="0" Visibility="Collapsed"
-                            Click="ClearSessionButton_Click" ToolTipService.ToolTip="Clear Cody session"
-                            AutomationProperties.Name="Clear Cody session">
-                        <FontIcon Glyph="&#xEA99;" FontSize="13"/>
-                    </Button>
-                </StackPanel>
-            </Grid>
+                                </Flyout>
+                            </SplitButton.Flyout>
+                        </SplitButton>
+                        <ToggleButton x:Name="TerminalButton" Height="34" Padding="10,0"
+                                      Click="TerminalButton_Click" ToolTipService.ToolTip="Show or hide terminal (Ctrl+`)"
+                                      AutomationProperties.Name="Show or hide terminal">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xE756;" FontSize="13"/>
+                                <TextBlock Text="Terminal"/>
+                            </StackPanel>
+                        </ToggleButton>
+                    </StackPanel>
+                </Grid>
         </Border>
 
         <!-- Section: Coding workspace -->
@@ -238,141 +235,9 @@
                 <TabViewItem x:Name="HomeTab" IsClosable="False" Visibility="Collapsed"
                              ContentTransitions="{x:Null}">
                     <TabViewItem.Header>
-                        <TextBlock Text="Agent CLI"/>
+                        <TextBlock Text="Cody"/>
                     </TabViewItem.Header>
-                    <Grid x:Name="AgentCliSurface">
-                    <ScrollViewer x:Name="AgentCliWelcome" Padding="24" VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Disabled" SizeChanged="AgentCliWelcome_SizeChanged">
-                        <StackPanel x:Name="AgentCliWelcomeContent" HorizontalAlignment="Center" VerticalAlignment="Top"
-                                    Margin="0,36,0,24" Spacing="14">
-                            <FontIcon Glyph="&#xE8BD;" FontSize="58" Opacity="0.55"
-                                      HorizontalAlignment="Center"/>
-                            <TextBlock Text="Choose a coding agent"
-                                       Style="{StaticResource SubtitleTextBlockStyle}"
-                                       HorizontalAlignment="Center"/>
-                            <TextBlock Text="Start an installed agent in the selected workspace."
-                                       TextAlignment="Center" TextWrapping="Wrap" Opacity="0.7"/>
-                            <TextBlock x:Name="AgentSelectionStatusText" TextAlignment="Center"
-                                       TextWrapping="Wrap" Opacity="0.7"/>
-                            <ItemsRepeater x:Name="AvailableAgentsRepeater" Margin="0,12,0,0">
-                                <ItemsRepeater.Layout>
-                                    <StackLayout Orientation="Vertical" Spacing="10"/>
-                                </ItemsRepeater.Layout>
-                                <ItemsRepeater.ItemTemplate>
-                                    <DataTemplate>
-                                        <Button Tag="{Binding}" IsEnabled="{Binding IsEnabled}" Click="LaunchAgentButton_Click"
-                                                Padding="0" HorizontalAlignment="Stretch"
-                                                HorizontalContentAlignment="Stretch">
-                                            <Grid Padding="16,12" ColumnSpacing="12">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-                                                <FontIcon Glyph="{Binding Glyph}" FontSize="20"
-                                                          VerticalAlignment="Center"/>
-                                                <StackPanel Grid.Column="1" Spacing="2">
-                                                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"/>
-                                                    <TextBlock Text="{Binding Status}" FontSize="12" Opacity="0.7"/>
-                                                </StackPanel>
-                                                <FontIcon Grid.Column="2" Glyph="&#xE76C;" FontSize="13"
-                                                          VerticalAlignment="Center" Opacity="0.65"/>
-                                            </Grid>
-                                        </Button>
-                                    </DataTemplate>
-                                </ItemsRepeater.ItemTemplate>
-                            </ItemsRepeater>
-                        </StackPanel>
-                    </ScrollViewer>
-                    <Grid x:Name="AgentCliHost" Background="#FF0C0C0C" Visibility="Collapsed"
-                          SizeChanged="AgentCliHost_SizeChanged"/>
-                    <Grid x:Name="CodyChatContent" Padding="20,16" RowSpacing="12" Visibility="Collapsed">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <ScrollViewer x:Name="ConversationScroller" VerticalScrollBarVisibility="Auto">
-                            <StackPanel x:Name="ConversationHost" Spacing="10">
-                                <StackPanel x:Name="CodyEmptyState" HorizontalAlignment="Center" Margin="0,64,0,0" Spacing="8">
-                                    <Border Width="64" Height="64" CornerRadius="18"
-                                            Background="{ThemeResource ControlFillColorSecondaryBrush}"
-                                            HorizontalAlignment="Center">
-                                        <FontIcon Glyph="&#xE943;" FontSize="30"
-                                                  HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                  Opacity="0.65"/>
-                                    </Border>
-                                    <TextBlock Text="Build with Cody" Style="{StaticResource SubtitleTextBlockStyle}"
-                                               HorizontalAlignment="Center"/>
-                                    <TextBlock Text="Choose a workspace, then ask Cody to inspect, change, or run your project."
-                                               TextWrapping="Wrap" TextAlignment="Center" MaxWidth="520" Opacity="0.7"/>
-                                </StackPanel>
-                            </StackPanel>
-                        </ScrollViewer>
-                        <!-- Section: Agent activity -->
-                        <Border x:Name="AgentActivityPanel" Grid.Row="1" Visibility="Collapsed"
-                                Padding="10,7" CornerRadius="8"
-                                Background="{ThemeResource ControlFillColorSecondaryBrush}">
-                            <Grid ColumnSpacing="9">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <ProgressRing Width="16" Height="16" IsActive="True"
-                                              VerticalAlignment="Top" Margin="0,2,0,0"/>
-                                <StackPanel Grid.Column="1" Spacing="2">
-                                    <TextBlock x:Name="AgentActivityStatusText" FontSize="12"
-                                               FontWeight="SemiBold" Text="Cody is working…"/>
-                                    <TextBlock x:Name="AgentActivityDetailText" FontSize="11" Opacity="0.7"
-                                               MaxLines="3" TextWrapping="Wrap"
-                                               TextTrimming="CharacterEllipsis"/>
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                        <Border Grid.Row="2" BorderThickness="1" CornerRadius="14" Padding="6"
-                                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
-                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                Translation="0,0,8">
-                            <Grid ColumnSpacing="6">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBox x:Name="PromptBox" MinHeight="38" MaxHeight="140"
-                                         Padding="10,8" AcceptsReturn="True"
-                                         TextWrapping="Wrap" BorderThickness="0" Background="Transparent"
-                                         PlaceholderText="Ask Cody to inspect, change, or run your project..."
-                                         PreviewKeyDown="PromptBox_PreviewKeyDown">
-                                    <TextBox.Resources>
-                                        <SolidColorBrush x:Key="TextControlBackground" Color="Transparent"/>
-                                        <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent"/>
-                                        <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent"/>
-                                        <SolidColorBrush x:Key="TextControlBackgroundDisabled" Color="Transparent"/>
-                                        <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent"/>
-                                        <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent"/>
-                                        <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent"/>
-                                        <SolidColorBrush x:Key="TextControlBorderBrushDisabled" Color="Transparent"/>
-                                        <SolidColorBrush x:Key="FocusVisualPrimaryBrush" Color="Transparent"/>
-                                        <SolidColorBrush x:Key="FocusVisualSecondaryBrush" Color="Transparent"/>
-                                        <Thickness x:Key="TextControlBorderThemeThickness">0</Thickness>
-                                        <Thickness x:Key="TextControlBorderThemeThicknessFocused">0</Thickness>
-                                    </TextBox.Resources>
-                                </TextBox>
-                                <Button x:Name="SendButton" Grid.Column="1" Width="34" Height="34" Padding="0"
-                                        Margin="0,0,2,2" VerticalAlignment="Bottom" CornerRadius="9"
-                                        Style="{StaticResource AccentButtonStyle}" Click="SendButton_Click"
-                                        ToolTipService.ToolTip="Send prompt">
-                                    <Grid>
-                                        <FontIcon x:Name="SendIcon" Glyph="&#xE724;" FontSize="13"/>
-                                        <Rectangle x:Name="StopIcon" Width="11" Height="11"
-                                                   Fill="{ThemeResource TextFillColorPrimaryBrush}"
-                                                   Visibility="Collapsed"/>
-                                    </Grid>
-                                </Button>
-                            </Grid>
-                        </Border>
-                    </Grid>
-                    </Grid>
+                    <controls:CodyChatPanel x:Name="CodyChat"/>
                 </TabViewItem>
             </TabView>
 
@@ -412,7 +277,7 @@
                 <TabView.Resources>
                     <Thickness x:Key="TabViewItemAddButtonContainerPadding">3,0,0,7</Thickness>
                 </TabView.Resources>
-                <TabViewItem x:Name="InteractiveTerminalTab" IsClosable="True"
+                <TabViewItem x:Name="InteractiveTerminalTab" IsClosable="False"
                              HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
                     <TabViewItem.Header>
                         <StackPanel Orientation="Horizontal" Spacing="8">
@@ -436,7 +301,12 @@
                         </StackPanel>
                     </TabViewItem.Header>
                 <Grid x:Name="InteractiveTerminalHost" MinHeight="120"
-                      HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                      HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                    <TextBlock x:Name="TerminalPlaceholderText" Visibility="Collapsed"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               FontSize="12" Foreground="#FF9D9D9D"
+                               Text="Choose a workspace to start a terminal."/>
+                </Grid>
                 </TabViewItem>
             </TabView>
         </Border>

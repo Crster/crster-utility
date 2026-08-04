@@ -67,8 +67,8 @@ namespace App.Services
                 Function("delete_workspace_entry", "Use to delete one file or empty directory inside the selected workspace. Always requires user confirmation.", Props(("workspace_path", String("Workspace-relative path of the file or empty directory to delete."))), "workspace_path"),
                 Function("search_workspace_files", "Use first to locate relevant code or text by recursively matching file contents under a workspace-relative path. Searches contents, not filenames; excludes hidden and generated paths.", Props(("workspace_path", String("Workspace-relative directory to search; use \".\" for the entire workspace.")), ("search_pattern", String("Case-insensitive .NET regular expression matched against file contents."))), "workspace_path", "search_pattern"),
                 Function("list_workspace_entries", "Use to discover filenames and directories when content search cannot locate the target. Lists direct children whose names match a pattern. Use \".\" and \".*\" for the workspace root.", Props(("workspace_path", String("Workspace-relative directory to list; use \".\" for the root.")), ("name_pattern", String("Case-insensitive .NET regular expression matched against entry names.")), ("include_hidden", Boolean("Include hidden, dot-prefixed, ignored, and generated entries; requires confirmation."))), "workspace_path", "name_pattern"),
-                Function("run_workspace_command", "Use to run one non-elevated Windows command in the selected workspace for inspection, build, lint, or verification. Include the executable and every argument in one command line.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("return_full_output", Boolean("Return untruncated output; may require confirmation."))), "command_line"),
-                Function("run_elevated_workspace_command", "Use only when the requested Windows command requires administrator privileges. Runs in the selected workspace through UAC and requires confirmation.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("return_full_output", Boolean("Return untruncated output; may require confirmation."))), "command_line"),
+                Function("run_workspace_command", "Use to run one non-elevated Windows command for inspection, build, lint, or verification. Include the executable and every argument in one command line. If the workspace contains multiple projects (e.g. a backend and a frontend in separate folders), set working_directory to the specific project folder so the command finds the right executable and config files.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("working_directory", String("Workspace-relative folder to run the command in. Omit to run at the workspace root.")), ("return_full_output", Boolean("Return untruncated output; may require confirmation."))), "command_line"),
+                Function("run_elevated_workspace_command", "Use only when the requested Windows command requires administrator privileges. Runs through UAC and requires confirmation. If the workspace contains multiple projects, set working_directory to the specific project folder so the command finds the right executable and config files.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("working_directory", String("Workspace-relative folder to run the command in. Omit to run at the workspace root.")), ("return_full_output", Boolean("Return untruncated output; may require confirmation."))), "command_line"),
                 Function("list_running_processes", "Use when the user asks which processes are currently running. Returns process names and numeric IDs.", new JsonObject()),
                 Function("terminate_process", "Use to stop one running process by its numeric ID. Always requires user confirmation.", Props(("process_id", Integer("Positive process ID returned by list_running_processes."))), "process_id"),
                 Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", SecretaryToolService.DataKindSchema())), "context_type")
@@ -99,8 +99,8 @@ namespace App.Services
                     "delete_workspace_entry" => await DeleteFileAsync(Required(arguments, "workspace_path")),
                     "search_workspace_files" => await SearchFilesAsync(Required(arguments, "workspace_path"), RequiredContent(arguments, "search_pattern"), token),
                     "list_workspace_entries" => await ListFilesAsync(Required(arguments, "workspace_path"), RequiredContent(arguments, "name_pattern"), OptionalBoolean(arguments, "include_hidden")),
-                    "run_workspace_command" => await ExecuteCommandAsync(Required(arguments, "command_line"), false, OptionalBoolean(arguments, "return_full_output"), token),
-                    "run_elevated_workspace_command" => await ExecuteCommandAsync(Required(arguments, "command_line"), true, OptionalBoolean(arguments, "return_full_output"), token),
+                    "run_workspace_command" => await ExecuteCommandAsync(Required(arguments, "command_line"), false, OptionalBoolean(arguments, "return_full_output"), Optional(arguments, "working_directory"), token),
+                    "run_elevated_workspace_command" => await ExecuteCommandAsync(Required(arguments, "command_line"), true, OptionalBoolean(arguments, "return_full_output"), Optional(arguments, "working_directory"), token),
                     "list_running_processes" => ListProcesses(),
                     "terminate_process" => await KillProcessAsync(OptionalInt(arguments, "process_id", 0)),
                     "google_search" => await GoogleSearchAsync(Required(arguments, "query"), token),
@@ -160,16 +160,17 @@ namespace App.Services
         private ToolResult WriteFile(string path, string content, (int Start, int End)? range)
         {
             var fullPath = ResolveWorkspacePath(path);
+            var previousContent = File.Exists(fullPath) ? File.ReadAllText(fullPath) : string.Empty;
             if (range is not null)
             {
                 if (!File.Exists(fullPath)) return Error("file_not_found", "A character-range write requires an existing file.");
-                var existingContent = File.ReadAllText(fullPath);
-                ValidateRange(range.Value, existingContent.Length);
-                content = existingContent[..range.Value.Start] + content + existingContent[range.Value.End..];
+                ValidateRange(range.Value, previousContent.Length);
+                content = previousContent[..range.Value.Start] + content + previousContent[range.Value.End..];
             }
             Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
             File.WriteAllText(fullPath, content, new UTF8Encoding(false));
-            return Ok("Wrote the file.", new JsonObject { ["path"] = fullPath, ["bytes"] = new FileInfo(fullPath).Length });
+            return Ok("Wrote the file.", new JsonObject { ["path"] = fullPath, ["bytes"] = new FileInfo(fullPath).Length })
+                with { DiffOld = previousContent, DiffNew = content };
         }
 
         private ToolResult PatchFile(string path, JsonObject arguments)
@@ -222,7 +223,7 @@ namespace App.Services
             }
 
             File.WriteAllText(fullPath, patched, new UTF8Encoding(false));
-            return PatchApplied(resolved);
+            return PatchApplied(resolved) with { DiffOld = content, DiffNew = patched };
         }
 
         private static ToolResult PatchApplied(List<ResolvedPatch> resolved)
@@ -1371,10 +1372,14 @@ namespace App.Services
                 || name.Equals("build", StringComparison.OrdinalIgnoreCase);
         }
 
-        private async Task<ToolResult> ExecuteCommandAsync(string command, bool elevated, bool full, CancellationToken token)
+        private async Task<ToolResult> ExecuteCommandAsync(string command, bool elevated, bool full, string workingDirectorySubpath, CancellationToken token)
         {
             EnsureWorkspace();
-            var workingDirectory = Path.GetFullPath(WorkspacePath);
+            var workingDirectory = string.IsNullOrEmpty(workingDirectorySubpath)
+                ? Path.GetFullPath(WorkspacePath)
+                : ResolveWorkspacePath(workingDirectorySubpath);
+            if (!Directory.Exists(workingDirectory))
+                return Error("directory_not_found", "The requested working_directory does not exist in the workspace.");
             if (elevated || full || IsRiskyCommand(command))
             {
                 var qualifier = elevated ? "elevated " : full ? "with unbounded output " : string.Empty;
@@ -1387,7 +1392,8 @@ namespace App.Services
                 return CommandResult(result.Stdout, result.Stderr, result.ExitCode, full);
             }
 
-            var startInfo = CreateCommandStartInfo(command, workingDirectory);
+            if (!TryCreateCommandStartInfo(command, workingDirectory, out var startInfo, out var resolutionError))
+                return Error("command_not_resolved", resolutionError!, solution: "Provide a direct executable and its arguments; shell built-ins (start, dir, etc.) and operators (&, |, <, >, ;) are not supported.");
             using var process = new Process { StartInfo = startInfo };
             process.Start();
             var outputTask = process.StandardOutput.ReadToEndAsync(token);
@@ -1398,52 +1404,27 @@ namespace App.Services
             return CommandResult(stdout, stderr, process.ExitCode, full);
         }
 
+        internal static bool TryCreateCommandStartInfo(string command, string workingDirectory, out ProcessStartInfo startInfo, out string? error)
+        {
+            startInfo = null!;
+            error = null;
+            if (TryCreateDirectCommandStartInfo(command, workingDirectory, out var directStartInfo))
+            {
+                startInfo = directStartInfo;
+                return true;
+            }
+
+            error = ContainsShellOperator(command)
+                ? $"The command '{command}' uses shell operators (&, |, <, >, ;) which are not supported; run each executable separately."
+                : $"Unable to resolve '{command}' to a runnable executable on PATH or in the working directory.";
+            return false;
+        }
+
         internal static ProcessStartInfo CreateCommandStartInfo(string command, string workingDirectory)
         {
-            var powershellMatch = Regex.Match(
-                command,
-                @"^\s*(?<executable>""?(?:powershell|pwsh)(?:\.exe)?""?)\s+(?:-\S+\s+)*-Command\s+(?<quote>[""'])(?<script>[\s\S]*)\k<quote>\s*$",
-                RegexOptions.IgnoreCase);
-            if (!powershellMatch.Success)
-            {
-                powershellMatch = Regex.Match(
-                    command,
-                    @"^\s*(?<executable>""?(?:powershell|pwsh)(?:\.exe)?""?)\s+(?:-\S+\s+)*-Command\s+(?<script>[\s\S]+?)\s*$",
-                    RegexOptions.IgnoreCase);
-            }
-            if (powershellMatch.Success)
-            {
-                var powershell = new ProcessStartInfo(powershellMatch.Groups["executable"].Value.Trim('"'))
-                {
-                    WorkingDirectory = workingDirectory,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-                powershell.ArgumentList.Add("-NoProfile");
-                powershell.ArgumentList.Add("-NonInteractive");
-                powershell.ArgumentList.Add("-Command");
-                powershell.ArgumentList.Add(powershellMatch.Groups["script"].Value);
-                return powershell;
-            }
-
-            if (TryCreateDirectCommandStartInfo(command, workingDirectory, out var directStartInfo))
-                return directStartInfo;
-
-            var startInfo = new ProcessStartInfo(Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe")
-            {
-                WorkingDirectory = workingDirectory,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            startInfo.ArgumentList.Add("/d");
-            startInfo.ArgumentList.Add("/s");
-            startInfo.ArgumentList.Add("/c");
-            startInfo.ArgumentList.Add(command);
-            return startInfo;
+            if (TryCreateCommandStartInfo(command, workingDirectory, out var startInfo, out var error))
+                return startInfo;
+            throw new InvalidOperationException(error);
         }
 
         private static bool TryCreateDirectCommandStartInfo(

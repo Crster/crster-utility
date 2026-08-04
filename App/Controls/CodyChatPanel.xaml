@@ -1,0 +1,89 @@
+<UserControl
+    x:Class="App.Controls.CodyChatPanel"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Section: Transcript -->
+        <ScrollViewer x:Name="TranscriptScroller" Grid.Row="0"
+                      Padding="20,16,20,8" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      ViewChanged="TranscriptScroller_ViewChanged">
+            <StackPanel x:Name="TranscriptHost" MaxWidth="820" Spacing="10"
+                        HorizontalAlignment="Center">
+                <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" Margin="0,72,0,0" Spacing="10">
+                    <Border Width="64" Height="64" CornerRadius="18" HorizontalAlignment="Center"
+                            Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                        <FontIcon Glyph="&#xE943;" FontSize="30" Opacity="0.65"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock Text="Build with Cody" Style="{StaticResource SubtitleTextBlockStyle}"
+                               HorizontalAlignment="Center"/>
+                    <TextBlock x:Name="EmptyStateDetailText" TextWrapping="Wrap" TextAlignment="Center"
+                               MaxWidth="480"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               Text="Ask Cody to inspect, change, or run your project."/>
+                    <Button x:Name="ChooseWorkspaceButton" HorizontalAlignment="Center" Height="32"
+                            Padding="12,0" Visibility="Collapsed" Click="ChooseWorkspaceButton_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <FontIcon Glyph="&#xE8B7;" FontSize="12"/>
+                            <TextBlock Text="Choose workspace" FontSize="12"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Section: Composer -->
+        <Grid Grid.Row="1" Padding="20,4,20,16">
+            <Border MaxWidth="820" HorizontalAlignment="Stretch" BorderThickness="1"
+                    CornerRadius="14" Padding="6"
+                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                <Grid ColumnSpacing="6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="PromptBox" MinHeight="38" MaxHeight="140"
+                             Padding="10,8" AcceptsReturn="True" TextWrapping="Wrap"
+                             BorderThickness="0" Background="Transparent"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             PlaceholderText="Ask Cody to inspect, change, or run your project..."
+                             PreviewKeyDown="PromptBox_PreviewKeyDown">
+                        <TextBox.Resources>
+                            <SolidColorBrush x:Key="TextControlBackground" Color="Transparent"/>
+                            <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent"/>
+                            <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent"/>
+                            <SolidColorBrush x:Key="TextControlBackgroundDisabled" Color="Transparent"/>
+                            <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent"/>
+                            <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent"/>
+                            <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent"/>
+                            <SolidColorBrush x:Key="TextControlBorderBrushDisabled" Color="Transparent"/>
+                            <SolidColorBrush x:Key="FocusVisualPrimaryBrush" Color="Transparent"/>
+                            <SolidColorBrush x:Key="FocusVisualSecondaryBrush" Color="Transparent"/>
+                            <Thickness x:Key="TextControlBorderThemeThickness">0</Thickness>
+                            <Thickness x:Key="TextControlBorderThemeThicknessFocused">0</Thickness>
+                        </TextBox.Resources>
+                    </TextBox>
+                    <Button x:Name="SendButton" Grid.Column="1" Width="34" Height="34" Padding="0"
+                            Margin="0,0,2,2" VerticalAlignment="Bottom" CornerRadius="9"
+                            Style="{StaticResource AccentButtonStyle}" Click="SendButton_Click"
+                            ToolTipService.ToolTip="Send prompt"
+                            AutomationProperties.Name="Send prompt">
+                        <Grid>
+                            <FontIcon x:Name="SendIcon" Glyph="&#xE724;" FontSize="13"/>
+                            <Rectangle x:Name="StopIcon" Width="11" Height="11" RadiusX="2" RadiusY="2"
+                                       Fill="{ThemeResource TextFillColorPrimaryBrush}"
+                                       Visibility="Collapsed"/>
+                        </Grid>
+                    </Button>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

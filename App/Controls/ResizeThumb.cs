@@ -13,7 +13,7 @@ namespace App.Controls
 
         public ResizeHandle()
         {
-            _surface = new Border { Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
+            _surface = new Border { Background = IdleBrush() };
             Content = _surface;
             RenderTransform = _scaleTransform;
             RenderTransformOrigin = new Point(0.5, 0.5);
@@ -34,7 +34,7 @@ namespace App.Controls
         private void HideResizeAffordance()
         {
             ProtectedCursor = null;
-            _surface.Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            _surface.Background = IdleBrush();
             _surface.Width = double.NaN;
             _surface.Height = double.NaN;
             _surface.HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -42,5 +42,9 @@ namespace App.Controls
             _scaleTransform.ScaleX = 1;
             _scaleTransform.ScaleY = 1;
         }
+
+        private static Brush IdleBrush() =>
+            Application.Current.Resources["ControlStrokeColorDefaultBrush"] as Brush
+            ?? new SolidColorBrush(Microsoft.UI.Colors.Gray);
     }
 }
