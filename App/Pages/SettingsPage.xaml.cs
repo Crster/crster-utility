@@ -18,6 +18,7 @@ namespace App.Pages
     public sealed partial class SettingsPage : Page
     {
         private bool _loading;
+        private bool _isRebuilding;
         private AppSettings _settings = null!;
         private string _loadedModelEndpoint = string.Empty;
 
@@ -65,14 +66,23 @@ namespace App.Pages
             CaffeineShortcutBox.SelectedItem = FindShortcut(CaffeineShortcuts, _settings.CaffeineShortcut);
             await LoadMicrophonesAsync();
             await LoadModelsAsync();
+            UpdateEmbeddingRebuildUi();
             UpdatePermissionWarnings();
+            App.Settings.Changed += Settings_Changed;
             if (App.MainWindow is not null) App.MainWindow.Activated += MainWindow_Activated;
             _loading = false;
         }
 
         private void SettingsPage_Unloaded(object sender, RoutedEventArgs e)
         {
+            App.Settings.Changed -= Settings_Changed;
             if (App.MainWindow is not null) App.MainWindow.Activated -= MainWindow_Activated;
+        }
+
+        private void Settings_Changed(object? sender, AppSettings settings)
+        {
+            _settings = settings.Clone();
+            UpdateEmbeddingRebuildUi();
         }
 
         private void MainWindow_Activated(object sender, WindowActivatedEventArgs args) => UpdatePermissionWarnings();
@@ -160,7 +170,15 @@ namespace App.Pages
             LowCostModelBox.IsEnabled = enabled;
             HighCostModelBox.IsEnabled = enabled;
             ArtistModelBox.IsEnabled = enabled;
-            RebuildEmbeddingsButton.IsEnabled = enabled && !EmbeddingMaintenanceService.IsRunning;
+            UpdateEmbeddingRebuildUi();
+        }
+
+        private void UpdateEmbeddingRebuildUi()
+        {
+            var needsRebuild = _settings.EmbeddingsNeedRebuild;
+            RebuildEmbeddingsButton.Visibility = needsRebuild ? Visibility.Visible : Visibility.Collapsed;
+            EmbeddingRebuildHint.Visibility = needsRebuild ? Visibility.Visible : Visibility.Collapsed;
+            RebuildEmbeddingsButton.IsEnabled = needsRebuild && !_isRebuilding && !EmbeddingMaintenanceService.IsRunning;
         }
 
         private async Task LoadMicrophonesAsync()
@@ -241,12 +259,22 @@ namespace App.Pages
         private void EmbeddingModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && EmbeddingModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.EmbeddingModel = choice.Id); }
         private async void RebuildEmbeddingsButton_Click(object sender, RoutedEventArgs e)
         {
+            var rebuiltConfiguration = EmbeddingMaintenanceService.CurrentConfigurationKey;
             SetRebuildEmbeddingsBusy(true);
             StatusText.Text = "Rebuilding embeddings…";
             try
             {
                 var rebuilt = await EmbeddingMaintenanceService.RebuildAllAsync(System.Threading.CancellationToken.None);
-                StatusText.Text = $"Rebuilt {rebuilt} embedding{(rebuilt == 1 ? string.Empty : "s")} with {_settings.EmbeddingModel}.";
+                if (EmbeddingMaintenanceService.MarkCurrentConfigurationRebuilt(rebuiltConfiguration))
+                {
+                    _settings = App.Settings.Current.Clone();
+                    StatusText.Text = $"Rebuilt {rebuilt} embedding{(rebuilt == 1 ? string.Empty : "s")} with {_settings.EmbeddingModel}.";
+                }
+                else
+                {
+                    _settings = App.Settings.Current.Clone();
+                    StatusText.Text = "Embeddings were rebuilt, but the endpoint or model changed during the rebuild. Rebuild again.";
+                }
             }
             catch (Exception exception)
             {
@@ -257,10 +285,11 @@ namespace App.Pages
 
         private void SetRebuildEmbeddingsBusy(bool isBusy)
         {
-            RebuildEmbeddingsButton.IsEnabled = !isBusy;
+            _isRebuilding = isBusy;
             RebuildEmbeddingsLabel.Text = isBusy ? "Rebuilding" : "Rebuild";
             RebuildEmbeddingsProgress.IsActive = isBusy;
             RebuildEmbeddingsProgress.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
+            UpdateEmbeddingRebuildUi();
         }
 
         private void LowCostModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && LowCostModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.LowCostModel = choice.Id); }
@@ -301,6 +330,7 @@ namespace App.Pages
             App.Settings.Save(changed);
             _settings = changed;
             StatusText.Text = string.Empty;
+            UpdateEmbeddingRebuildUi();
         }
     }
 }

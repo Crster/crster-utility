@@ -22,6 +22,8 @@ namespace App.Services
     internal sealed class OpenAiCompatibleClient : IDisposable
     {
         private const int MaximumFunctionResultCharacters = 12_000;
+        private const string ArtistOutputSizeInstruction =
+            "Generate a clear, sharp image with a maximum output dimension of 720 pixels on its longest edge.\n\n";
         private readonly HttpClient _downloadClient = new() { Timeout = TimeSpan.FromMinutes(5) };
         private readonly string _apiKey;
         private readonly string _imageApiBaseUrl;
@@ -421,15 +423,32 @@ namespace App.Services
                 else
                     content.Add(new JsonObject
                     {
-                        ["type"] = "file",
-                        ["file"] = new JsonObject
-                        {
-                            ["filename"] = attachment.DisplayName,
-                            ["file_data"] = attachment.RemoteUri
-                        }
+                        // The configured OpenAI-compatible endpoint accepts text, image, and video
+                        // content parts, but not the Responses API's file content part. Text context
+                        // must therefore be included directly in the message.
+                        ["type"] = "text",
+                        ["text"] = ReadAttachmentText(attachment)
                     });
             }
             return new JsonObject { ["type"] = "user_input", ["content"] = content };
+        }
+
+        private static string ReadAttachmentText(ChatAttachment attachment)
+        {
+            if (!attachment.MimeType.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
+                && !attachment.MimeType.Equals("application/json", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"Attachment '{attachment.DisplayName}' could not be included because this AI provider does not support file attachments for this format.";
+            }
+
+            try
+            {
+                return $"Attachment: {attachment.DisplayName}\n\n{File.ReadAllText(attachment.LocalPath)}";
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                return $"Attachment '{attachment.DisplayName}' could not be read: {exception.Message}";
+            }
         }
 
         public static JsonObject CreateFunctionResult(OpenAiCompatibleFunctionCall call, ToolResult result)
@@ -585,9 +604,10 @@ namespace App.Services
             CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(prompt)) throw new ArgumentException("An image prompt is required.", nameof(prompt));
+            var artistPrompt = ArtistOutputSizeInstruction + prompt.Trim();
             var model = App.Settings.Current.ArtistModel;
             if (IsQwenImageModel(model))
-                return await GenerateQwenImageAsync(model, prompt.Trim(), contextImages, cancellationToken);
+                return await GenerateQwenImageAsync(model, artistPrompt, contextImages, cancellationToken);
 
             if (contextImages.Count == 0)
             {
@@ -596,7 +616,7 @@ namespace App.Services
                     Content = JsonContent.Create(new
                     {
                         model,
-                        prompt = prompt.Trim(),
+                        prompt = artistPrompt,
                         n = 1
                     })
                 };
@@ -605,7 +625,7 @@ namespace App.Services
 
             using var form = new MultipartFormDataContent();
             form.Add(new StringContent(model), "model");
-            form.Add(new StringContent(prompt.Trim()), "prompt");
+            form.Add(new StringContent(artistPrompt), "prompt");
             form.Add(new StringContent("1"), "n");
             foreach (var context in contextImages)
             {

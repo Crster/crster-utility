@@ -12,6 +12,22 @@ namespace App.Services
 
         public static bool IsRunning => Volatile.Read(ref _isRunning) == 1;
 
+        /// <summary>Returns a value that identifies the endpoint and model used to create embeddings.</summary>
+        public static string CurrentConfigurationKey =>
+            $"{App.Settings.Current.OpenAiCompatibleBaseUrl}\n{App.Settings.Current.EmbeddingModel}";
+
+        /// <summary>Clears the rebuild reminder only when the rebuilt configuration is still current.</summary>
+        public static bool MarkCurrentConfigurationRebuilt(string configurationKey)
+        {
+            if (!string.Equals(configurationKey, CurrentConfigurationKey, StringComparison.Ordinal))
+                return false;
+
+            var settings = App.Settings.Current.Clone();
+            settings.EmbeddingsNeedRebuild = false;
+            App.Settings.Save(settings);
+            return true;
+        }
+
         /// <summary>Clears every stored embedding and regenerates it with the current embedding model.</summary>
         public static async Task<int> RebuildAllAsync(CancellationToken cancellationToken)
         {

@@ -239,6 +239,8 @@ namespace App.Windows
                 return;
             }
 
+            if (!await OfferEmbeddingRebuildBeforeSearchAsync()) return;
+
             try
             {
                 var notebookSearch = _notebookDatabase.SearchAsync(query);
@@ -257,6 +259,58 @@ namespace App.Windows
             {
                 if (searchVersion == _searchVersion) sender.ItemsSource = null;
             }
+        }
+
+        private async Task<bool> OfferEmbeddingRebuildBeforeSearchAsync()
+        {
+            if (!App.Settings.Current.EmbeddingsNeedRebuild) return true;
+
+            var dialog = new ContentDialog
+            {
+                XamlRoot = GlobalSearchBox.XamlRoot,
+                Title = "Rebuild embeddings?",
+                Content = "Your embedding endpoint or model changed. Rebuild stored embeddings before searching for accurate results.",
+                PrimaryButtonText = "Rebuild",
+                SecondaryButtonText = "Search without rebuilding",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Primary
+            };
+
+            var choice = await dialog.ShowAsync();
+            if (choice == ContentDialogResult.Secondary) return true;
+            if (choice != ContentDialogResult.Primary) return false;
+
+            var rebuiltConfiguration = EmbeddingMaintenanceService.CurrentConfigurationKey;
+            GlobalSearchBox.IsEnabled = false;
+            try
+            {
+                await EmbeddingMaintenanceService.RebuildAllAsync(CancellationToken.None);
+                if (EmbeddingMaintenanceService.MarkCurrentConfigurationRebuilt(rebuiltConfiguration)) return true;
+
+                await ShowEmbeddingRebuildMessageAsync("Embeddings were rebuilt, but the endpoint or model changed during the rebuild. Rebuild again before searching.");
+                return false;
+            }
+            catch (Exception exception)
+            {
+                await ShowEmbeddingRebuildMessageAsync($"Embeddings could not be rebuilt: {exception.Message}");
+                return false;
+            }
+            finally
+            {
+                GlobalSearchBox.IsEnabled = true;
+            }
+        }
+
+        private async Task ShowEmbeddingRebuildMessageAsync(string message)
+        {
+            var dialog = new ContentDialog
+            {
+                XamlRoot = GlobalSearchBox.XamlRoot,
+                Title = "Embedding rebuild",
+                Content = message,
+                CloseButtonText = "OK"
+            };
+            await dialog.ShowAsync();
         }
 
         private void NavigateToSearchResult(object result)

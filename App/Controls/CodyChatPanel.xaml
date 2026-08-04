@@ -44,7 +44,15 @@
                     CornerRadius="14" Padding="6"
                     BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
-                <Grid ColumnSpacing="6">
+                <Grid RowSpacing="4">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <VariableSizedWrapGrid x:Name="AttachmentHost" Grid.Row="0" Orientation="Horizontal"
+                                           ItemWidth="8" ItemHeight="26"
+                                           Visibility="Collapsed" Margin="4,2,4,0"/>
+                    <Grid Grid.Row="1" ColumnSpacing="6">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
@@ -54,7 +62,8 @@
                              BorderThickness="0" Background="Transparent"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                              PlaceholderText="Ask Cody to inspect, change, or run your project..."
-                             PreviewKeyDown="PromptBox_PreviewKeyDown">
+                             PreviewKeyDown="PromptBox_PreviewKeyDown" TextChanged="PromptBox_TextChanged"
+                             Paste="PromptBox_Paste">
                         <TextBox.Resources>
                             <SolidColorBrush x:Key="TextControlBackground" Color="Transparent"/>
                             <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent"/>
@@ -82,6 +91,7 @@
                                        Visibility="Collapsed"/>
                         </Grid>
                     </Button>
+                    </Grid>
                 </Grid>
             </Border>
         </Grid>

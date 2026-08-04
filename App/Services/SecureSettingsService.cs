@@ -72,6 +72,10 @@ namespace App.Services
         public void Save(AppSettings settings)
         {
             if (!IsConfigured) throw new InvalidOperationException("Application storage has not been configured.");
+            settings.OpenAiCompatibleBaseUrl = ValidateBaseUrl(settings.OpenAiCompatibleBaseUrl);
+            if (!string.Equals(Current.OpenAiCompatibleBaseUrl, settings.OpenAiCompatibleBaseUrl, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(Current.EmbeddingModel, settings.EmbeddingModel, StringComparison.OrdinalIgnoreCase))
+                settings.EmbeddingsNeedRebuild = true;
             if (!string.Equals(Current.DatabaseFolder, settings.DatabaseFolder, StringComparison.OrdinalIgnoreCase))
                 MoveDatabase(settings.DatabaseFolder);
 
@@ -83,7 +87,6 @@ namespace App.Services
                 document.Value = definition.Read(settings);
                 collection.Update(definition.Key, document);
             }
-            settings.OpenAiCompatibleBaseUrl = ValidateBaseUrl(settings.OpenAiCompatibleBaseUrl);
             WriteBootstrap(settings.DatabaseFolder, settings.OpenAiCompatibleBaseUrl, settings.OpenAiCompatibleApiKey);
             Current = settings;
             Changed?.Invoke(this, settings);
@@ -186,6 +189,7 @@ namespace App.Services
             new("caffeine.shortcut", "Caffeine shortcut", "Ctrl+Shift+Alt+F12", value => value.CaffeineShortcut),
             new("ai.lastChatPersonality", "Last chat personality", "Secretary", value => value.LastChatPersonality),
             new("ai.embeddingModel", "Embedding model", "text-embedding-3-small", value => value.EmbeddingModel),
+            new("ai.embeddingsNeedRebuild", "Embeddings need rebuild", false, value => value.EmbeddingsNeedRebuild),
             new("ai.lowCostModel", "Low cost model", "gpt-4.1-mini", value => value.LowCostModel),
             new("ai.highCostModel", "High cost model", "gpt-4.1", value => value.HighCostModel),
             new("ai.artistModel", "Artist model", "gpt-image-2", value => value.ArtistModel),
@@ -206,6 +210,7 @@ namespace App.Services
         public string CaffeineShortcut { get; set; } = "Ctrl+Shift+Alt+F12";
         public string LastChatPersonality { get; set; } = "Secretary";
         public string EmbeddingModel { get; set; } = "text-embedding-3-small";
+        public bool EmbeddingsNeedRebuild { get; set; }
         public string LowCostModel { get; set; } = "gpt-4.1-mini";
         public string HighCostModel { get; set; } = "gpt-4.1";
         public string ArtistModel { get; set; } = "gpt-image-2";
@@ -232,6 +237,7 @@ namespace App.Services
             result.CaffeineShortcut = Text("caffeine.shortcut", result.CaffeineShortcut);
             result.LastChatPersonality = Text("ai.lastChatPersonality", result.LastChatPersonality);
             result.EmbeddingModel = Text("ai.embeddingModel", result.EmbeddingModel);
+            result.EmbeddingsNeedRebuild = Bool("ai.embeddingsNeedRebuild", result.EmbeddingsNeedRebuild);
             result.LowCostModel = Text("ai.lowCostModel", result.LowCostModel);
             result.HighCostModel = Text("ai.highCostModel", result.HighCostModel);
             result.ArtistModel = Text("ai.artistModel", result.ArtistModel);

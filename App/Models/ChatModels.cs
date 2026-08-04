@@ -29,6 +29,7 @@ namespace App.Models
         Guid AttachmentId = default,
         string FileExtension = "",
         string TokenName = "");
+    internal sealed record CodyPromptRequest(string Prompt, IReadOnlyList<ChatAttachment> Attachments);
     internal sealed record OpenAiCompatibleFunctionCall(string Id, string Name, JsonObject Arguments, string? ArgumentsError = null);
     internal sealed record GeneratedImage(byte[] Data, string MimeType);
     internal sealed record GroundedSource(string Title, string Uri);

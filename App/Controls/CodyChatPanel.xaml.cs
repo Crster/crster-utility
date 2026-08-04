@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading.Tasks;
 using App.Models;
 using App.Services;
 using Microsoft.UI;
@@ -17,6 +18,10 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Windows.ApplicationModel.DataTransfer;
+using Windows.Graphics.Imaging;
+using Windows.Storage;
+using Windows.Storage.Streams;
 using Windows.System;
 
 namespace App.Controls
@@ -27,11 +32,13 @@ namespace App.Controls
         internal const string SessionDividerToolName = "new_session";
         private const int StreamFlushMilliseconds = 80;
         private const double AutoScrollThreshold = 64;
+        internal const int MaximumInlineContextCharacters = 10_240;
 
         private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _streamTimer;
         private readonly StringBuilder _pendingText = new();
         private readonly StringBuilder _pendingThinking = new();
         private readonly Dictionary<string, ToolRow> _liveToolRows = new(StringComparer.Ordinal);
+        private readonly List<ChatAttachment> _stagedAttachments = [];
         private ChatSession _session = new();
         private MarkdownView? _streamingAnswer;
         private FrameworkElement? _streamingAnswerContainer;
@@ -53,10 +60,12 @@ namespace App.Controls
         }
 
         // Section: Public surface
-        internal event EventHandler<string>? PromptSubmitted;
+        internal event EventHandler<CodyPromptRequest>? PromptSubmitted;
         internal event EventHandler? StopRequested;
         internal event EventHandler? WorkspaceRequested;
         internal event EventHandler? SessionChanged;
+        internal event EventHandler? PlanApproved;
+        internal event EventHandler? PlanReworkRequested;
 
         internal ChatSession Session
         {
@@ -82,6 +91,55 @@ namespace App.Controls
 
         internal void FocusComposer() => PromptBox.Focus(FocusState.Programmatic);
 
+        /// <summary>Stages short context in the composer and long context as a text attachment.</summary>
+        internal async Task StageTextContextAsync(string displayName, string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return;
+            if (text.Length <= MaximumInlineContextCharacters)
+            {
+                AppendContextToComposer(text);
+                return;
+            }
+
+            await StageTextAttachmentAsync(displayName, text);
+        }
+
+        /// <summary>Stages text as a removable attachment, regardless of its length.</summary>
+        internal async Task StageTextAttachmentAsync(string displayName, string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return;
+            var file = await ApplicationData.Current.TemporaryFolder.CreateFileAsync(
+                $"cody-context-{Guid.NewGuid():N}.txt",
+                CreationCollisionOption.FailIfExists);
+            await FileIO.WriteTextAsync(file, text);
+            AddStagedAttachment(new ChatAttachment(
+                file.Path,
+                displayName,
+                "text/plain",
+                null,
+                null,
+                true,
+                Guid.NewGuid(),
+                ".txt"));
+            FocusComposer();
+        }
+
+        internal async Task StageFileAttachmentAsync(string path, string? displayName = null)
+        {
+            var file = await StorageFile.GetFileFromPathAsync(path);
+            AddStagedAttachment(CreateAttachment(file, displayName));
+            FocusComposer();
+        }
+
+        private void AppendContextToComposer(string text)
+        {
+            var separator = string.IsNullOrWhiteSpace(PromptBox.Text) ? string.Empty : "\r\n\r\n";
+            PromptBox.Text += separator + text;
+            PromptBox.SelectionStart = PromptBox.Text.Length;
+            PromptBox.SelectionLength = 0;
+            FocusComposer();
+        }
+
         internal void SetBusy(bool busy)
         {
             _isBusy = busy;
@@ -95,6 +153,7 @@ namespace App.Controls
                 _streamTimer.Stop();
                 FlushStreamBuffers();
             }
+            UpdateComposerAvailability();
         }
 
         // Section: Turn lifecycle
@@ -111,10 +170,10 @@ namespace App.Controls
         }
 
         /// <summary>Renders the submitted prompt immediately while the page prepares its session.</summary>
-        internal void ShowPendingUserPrompt(string prompt)
+        internal void ShowPendingUserPrompt(string prompt, IReadOnlyList<ChatAttachment>? attachments = null)
         {
             DiscardPendingUserPrompt();
-            _pendingUserMessage = new ChatMessage(ChatItemKind.User, "You", prompt);
+            _pendingUserMessage = new ChatMessage(ChatItemKind.User, "You", prompt, attachments);
             _pendingUserMessageContainer = CreateUserBubble(_pendingUserMessage);
             RemoveEmptyState();
             TranscriptHost.Children.Add(_pendingUserMessageContainer);
@@ -284,6 +343,38 @@ namespace App.Controls
         internal void AddSessionDivider(string summary) =>
             AddMessage(new ChatMessage(ChatItemKind.Tool, SessionDividerToolName, summary, ToolSucceeded: true));
 
+        /// <summary>Shows the actions that gate implementation after Cody has delivered a plan.</summary>
+        internal void ShowPlanReview()
+        {
+            var prompt = new TextBlock
+            {
+                Text = "Review the plan before Cody makes changes.",
+                FontSize = 12,
+                Foreground = Resource("TextFillColorSecondaryBrush")
+            };
+            var approved = new Button { Content = "Approved", MinWidth = 88 };
+            var rework = new Button { Content = "Rework", MinWidth = 88 };
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            actions.Children.Add(approved);
+            actions.Children.Add(rework);
+            var review = new StackPanel { Spacing = 8, Margin = new Thickness(2, 2, 2, 8) };
+            review.Children.Add(prompt);
+            review.Children.Add(actions);
+
+            approved.Click += (_, _) =>
+            {
+                TranscriptHost.Children.Remove(review);
+                PlanApproved?.Invoke(this, EventArgs.Empty);
+            };
+            rework.Click += (_, _) =>
+            {
+                TranscriptHost.Children.Remove(review);
+                PlanReworkRequested?.Invoke(this, EventArgs.Empty);
+            };
+            TranscriptHost.Children.Add(review);
+            ScrollToLatest();
+        }
+
         internal void RenderSession()
         {
             DiscardPendingUserPrompt();
@@ -317,21 +408,34 @@ namespace App.Controls
             ScrollToLatest();
         }
 
-        private static UIElement CreateUserBubble(ChatMessage message) => new Border
+        private static UIElement CreateUserBubble(ChatMessage message)
         {
-            Padding = new Thickness(14, 10, 14, 11),
-            CornerRadius = new CornerRadius(12),
-            Margin = new Thickness(0, 6, 0, 2),
-            MaxWidth = 620,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Background = Resource("AccentFillColorTertiaryBrush"),
-            Child = new TextBlock
+            var content = new StackPanel { Spacing = 6 };
+            if (!string.IsNullOrWhiteSpace(message.Content))
+                content.Children.Add(new TextBlock
+                {
+                    Text = message.Content,
+                    TextWrapping = TextWrapping.Wrap,
+                    IsTextSelectionEnabled = true
+                });
+            foreach (var attachment in message.Attachments ?? [])
             {
-                Text = message.Content,
-                TextWrapping = TextWrapping.Wrap,
-                IsTextSelectionEnabled = true
+                var attachmentRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+                attachmentRow.Children.Add(new FontIcon { Glyph = AttachmentGlyph(attachment), FontSize = 12 });
+                attachmentRow.Children.Add(new TextBlock { Text = attachment.DisplayName, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 420 });
+                content.Children.Add(attachmentRow);
             }
-        };
+            return new Border
+            {
+                Padding = new Thickness(14, 10, 14, 11),
+                CornerRadius = new CornerRadius(12),
+                Margin = new Thickness(0, 6, 0, 2),
+                MaxWidth = 620,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Background = Resource("AccentFillColorTertiaryBrush"),
+                Child = content
+            };
+        }
 
         private static UIElement CreateAssistantBlock(ChatMessage message)
         {
@@ -461,7 +565,7 @@ namespace App.Controls
                 return CreateDisclosure(header, listView, HorizontalAlignment.Left, hasDetails: true);
             if (message.Title == "search_workspace_files" && BuildSearchView(message.Content, workspacePath) is { } searchView)
                 return CreateDisclosure(header, searchView, HorizontalAlignment.Left, hasDetails: true);
-            return CreateDisclosure(header, FormatToolOutput(message.Content), HorizontalAlignment.Left);
+            return CreateDisclosure(header, FormatToolOutput(message.Title, message.Content), HorizontalAlignment.Left);
         }
 
         /// <summary>Normalizes an absolute or workspace-relative path to a forward-slashed, workspace-relative path.</summary>
@@ -801,22 +905,68 @@ namespace App.Controls
         private static string DescribeTool(string toolName, JsonObject? arguments) =>
             arguments is null ? string.Empty : CodyAgentService.DescribeToolCall(toolName, arguments);
 
-        private static string FormatToolOutput(string output)
+        private static string FormatToolOutput(string toolName, string output)
         {
             try
             {
                 if (JsonNode.Parse(output) is not JsonObject result) return output;
-                if (result["content"] is JsonValue value
-                    && value.TryGetValue<string>(out var embedded)
-                    && !string.IsNullOrWhiteSpace(embedded))
-                    return embedded;
-                return result.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+                if (ReadResultText(result, "error") is { } error)
+                {
+                    var suggestion = ReadResultText(result, "suggestion");
+                    return suggestion is null ? error : $"{error}\n\nSuggestion: {suggestion}";
+                }
+
+                if (toolName == "read_workspace_file" && ReadResultText(result, "content") is { } fileContent)
+                    return fileContent + (result["is_truncated"]?.GetValue<bool>() == true ? "\n\n[Read result truncated]" : string.Empty);
+
+                if (toolName is "run_workspace_command" or "run_elevated_workspace_command")
+                    return FormatCommandOutput(result);
+
+                if (ReadResultText(result, "content") is { } content) return content;
+                if (ReadResultText(result, "answer") is { } answer) return answer;
+                return FormatResultFields(result);
             }
             catch (JsonException)
             {
                 return output;
             }
         }
+
+        private static string? ReadResultText(JsonObject result, string name) =>
+            result[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+        private static string FormatCommandOutput(JsonObject result)
+        {
+            var sections = new List<string>();
+            if (ReadResultText(result, "stdout") is { Length: > 0 } stdout) sections.Add(stdout);
+            if (ReadResultText(result, "stderr") is { Length: > 0 } stderr) sections.Add($"stderr:\n{stderr}");
+            if (result["return_code"] is JsonValue code && code.TryGetValue<int>(out var returnCode))
+                sections.Add($"Exit code: {returnCode}");
+            if (result["truncated"]?.GetValue<bool>() == true) sections.Add("[Output truncated]");
+            return sections.Count == 0 ? "Command completed with no output." : string.Join("\n\n", sections);
+        }
+
+        private static string FormatResultFields(JsonObject result)
+        {
+            var fields = result
+                .Where(field => field.Key is not "success" and not "is_truncated" and not "truncated")
+                .Select(field => $"{HumanizeFieldName(field.Key)}: {DescribeResultValue(field.Value)}")
+                .ToList();
+            if (result["is_truncated"]?.GetValue<bool>() == true) fields.Add("[Results truncated]");
+            return fields.Count == 0 ? "Completed." : string.Join("\n", fields);
+        }
+
+        private static string HumanizeFieldName(string name) => name.Replace('_', ' ');
+
+        private static string DescribeResultValue(JsonNode? value) => value switch
+        {
+            null => "none",
+            JsonValue scalar when scalar.TryGetValue<string>(out var text) => text,
+            JsonValue scalar => scalar.ToJsonString(),
+            JsonArray array => $"{array.Count} item{(array.Count == 1 ? string.Empty : "s")}",
+            JsonObject obj => $"{obj.Count} field{(obj.Count == 1 ? string.Empty : "s")}",
+            _ => value.ToJsonString()
+        };
 
         // Section: Composer
         private void SendButton_Click(object sender, RoutedEventArgs e)
@@ -839,14 +989,198 @@ namespace App.Controls
             if (!_isBusy) SubmitPrompt(PromptBox.Text);
         }
 
-        /// <summary>Sends a prompt from the composer or from an "Ask Cody" entry point elsewhere in the page.</summary>
+        private void PromptBox_TextChanged(object sender, TextChangedEventArgs e) => UpdateComposerAvailability();
+
+        /// <summary>Sends the composer text and its staged attachments together.</summary>
         internal void SubmitPrompt(string prompt)
         {
             var text = prompt.Trim();
-            if (text.Length == 0 || _isBusy) return;
+            if ((text.Length == 0 && _stagedAttachments.Count == 0) || _isBusy) return;
 
             PromptBox.Text = string.Empty;
-            PromptSubmitted?.Invoke(this, text);
+            var attachments = _stagedAttachments.ToArray();
+            _stagedAttachments.Clear();
+            RenderStagedAttachments();
+            PromptSubmitted?.Invoke(this, new CodyPromptRequest(text, attachments));
+        }
+
+        private async void PromptBox_Paste(object sender, TextControlPasteEventArgs e)
+        {
+            if (_isBusy) return;
+            StorageFile? temporaryImage = null;
+            try
+            {
+                var content = Clipboard.GetContent();
+                if (content.Contains(StandardDataFormats.StorageItems))
+                {
+                    e.Handled = true;
+                    var files = (await content.GetStorageItemsAsync()).OfType<StorageFile>();
+                    foreach (var file in files)
+                        AddStagedAttachment(CreateAttachment(file));
+                    return;
+                }
+                if (content.Contains(StandardDataFormats.Bitmap))
+                {
+                    e.Handled = true;
+                    var bitmap = await content.GetBitmapAsync();
+                    temporaryImage = await ApplicationData.Current.TemporaryFolder.CreateFileAsync(
+                        $"cody-clipboard-{Guid.NewGuid():N}.png",
+                        CreationCollisionOption.FailIfExists);
+                    using var input = await bitmap.OpenReadAsync();
+                    var decoder = await BitmapDecoder.CreateAsync(input);
+                    using var softwareBitmap = await decoder.GetSoftwareBitmapAsync();
+                    using var output = await temporaryImage.OpenAsync(FileAccessMode.ReadWrite);
+                    var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, output);
+                    encoder.SetSoftwareBitmap(softwareBitmap);
+                    await encoder.FlushAsync();
+                    AddStagedAttachment(CreateAttachment(temporaryImage, "Clipboard image", true));
+                    temporaryImage = null;
+                    return;
+                }
+                if (content.Contains(StandardDataFormats.Text))
+                {
+                    e.Handled = true;
+                    var text = await content.GetTextAsync();
+                    if (text.Length > MaximumInlineContextCharacters)
+                        await StageTextContextAsync("Clipboard text", text);
+                    else
+                        PromptBox.SelectedText = text;
+                }
+            }
+            catch
+            {
+                if (temporaryImage is not null)
+                    try { await temporaryImage.DeleteAsync(StorageDeleteOption.PermanentDelete); } catch { }
+            }
+        }
+
+        private static ChatAttachment CreateAttachment(StorageFile file, string? displayName = null, bool temporary = false) => new(
+            file.Path,
+            displayName ?? file.Name,
+            string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType,
+            null,
+            null,
+            temporary,
+            Guid.NewGuid(),
+            file.FileType);
+
+        private void AddStagedAttachment(ChatAttachment attachment)
+        {
+            _stagedAttachments.Add(attachment);
+            RenderStagedAttachments();
+            UpdateComposerAvailability();
+        }
+
+        private void RenderStagedAttachments()
+        {
+            AttachmentHost.Children.Clear();
+            AttachmentHost.Visibility = _stagedAttachments.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+            foreach (var attachment in _stagedAttachments)
+            {
+                var item = attachment;
+                var chip = new Border
+                {
+                    Padding = new Thickness(6, 2, 4, 2),
+                    Margin = new Thickness(0, 0, 6, 4),
+                    CornerRadius = new CornerRadius(7),
+                    Background = Resource("ControlFillColorSecondaryBrush"),
+                    HorizontalAlignment = HorizontalAlignment.Left
+                };
+                var content = new Grid { ColumnSpacing = 4 };
+                content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                var reference = new Button
+                {
+                    Padding = new Thickness(0),
+                    Background = new SolidColorBrush(Colors.Transparent),
+                    BorderThickness = new Thickness(0),
+                    MinWidth = 0,
+                    MinHeight = 0
+                };
+                ToolTipService.SetToolTip(reference, "Insert attachment reference");
+                var referenceContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+                referenceContent.Children.Add(new FontIcon { Glyph = AttachmentGlyph(item), FontSize = 11 });
+                referenceContent.Children.Add(new TextBlock
+                {
+                    Text = item.DisplayName,
+                    MaxWidth = 240,
+                    FontSize = 11,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+                reference.Content = referenceContent;
+                reference.Click += (_, _) => InsertAttachmentReference(item.DisplayName);
+                content.Children.Add(reference);
+                var trashIcon = new SymbolIcon
+                {
+                    Symbol = Symbol.Delete,
+                    Foreground = Resource("TextFillColorTertiaryBrush")
+                };
+                var trashIconView = new Viewbox { Width = 11, Height = 11, Child = trashIcon };
+                var remove = new Button
+                {
+                    Content = trashIconView,
+                    Width = 20,
+                    Height = 20,
+                    Padding = new Thickness(0),
+                    Background = new SolidColorBrush(Colors.Transparent),
+                    BorderThickness = new Thickness(0)
+                };
+                var transparent = new SolidColorBrush(Colors.Transparent);
+                remove.Resources["ButtonBackgroundPointerOver"] = transparent;
+                remove.Resources["ButtonBorderBrushPointerOver"] = transparent;
+                remove.Resources["ButtonBackgroundPressed"] = transparent;
+                remove.Resources["ButtonBorderBrushPressed"] = transparent;
+                Grid.SetColumn(remove, 1);
+                ToolTipService.SetToolTip(remove, $"Remove {item.DisplayName}");
+                remove.Click += async (_, _) => await RemoveStagedAttachmentAsync(item);
+                remove.PointerEntered += (_, _) => trashIcon.Foreground = Resource("SystemFillColorCriticalBrush");
+                remove.PointerExited += (_, _) => trashIcon.Foreground = Resource("TextFillColorTertiaryBrush");
+                content.Children.Add(remove);
+                chip.Child = content;
+                VariableSizedWrapGrid.SetColumnSpan(chip, AttachmentChipColumnSpan(item.DisplayName));
+                AttachmentHost.Children.Add(chip);
+            }
+        }
+
+        private static int AttachmentChipColumnSpan(string displayName) =>
+            Math.Clamp((int)Math.Ceiling((displayName.Length * 6.2 + 44) / 8), 9, 36);
+
+        private void InsertAttachmentReference(string displayName)
+        {
+            var selectionStart = PromptBox.SelectionStart;
+            var prefix = selectionStart > 0 && !char.IsWhiteSpace(PromptBox.Text[selectionStart - 1]) ? " " : string.Empty;
+            var insertion = prefix + $"[{displayName}] ";
+            PromptBox.SelectedText = insertion;
+            PromptBox.SelectionStart = selectionStart + insertion.Length;
+            PromptBox.SelectionLength = 0;
+            FocusComposer();
+        }
+
+        private async Task RemoveStagedAttachmentAsync(ChatAttachment attachment)
+        {
+            if (!_stagedAttachments.Remove(attachment)) return;
+            if (attachment.IsTemporary)
+                try
+                {
+                    var file = await StorageFile.GetFileFromPathAsync(attachment.LocalPath);
+                    await file.DeleteAsync(StorageDeleteOption.PermanentDelete);
+                }
+                catch (FileNotFoundException) { }
+            RenderStagedAttachments();
+            UpdateComposerAvailability();
+        }
+
+        private static string AttachmentGlyph(ChatAttachment attachment) =>
+            attachment.MimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? "\uE8B9" :
+            attachment.IsTemporary && attachment.MimeType.Equals("text/plain", StringComparison.OrdinalIgnoreCase) ? "\uE7C3" :
+            "\uE8A5";
+
+        private void UpdateComposerAvailability()
+        {
+            var hasWorkspace = !string.IsNullOrWhiteSpace(_workspacePath);
+            PromptBox.IsEnabled = hasWorkspace && !_isBusy;
+            SendButton.IsEnabled = _isBusy || (hasWorkspace && (!string.IsNullOrWhiteSpace(PromptBox.Text) || _stagedAttachments.Count > 0));
         }
 
         private void ChooseWorkspaceButton_Click(object sender, RoutedEventArgs e) =>
@@ -855,8 +1189,7 @@ namespace App.Controls
         private void UpdateEmptyState()
         {
             var hasWorkspace = !string.IsNullOrWhiteSpace(_workspacePath);
-            PromptBox.IsEnabled = hasWorkspace;
-            SendButton.IsEnabled = hasWorkspace;
+            UpdateComposerAvailability();
             EmptyStateDetailText.Text = hasWorkspace
                 ? "Ask Cody to inspect, change, or run your project."
                 : "Choose a workspace so Cody can read and change your project files.";

@@ -20,10 +20,10 @@
                     <StackPanel Spacing="8">
                         <TextBlock Text="AI models" FontWeight="SemiBold"/>
                         <TextBlock Text="Models available to this API key. Changes are saved immediately." TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <ComboBox x:Name="EmbeddingModelBox" Header="Embedding" HorizontalAlignment="Stretch" DisplayMemberPath="Name" SelectionChanged="EmbeddingModelBox_SelectionChanged"/>
-                            <Button x:Name="RebuildEmbeddingsButton" Grid.Column="1" VerticalAlignment="Bottom"
+                        <Grid ColumnSpacing="8" HorizontalAlignment="Left">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="320"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <ComboBox x:Name="EmbeddingModelBox" Header="Embedding" DisplayMemberPath="Name" SelectionChanged="EmbeddingModelBox_SelectionChanged"/>
+                            <Button x:Name="RebuildEmbeddingsButton" Grid.Column="1" VerticalAlignment="Bottom" Visibility="Collapsed"
                                     Click="RebuildEmbeddingsButton_Click"
                                     ToolTipService.ToolTip="Clear and regenerate every note, memo, and todo embedding with the selected model"
                                     AutomationProperties.Name="Rebuild embeddings">
@@ -33,8 +33,8 @@
                                 </StackPanel>
                             </Button>
                         </Grid>
-                        <TextBlock Text="Changing the embedding model does not update stored vectors. Rebuild to regenerate them."
-                                   TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock x:Name="EmbeddingRebuildHint" Text="The embedding endpoint or model changed. Rebuild to regenerate stored vectors."
+                                   Visibility="Collapsed" TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                         <ComboBox x:Name="LowCostModelBox" Header="Low Cost" DisplayMemberPath="Name" SelectionChanged="LowCostModelBox_SelectionChanged"/>
                         <ComboBox x:Name="HighCostModelBox" Header="High Cost" DisplayMemberPath="Name" SelectionChanged="HighCostModelBox_SelectionChanged"/>
                         <ComboBox x:Name="ArtistModelBox" Header="Artist" DisplayMemberPath="Name" SelectionChanged="ArtistModelBox_SelectionChanged"/>
