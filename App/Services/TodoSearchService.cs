@@ -10,6 +10,7 @@ namespace App.Services
     internal sealed class TodoSearchService
     {
         private const double MinimumSearchSimilarity = 0.45;
+        private const double MaximumSimilarityDropFromBest = 0.12;
         private LiteDatabaseService Database => App.Settings.Database;
 
         public List<TodoSearchResult> FuzzySearch(string query, int maximumResults = 10)
@@ -44,13 +45,20 @@ namespace App.Services
             }
 
             var queryEmbedding = await openAiCompatible.EmbedRetrievalQueryAsync(query, cancellationToken);
-            return todos
+            var ranked = todos
                 .Where(todo => todo.Embedding.Length > 0)
                 .Select(todo => (Todo: todo, Score: NotebookDatabaseService.Cosine(
                     queryEmbedding, NotebookDatabaseService.BytesToFloats(todo.Embedding))))
                 .Where(match => match.Score >= MinimumSearchSimilarity)
                 .OrderByDescending(match => match.Score)
                 .ThenByDescending(match => match.Todo.CreatedAt)
+                .ToList();
+            if (ranked.Count == 0) return [];
+
+            // Keep only the results clustered with the best match so a weak query cannot fill the list.
+            var relativeCutoff = ranked[0].Score - MaximumSimilarityDropFromBest;
+            return ranked
+                .Where(match => match.Score >= relativeCutoff)
                 .Take(maximumResults)
                 .Select(match => ToResult(match.Todo))
                 .ToList();

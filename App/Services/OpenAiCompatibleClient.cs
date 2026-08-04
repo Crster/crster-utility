@@ -99,11 +99,13 @@ namespace App.Services
         public Task DeleteFileAsync(string remoteName, CancellationToken cancellationToken) => Task.CompletedTask;
 
         // Section: Embeddings
+        // Queries and documents must be embedded the same way; instruction prefixes or label scaffolding
+        // that appears on only one side dominates the vector and makes every document look similar.
         public Task<float[]> EmbedRetrievalQueryAsync(string query, CancellationToken cancellationToken) =>
-            EmbedAsync($"Instruct: Retrieve relevant passages for this query.\nQuery: {query}", cancellationToken);
+            EmbedAsync(query.Trim(), cancellationToken);
 
         public Task<float[]> EmbedRetrievalDocumentAsync(string title, string text, CancellationToken cancellationToken) =>
-            EmbedAsync($"Title: {(string.IsNullOrWhiteSpace(title) ? "None" : title.Trim())}\nText: {text}", cancellationToken);
+            EmbedAsync(string.IsNullOrWhiteSpace(title) ? text.Trim() : $"{title.Trim()}\n{text.Trim()}", cancellationToken);
 
         public Task<float[]> EmbedNoteAsync(string text, CancellationToken cancellationToken) =>
             EmbedAsync(text, cancellationToken);
