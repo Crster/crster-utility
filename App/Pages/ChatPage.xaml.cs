@@ -372,6 +372,7 @@ namespace App.Pages
                 _ => OpenAiCompatibleThinkingLevel.Disabled
             };
             ModelStatusText.Text = $"{model} · Thinking: {thinking}";
+            ToolTipService.SetToolTip(ModelStatusText, ModelStatusText.Text);
         }
         private string SystemInstruction() => _personality switch
         {

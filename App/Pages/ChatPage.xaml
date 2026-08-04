@@ -15,16 +15,16 @@
         <!-- Section: Chat controls -->
         <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="14" Padding="14,12">
             <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <StackPanel Spacing="4">
-                    <TextBlock Text="Personality" FontSize="11" FontWeight="SemiBold"/>
-                    <ComboBox x:Name="PersonalityBox" MinWidth="180" Height="36" SelectionChanged="PersonalityBox_SelectionChanged"/>
-                </StackPanel>
-                <StackPanel Grid.Column="1" Spacing="4">
-                    <TextBlock x:Name="ModelStatusText" HorizontalAlignment="Right" FontSize="11"
-                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                               ToolTipService.ToolTip="Active model and thinking effort"/>
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <TextBlock Text="Personality" FontSize="11" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <ComboBox x:Name="PersonalityBox" Grid.Row="1" MinWidth="180" Height="36" SelectionChanged="PersonalityBox_SelectionChanged"/>
+                <TextBlock x:Name="ModelStatusText" Grid.Column="1" HorizontalAlignment="Right" FontSize="11"
+                           Margin="12,0,0,4" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                           ToolTipService.ToolTip="Active model and thinking effort"/>
+                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="8"
+                            HorizontalAlignment="Right" Margin="12,0,0,0">
                         <ToggleButton x:Name="ContextButton" Height="36" Padding="11,0" Click="ContextButton_Click" ToolTipService.ToolTip="Show conversation context">
                             <StackPanel Orientation="Horizontal" Spacing="7">
                                 <FontIcon Glyph="&#xF133;" FontSize="14"/>
@@ -49,7 +49,6 @@
                                 AutomationProperties.Name="Clear chat history">
                             <FontIcon Glyph="&#xEA99;" />
                         </Button>
-                    </StackPanel>
                 </StackPanel>
             </Grid>
         </Border>
