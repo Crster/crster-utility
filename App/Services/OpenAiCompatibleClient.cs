@@ -365,8 +365,17 @@ namespace App.Services
                 ["input"] = input,
                 ["tools"] = requestTools
             };
-            if (DashScopeReasoningEffort(thinkingLevel) is { } effort)
-                body["reasoning"] = new JsonObject { ["effort"] = effort };
+            // The Responses API mistranslates reasoning.effort into an invalid thinking_budget for
+            // Qwen3 models; DashScope only documents enable_thinking + an explicit numeric thinking_budget.
+            if (DashScopeThinkingBudget(thinkingLevel) is { } budget)
+            {
+                body["enable_thinking"] = true;
+                body["thinking_budget"] = budget;
+            }
+            else if (thinkingLevel == OpenAiCompatibleThinkingLevel.Disabled)
+            {
+                body["enable_thinking"] = false;
+            }
 
             using var request = new HttpRequestMessage(HttpMethod.Post, $"{_compatibleApiBaseUrl}/responses")
             {
@@ -459,12 +468,11 @@ namespace App.Services
             && (endpoint.Host.EndsWith("dashscope.aliyuncs.com", StringComparison.OrdinalIgnoreCase)
                 || endpoint.Host.EndsWith("maas.aliyuncs.com", StringComparison.OrdinalIgnoreCase));
 
-        private static string? DashScopeReasoningEffort(OpenAiCompatibleThinkingLevel thinkingLevel) => thinkingLevel switch
+        private static int? DashScopeThinkingBudget(OpenAiCompatibleThinkingLevel thinkingLevel) => thinkingLevel switch
         {
-            OpenAiCompatibleThinkingLevel.Disabled => "none",
-            OpenAiCompatibleThinkingLevel.Minimal => "minimal",
-            OpenAiCompatibleThinkingLevel.Low => "low",
-            OpenAiCompatibleThinkingLevel.High => "high",
+            OpenAiCompatibleThinkingLevel.Minimal => 4_096,
+            OpenAiCompatibleThinkingLevel.Low => 16_384,
+            OpenAiCompatibleThinkingLevel.High => 38_912,
             _ => null
         };
 

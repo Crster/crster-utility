@@ -61,11 +61,17 @@
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE8BD;" />
                     </NavigationViewItem.Icon>
+                    <NavigationViewItem.InfoBadge>
+                        <InfoBadge x:Name="ChatBusyDot" Width="8" Height="8" Background="{ThemeResource SystemFillColorCautionBrush}" Visibility="Collapsed" />
+                    </NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
                 <NavigationViewItem x:Name="CodyNavItem" Content="Cody" Tag="CodyPage">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE943;" />
                     </NavigationViewItem.Icon>
+                    <NavigationViewItem.InfoBadge>
+                        <InfoBadge x:Name="CodyBusyDot" Width="8" Height="8" Background="{ThemeResource SystemFillColorCautionBrush}" Visibility="Collapsed" />
+                    </NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
                 <NavigationViewItem x:Name="NotebookNavItem" Content="Notebook" Tag="NotebookBooksPage">
                     <NavigationViewItem.Icon>

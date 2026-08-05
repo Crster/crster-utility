@@ -36,7 +36,17 @@ namespace App.Services
                 start.ArgumentList.Add(resultPath);
                 using var helper = Process.Start(start)
                     ?? throw new InvalidOperationException("The elevated command helper could not be started.");
-                await helper.WaitForExitAsync(token);
+                try
+                {
+                    await helper.WaitForExitAsync(token);
+                }
+                catch (OperationCanceledException)
+                {
+                    try { if (!helper.HasExited) helper.Kill(entireProcessTree: true); }
+                    catch (InvalidOperationException) { }
+                    catch (System.ComponentModel.Win32Exception) { }
+                    throw;
+                }
                 if (!File.Exists(resultPath))
                     throw new InvalidOperationException("The elevated command did not return a result.");
                 return JsonSerializer.Deserialize<ElevatedCommandResult>(

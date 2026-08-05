@@ -25,6 +25,7 @@ namespace App.Services
         private const int MaximumFileBytes = 1_000_000;
         private const int MaximumReadResultCharacters = 60_000;
         private const int DefaultCommandOutputEdgeCharacters = 1_000;
+        private static readonly TimeSpan CommandForegroundTimeout = TimeSpan.FromSeconds(20);
         private const int MaximumSearchResultCharacters = 11_000;
         private const int MaximumPatchSnippetLines = 24;
         private const int MaximumPatchSnippetLineLength = 200;
@@ -46,14 +47,18 @@ namespace App.Services
         private readonly SecretaryToolService _secretaryTools;
         private readonly Func<string, Task<bool>> _confirmAsync;
         private readonly Func<string, JsonObject, Task<ToolResult>>? _workspaceCommandConfigurationAsync;
+        private readonly Func<string, string, string?, Task<ToolResult>> _launchTerminalCommandAsync;
         public CodyToolService(OpenAiCompatibleClient client, SecretaryToolService secretaryTools,
             Func<string, Task<bool>> confirmAsync,
-            Func<string, JsonObject, Task<ToolResult>>? workspaceCommandConfigurationAsync = null)
+            Func<string, JsonObject, Task<ToolResult>>? workspaceCommandConfigurationAsync = null,
+            Func<string, string, string?, Task<ToolResult>>? launchTerminalCommandAsync = null)
         {
             _client = client;
             _secretaryTools = secretaryTools;
             _confirmAsync = confirmAsync;
             _workspaceCommandConfigurationAsync = workspaceCommandConfigurationAsync;
+            _launchTerminalCommandAsync = launchTerminalCommandAsync
+                ?? ((_, _, _) => Task.FromResult(Error("terminal_unavailable", "Launching a Terminal tab is not available in this context.")));
         }
 
         public string WorkspacePath { get; set; } = string.Empty;
@@ -68,8 +73,9 @@ namespace App.Services
                 Function("delete_workspace_entry", "Use to delete one file or empty directory inside the selected workspace. Always requires user confirmation.", Props(("workspace_path", String("Workspace-relative path of the file or empty directory to delete."))), "workspace_path"),
                 Function("search_workspace_files", "Use first to locate relevant code or text by recursively matching file contents under a workspace-relative path. Searches contents, not filenames; excludes hidden and generated paths.", Props(("workspace_path", String("Workspace-relative directory to search; use \".\" for the entire workspace.")), ("search_pattern", String("Case-insensitive .NET regular expression matched against file contents."))), "workspace_path", "search_pattern"),
                 Function("list_workspace_entries", "Use to discover filenames and directories when content search cannot locate the target. Lists direct children whose names match a pattern. Use \".\" and \".*\" for the workspace root.", Props(("workspace_path", String("Workspace-relative directory to list; use \".\" for the root.")), ("name_pattern", String("Case-insensitive .NET regular expression matched against entry names.")), ("include_hidden", Boolean("Include hidden, dot-prefixed, ignored, and generated entries; requires confirmation."))), "workspace_path", "name_pattern"),
-                Function("run_workspace_command", "Use to run one non-elevated Windows command for inspection, build, lint, or verification. Include the executable and every argument in one command line. If the workspace contains multiple projects (e.g. a backend and a frontend in separate folders), set working_directory to the specific project folder so the command finds the right executable and config files.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("working_directory", String("Workspace-relative folder to run the command in. Omit to run at the workspace root.")), ("return_full_output", Boolean("Return untruncated output; may require confirmation."))), "command_line"),
-                Function("run_elevated_workspace_command", "Use only when the requested Windows command requires administrator privileges. Runs through UAC and requires confirmation. If the workspace contains multiple projects, set working_directory to the specific project folder so the command finds the right executable and config files.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("working_directory", String("Workspace-relative folder to run the command in. Omit to run at the workspace root.")), ("return_full_output", Boolean("Return untruncated output; may require confirmation."))), "command_line"),
+                Function("run_workspace_command", "Use to run one non-elevated Windows command for inspection, build, lint, or verification. Include the executable and every argument in one command line. If the workspace contains multiple projects (e.g. a backend and a frontend in separate folders), set working_directory to the specific project folder so the command finds the right executable and config files. There is no stdin channel: never run a command that can prompt interactively (e.g. bare scaffolding wizards like 'npm create vite' or 'yarn create'); always supply every required argument up front (e.g. 'npm create vite@latest my-app -- --template react-ts') or set CI=1. Commands that have not finished after about 20 seconds are left running and returned with still_running=true, partial output, and a process_id — use terminate_process on that id once you are done with a long-lived process (dev server, watcher) or to abandon a stuck one. For a command meant to keep running (a dev server, a watcher, e.g. 'npm run dev'), use run_command_in_terminal instead.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("working_directory", String("Workspace-relative folder to run the command in. Omit to run at the workspace root.")), ("return_full_output", Boolean("Return untruncated output; may require confirmation."))), "command_line"),
+                Function("run_elevated_workspace_command", "Use only when the requested Windows command requires administrator privileges. Runs through UAC and requires confirmation. If the workspace contains multiple projects, set working_directory to the specific project folder so the command finds the right executable and config files. There is no stdin channel: never run a command that can prompt interactively; always supply every required argument up front or set CI=1.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("working_directory", String("Workspace-relative folder to run the command in. Omit to run at the workspace root.")), ("return_full_output", Boolean("Return untruncated output; may require confirmation."))), "command_line"),
+                Function("run_command_in_terminal", "Use to start a command that is meant to keep running rather than finish, such as a dev server or file watcher (e.g. 'npm run dev', 'vite', 'dotnet watch run'). Opens a visible Terminal tab in the app and starts the command there; the user can see its live output and stop it from that tab. This tool returns immediately once the tab is opened and does not return the command's output or exit code — use run_workspace_command instead for anything expected to finish and whose output or exit code you need.", Props(("command_line", String("Complete Windows command line, including executable and arguments.")), ("working_directory", String("Workspace-relative folder to run the command in. Omit to run at the workspace root.")), ("name", String("Short display label for the Terminal tab. Defaults to the command line if omitted."))), "command_line"),
                 Function("list_workspace_commands", "List the commands saved in Cody's Commands menu, including their exact command line, working directory, and selected command. Use this before correcting a saved command. Do not read .crster/cody.json directly.", new JsonObject()),
                 Function("update_workspace_command", "Replace one existing saved Commands-menu entry after list_workspace_commands identifies it. Use the exact current_command returned by that tool, then provide the complete corrected name, command, and working_directory. This updates the menu and its saved configuration together; never write .crster/cody.json directly.", Props(("current_command", String("Exact existing command line returned by list_workspace_commands.")), ("name", String("Replacement display name.")), ("command", String("Complete corrected command line.")), ("working_directory", String("Replacement workspace-relative working directory; use an empty string for the workspace root."))), "current_command", "name", "command", "working_directory"),
                 Function("list_running_processes", "Use when the user asks which processes are currently running. Returns process names and numeric IDs.", new JsonObject()),
@@ -104,6 +110,7 @@ namespace App.Services
                     "list_workspace_entries" => await ListFilesAsync(Required(arguments, "workspace_path"), RequiredContent(arguments, "name_pattern"), OptionalBoolean(arguments, "include_hidden")),
                     "run_workspace_command" => await ExecuteCommandAsync(Required(arguments, "command_line"), false, OptionalBoolean(arguments, "return_full_output"), Optional(arguments, "working_directory"), token),
                     "run_elevated_workspace_command" => await ExecuteCommandAsync(Required(arguments, "command_line"), true, OptionalBoolean(arguments, "return_full_output"), Optional(arguments, "working_directory"), token),
+                    "run_command_in_terminal" => await LaunchTerminalCommandAsync(Required(arguments, "command_line"), Optional(arguments, "working_directory"), Optional(arguments, "name")),
                     "list_workspace_commands" or "update_workspace_command" => await ExecuteWorkspaceCommandConfigurationAsync(name, arguments),
                     "list_running_processes" => ListProcesses(),
                     "terminate_process" => await KillProcessAsync(OptionalInt(arguments, "process_id", 0)),
@@ -1409,14 +1416,67 @@ namespace App.Services
 
             if (!TryCreateCommandStartInfo(command, workingDirectory, out var startInfo, out var resolutionError))
                 return Error("command_not_resolved", resolutionError!, solution: "Provide a direct executable and its arguments; shell built-ins (start, dir, etc.) and operators (&, |, <, >, ;) are not supported.");
-            using var process = new Process { StartInfo = startInfo };
-            process.Start();
-            var outputTask = process.StandardOutput.ReadToEndAsync(token);
-            var errorTask = process.StandardError.ReadToEndAsync(token);
-            await process.WaitForExitAsync(token);
-            var stdout = await outputTask;
-            var stderr = await errorTask;
-            return CommandResult(stdout, stderr, process.ExitCode, full);
+
+            var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+            var stdout = new StringBuilder();
+            var stderr = new StringBuilder();
+            process.OutputDataReceived += (_, args) => { if (args.Data is not null) stdout.AppendLine(args.Data); };
+            process.ErrorDataReceived += (_, args) => { if (args.Data is not null) stderr.AppendLine(args.Data); };
+
+            try
+            {
+                process.Start();
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+
+                var waitTask = process.WaitForExitAsync(token);
+                var timeoutTask = Task.Delay(CommandForegroundTimeout, CancellationToken.None);
+                var completed = await Task.WhenAny(waitTask, timeoutTask);
+                token.ThrowIfCancellationRequested();
+                if (completed == timeoutTask)
+                    return StillRunningResult(process.Id, stdout.ToString(), stderr.ToString(), full);
+
+                await waitTask;
+                var exitCode = process.ExitCode;
+                process.Dispose();
+                return CommandResult(stdout.ToString(), stderr.ToString(), exitCode, full);
+            }
+            catch (OperationCanceledException)
+            {
+                TryKillProcessTree(process);
+                process.Dispose();
+                throw;
+            }
+        }
+
+        private static void TryKillProcessTree(Process process)
+        {
+            try
+            {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException) { }
+            catch (Win32Exception) { }
+        }
+
+        private static ToolResult StillRunningResult(int processId, string stdout, string stderr, bool full)
+        {
+            var truncated = !full && (stdout.Length > DefaultCommandOutputEdgeCharacters * 2 || stderr.Length > DefaultCommandOutputEdgeCharacters * 2);
+            return Ok(
+                "Command is still running after "
+                + $"{CommandForegroundTimeout.TotalSeconds:0}s; it was not stopped, and its output so far is included below. "
+                + "If this is a long-lived process (dev server, watcher), that is expected: use terminate_process with process_id when you are done with it, "
+                + "or tell the user its process_id. If it is waiting on an interactive prompt (for example an 'npm create'/'yarn create' scaffolding wizard), "
+                + "stop it with terminate_process and re-run with every required argument or flag supplied up front (for example "
+                + "'npm create vite@latest my-app -- --template react-ts') or with the CI=1 environment variable set, since there is no way to send input to a running command.",
+                new JsonObject
+                {
+                    ["still_running"] = true,
+                    ["process_id"] = processId,
+                    ["stdout"] = full ? stdout : TruncateOutput(stdout),
+                    ["stderr"] = full ? stderr : TruncateOutput(stderr),
+                    ["truncated"] = truncated
+                });
         }
 
         internal static bool TryCreateCommandStartInfo(string command, string workingDirectory, out ProcessStartInfo startInfo, out string? error)
@@ -1433,6 +1493,12 @@ namespace App.Services
                 ? $"The command '{command}' uses shell operators (&, |, <, >, ;) which are not supported; run each executable separately."
                 : $"Unable to resolve '{command}' to a runnable executable on PATH or in the working directory.";
             return false;
+        }
+
+        private async Task<ToolResult> LaunchTerminalCommandAsync(string command, string workingDirectorySubpath, string name)
+        {
+            EnsureWorkspace();
+            return await _launchTerminalCommandAsync(command, workingDirectorySubpath, string.IsNullOrWhiteSpace(name) ? null : name);
         }
 
         internal static ProcessStartInfo CreateCommandStartInfo(string command, string workingDirectory)
@@ -1676,7 +1742,7 @@ namespace App.Services
         private static bool RequiresWorkspace(string toolName) => toolName is
             "read_workspace_file" or "write_workspace_file" or "patch_workspace_file" or "delete_workspace_entry"
             or "search_workspace_files" or "list_workspace_entries" or "run_workspace_command" or "run_elevated_workspace_command"
-            or "list_workspace_commands" or "update_workspace_command";
+            or "list_workspace_commands" or "update_workspace_command" or "run_command_in_terminal";
 
         private static void ValidateNoReparsePoints(string root, string path)
         {

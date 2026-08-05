@@ -57,8 +57,11 @@ namespace App.Pages
         private Border? _streamingMessageContainer;
         private MarkdownView? _streamingMessageContent;
 
+        internal static ChatPage? Current { get; private set; }
+
         public ChatPage()
         {
+            Current = this;
             InitializeComponent();
             Loaded += ChatPage_Loaded;
             Unloaded += ChatPage_Unloaded;
@@ -1732,6 +1735,7 @@ namespace App.Pages
         private void SetBusy(bool busy, string status = "")
         {
             _isBusy = busy;
+            AgentActivityService.SetActive("Chat", busy);
             BusyRing.IsActive = busy;
             var canStop = busy && _operationCancellation is not null;
             SendActionIcon.Glyph = canStop ? "\uEE95" : "\uE724";
@@ -1748,6 +1752,13 @@ namespace App.Pages
             StatusText.Text = status;
         }
         private void ChatPage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            // Page is cached (NavigationCacheMode="Required"), so navigating away only
+            // detaches it from the visual tree. In-flight replies must keep running; only
+            // a real window close tears everything down, via PrepareForWindowClose().
+        }
+
+        internal void PrepareForWindowClose()
         {
             _operationCancellation?.Cancel();
             ConversationHost.Children.Clear();

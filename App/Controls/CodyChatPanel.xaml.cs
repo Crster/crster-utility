@@ -18,6 +18,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
@@ -1359,118 +1360,95 @@ namespace App.Controls
         {
             private static readonly string[] EventOpeners =
             [
-                "Cody is warming up the workshop", "Cody is giving the gears a friendly tap",
-                "Cody is consulting the tiny rubber duck", "Cody is lining up helpful pixels",
-                "Cody is putting on the debugging cape", "Cody is asking the keyboard nicely",
-                "Cody is brewing a fresh pot of logic", "Cody is polishing the semicolons"
+                "Herding cats", "Chasing the red dot", "Knocking things off the desk",
+                "Judging you silently", "Stuck halfway into a box", "Ignoring you on purpose",
+                "Plotting world domination", "Staring at the wall intensely"
             ];
             private static readonly string[] ThinkingOpeners =
             [
-                "The idea hamster is on the wheel", "Cody is mapping the puzzle pieces",
-                "The brainy octopus is sorting the tabs", "Cody is following the interesting thread",
-                "A thoughtful penguin is checking the clues", "Cody is arranging the logic dominoes",
-                "The plan is getting a small detective hat", "Cody is taking the scenic route through the code"
+                "Staring blankly into space", "Contemplating the void",
+                "Doing math in its head (a cat)", "Deep in a thousand-yard stare",
+                "Loading brain.exe", "Overthinking a nap decision",
+                "Calculating the perfect pounce angle", "Having a very important thought"
             ];
             private static readonly string[] RespondingOpeners =
             [
-                "Cody is turning notes into useful words", "The response orchestra is tuning up",
-                "Cody is translating coffee into sentences", "A polite typewriter is finding its rhythm",
-                "Cody is wrapping the answer with a neat bow", "The explanation train is leaving the station",
-                "Cody is herding the good ideas into a paragraph", "A flock of commas is landing gracefully"
+                "Coughing up a hairball of words", "Meowing until it makes sense",
+                "Kneading the keyboard", "Purring out an answer",
+                "Typing with paw beans", "Composing a very important meow",
+                "Translating cat to human", "Winding up to speak"
             ];
             private static readonly string[] ToolStartingOpeners =
             [
-                "A tool expedition is packing snacks", "Cody is sending in the code spelunker",
-                "The utility belt just clicked open", "Cody is handing a magnifying glass to the workspace",
-                "A tiny robot is pressing the careful button", "Cody is rolling out the inspection cart",
-                "The toolbox is doing a cheerful stretch", "Cody is checking the map before the next move"
+                "Sharpening the claws", "Sneaking up on the mouse",
+                "Batting at a loose thread", "Prepping the ambush",
+                "Sniffing around suspiciously", "Testing if the box still fits",
+                "Winding up for a zoomie", "Eyeing the tool like prey"
             ];
             private static readonly string[] ToolFinishedOpeners =
             [
-                "That tool returned with a little victory flag", "Cody is filing the fresh clue",
-                "The workspace scout is back from its stroll", "A useful breadcrumb just landed",
-                "Cody is high-fiving the toolbox", "The command goblin delivered its report",
-                "Another puzzle piece has clicked into place", "Cody is adding the result to the evidence board"
+                "Brought back a dead bug (proudly)", "Knocked it off the desk successfully",
+                "Caught the red dot, finally", "Trotting back with the loot",
+                "Left a paw print on it", "Delivered, no cap, just cat",
+                "Nailed the landing (mostly)", "Dropped it at your feet"
             ];
             private static readonly string[] NoticeOpeners =
             [
-                "A friendly signal flare just popped up", "Cody received a note from the workshop",
-                "The status bell gave a tiny ding", "A helpful pigeon delivered an update",
-                "Cody spotted a fresh signpost", "The progress lantern is glowing",
-                "A small announcement is doing a cartwheel", "Cody tucked a new clue into the notebook"
+                "Knocked a glass off the table", "Meowed at the door for no reason",
+                "Left a hairball as a gift", "Sat on the important paper",
+                "Yelled at 3am for attention", "Stared at nothing near the ceiling",
+                "Demanded snacks immediately", "Zoomied through the room"
             ];
-            private static readonly string[] Actions =
-            [
-                "untangles a noodle of logic", "does a careful moonwalk through the details",
-                "stacks the useful bits into a tidy tower", "checks every pocket for a missing clue",
-                "gives the plan an extra pair of socks", "whispers encouragingly to the brackets",
-                "turns the crank on the idea machine", "keeps the bug-catching net at the ready",
-                "adds a pinch of practical magic", "makes the pixels stand in a nice line",
-                "asks the edge cases how they are doing", "follows the trail of curious breadcrumbs",
-                "keeps the good gears turning", "shines a flashlight under the tricky part",
-                "sends the boring bits out for a walk", "nudges the solution toward the finish line",
-                "checks the map twice and the compass once", "puts the next thought in a tiny parade",
-                "keeps the code garden watered", "coaxes a clear answer from the clouds",
-                "makes room for one more clever idea", "sorts the puzzle pieces by sparkle level",
-                "holds the thread while the knot loosens", "keeps the helpful robots happily employed",
-                "does the responsible thing with great enthusiasm"
-            ];
-            private static readonly string[] Companions =
-            [
-                "a caffeinated rubber duck", "the observant desk plant", "a squad of friendly semicolons",
-                "the tiny lighthouse in the IDE", "an extremely serious paperclip", "the neighborhood keyboard wizard",
-                "a pocket-sized astronomer", "the code's emotional-support comma", "a cheerful error message",
-                "the last clean build", "a stopwatch wearing sneakers", "the calmest octopus in the office",
-                "a detective-shaped cursor", "the backup plan's backup plan", "a very organized squirrel",
-                "the debugging raccoon", "a box of freshly sharpened pixels", "the syntax confetti cannon",
-                "a brave little loading spinner", "the team mascot in a lab coat"
-            ];
-            private static readonly string[] Flourishes =
-            [
-                "with excellent vibes", "without spilling the imaginary tea", "while keeping it delightfully tidy",
-                "at precisely the right amount of zoom", "with a sensible amount of sparkle", "and nobody has to panic",
-                "while the snacks remain metaphorical", "with the confidence of a well-labeled button",
-                "and a surprisingly good playlist", "before the next coffee molecule lands", "with a tiny triumphant nod",
-                "while making the boring parts less boring", "and the ducks approve", "with a respectful nod to the edge cases",
-                "while the progress bar practices its dance", "and the pixels are rooting for us"
-            ];
-
             private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
-            private readonly TextBlock _title;
             private readonly TextBlock _message;
             private ProcessingEvent _event;
-            private int _lastElapsedSecond = -1;
-            private bool _hasMessage;
+            private string _currentSentence = "";
 
             public ProcessingStatusRow()
             {
-                _title = new TextBlock
-                {
-                    FontSize = 12,
-                    FontWeight = FontWeights.SemiBold,
-                    Foreground = Resource("TextFillColorSecondaryBrush")
-                };
                 _message = new TextBlock
                 {
                     FontSize = 12,
                     TextWrapping = TextWrapping.Wrap,
-                    Foreground = Resource("TextFillColorTertiaryBrush")
-                };
-                var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-                header.Children.Add(new ProgressRing { Width = 14, Height = 14, IsActive = true });
-                header.Children.Add(_title);
-                var content = new StackPanel { Spacing = 4 };
-                content.Children.Add(header);
-                content.Children.Add(_message);
-                Container = new Border
-                {
-                    Padding = new Thickness(10, 8, 12, 9),
                     Margin = new Thickness(0, 4, 0, 2),
-                    CornerRadius = new CornerRadius(10),
-                    Background = Resource("ControlFillColorSecondaryBrush"),
-                    Child = content
+                    Foreground = Resource("TextFillColorTertiaryBrush"),
+                    RenderTransform = new TranslateTransform(),
+                    Opacity = 0
                 };
+                Container = _message;
                 SetEvent(ProcessingEvent.Processing);
+            }
+
+            private void AnimateNewSentence()
+            {
+                var transform = (TranslateTransform)_message.RenderTransform;
+                transform.Y = 0;
+                _message.Opacity = 0;
+
+                var storyboard = new Storyboard();
+                var fadeIn = new DoubleAnimation
+                {
+                    From = 0,
+                    To = 1,
+                    Duration = new Duration(TimeSpan.FromMilliseconds(220)),
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                };
+                Storyboard.SetTarget(fadeIn, _message);
+                Storyboard.SetTargetProperty(fadeIn, "Opacity");
+
+                var slideUp = new DoubleAnimation
+                {
+                    From = 6,
+                    To = 0,
+                    Duration = new Duration(TimeSpan.FromMilliseconds(220)),
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                };
+                Storyboard.SetTarget(slideUp, transform);
+                Storyboard.SetTargetProperty(slideUp, "Y");
+
+                storyboard.Children.Add(fadeIn);
+                storyboard.Children.Add(slideUp);
+                storyboard.Begin();
             }
 
             public FrameworkElement Container { get; }
@@ -1485,44 +1463,24 @@ namespace App.Controls
 
             private void Refresh(bool forceNewMessage)
             {
-                var elapsedSeconds = Math.Max(0, (int)_stopwatch.Elapsed.TotalSeconds);
-                if (_lastElapsedSecond != elapsedSeconds)
-                {
-                    _lastElapsedSecond = elapsedSeconds;
-                    _title.Text = $"{TitleFor(_event)} · {elapsedSeconds}s {DotsFor(elapsedSeconds)}";
-                }
-                if (forceNewMessage || !_hasMessage)
-                {
-                    _message.Text = CreateFunSentence(_event);
-                    _hasMessage = true;
-                }
+                var sentenceChanged = forceNewMessage || string.IsNullOrEmpty(_currentSentence);
+                if (sentenceChanged)
+                    _currentSentence = CreateFunSentence(_event);
+
+                var elapsed = TimeSpan.FromSeconds(Math.Max(0, (int)_stopwatch.Elapsed.TotalSeconds));
+                var elapsedText = elapsed.TotalMinutes >= 1
+                    ? $"{(int)elapsed.TotalMinutes}m"
+                    : $"{elapsed.Seconds}s";
+                _message.Text = $"{elapsedText} - {_currentSentence}";
+
+                if (sentenceChanged)
+                    AnimateNewSentence();
             }
-
-            private static string TitleFor(ProcessingEvent processingEvent) => processingEvent switch
-            {
-                ProcessingEvent.Thinking => "Thinking",
-                ProcessingEvent.Responding => "Writing a response",
-                ProcessingEvent.ToolStarting => "Using a workspace tool",
-                ProcessingEvent.ToolFinished => "Tool finished",
-                ProcessingEvent.Notice => "Fresh update",
-                _ => "Cody is working"
-            };
-
-            private static string DotsFor(int elapsedSeconds) => (elapsedSeconds % 4) switch
-            {
-                0 => "·",
-                1 => "··",
-                2 => "···",
-                _ => "··"
-            };
 
             private static string CreateFunSentence(ProcessingEvent processingEvent)
             {
-                var opener = OpenersFor(processingEvent)[Random.Shared.Next(OpenersFor(processingEvent).Length)];
-                var action = Actions[Random.Shared.Next(Actions.Length)];
-                var companion = Companions[Random.Shared.Next(Companions.Length)];
-                var flourish = Flourishes[Random.Shared.Next(Flourishes.Length)];
-                return $"{opener}: {action} with {companion}, {flourish}.";
+                var openers = OpenersFor(processingEvent);
+                return openers[Random.Shared.Next(openers.Length)];
             }
 
             private static string[] OpenersFor(ProcessingEvent processingEvent) => processingEvent switch

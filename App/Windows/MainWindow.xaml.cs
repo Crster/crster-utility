@@ -2,6 +2,7 @@ using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media.Animation;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -56,14 +57,64 @@ namespace App.Windows
             {
                 SidebarNavigation.SelectedItem = ChatNavItem;
             };
+
+            AgentActivityService.ActivityChanged += AgentActivityService_ActivityChanged;
+            Closed += (s, e) => AgentActivityService.ActivityChanged -= AgentActivityService_ActivityChanged;
+            UpdateAgentActivityIndicators();
+        }
+
+        private void AgentActivityService_ActivityChanged(object? sender, EventArgs e)
+        {
+            DispatcherQueue.TryEnqueue(UpdateAgentActivityIndicators);
+        }
+
+        private Storyboard? _chatBusyPulse;
+        private Storyboard? _codyBusyPulse;
+
+        private void UpdateAgentActivityIndicators()
+        {
+            SetBusyDot(ChatBusyDot, ref _chatBusyPulse, AgentActivityService.IsActive("Chat"));
+            SetBusyDot(CodyBusyDot, ref _codyBusyPulse, AgentActivityService.IsActive("Cody"));
+        }
+
+        private static void SetBusyDot(InfoBadge dot, ref Storyboard? pulse, bool active)
+        {
+            if (active)
+            {
+                dot.Visibility = Visibility.Visible;
+                pulse ??= CreatePulseStoryboard(dot);
+                pulse.Begin();
+            }
+            else
+            {
+                pulse?.Stop();
+                dot.Opacity = 1.0;
+                dot.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private static Storyboard CreatePulseStoryboard(InfoBadge dot)
+        {
+            var animation = new DoubleAnimation
+            {
+                From = 1.0,
+                To = 0.25,
+                Duration = new Duration(TimeSpan.FromSeconds(0.8)),
+            };
+            Storyboard.SetTarget(animation, dot);
+            Storyboard.SetTargetProperty(animation, "Opacity");
+
+            var storyboard = new Storyboard { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever };
+            storyboard.Children.Add(animation);
+            return storyboard;
         }
 
         private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
         {
             if (_allowClose || !App.Settings.Current.StartWithWindows)
             {
-                if (NavigationPresenter.Content is Pages.CodyPage codyPage)
-                    codyPage.PrepareForWindowClose();
+                Pages.CodyPage.Current?.PrepareForWindowClose();
+                Pages.ChatPage.Current?.PrepareForWindowClose();
                 return;
             }
 

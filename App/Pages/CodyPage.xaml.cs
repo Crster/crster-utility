@@ -56,7 +56,7 @@ namespace App.Pages
         private readonly HashSet<string> _loadedWorkspaceDirectories = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _pendingWorkspaceChanges = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<TabViewItem, EditorDocument> _editors = [];
-        private readonly Dictionary<TabViewItem, Process> _terminalCommandProcesses = [];
+        private readonly Dictionary<TabViewItem, EasyTerminalControl> _terminalCommandSessions = [];
         private readonly Dictionary<TabViewItem, EasyTerminalControl> _additionalTerminalSessions = [];
         private readonly HashSet<TabViewItem> _terminalCommandTabsOpenedPanel = [];
         private readonly HashSet<TabViewItem> _terminalCommandTabsClosing = [];
@@ -106,8 +106,11 @@ namespace App.Pages
         private string? _copiedWorkspacePath;
         private string? _contentSearchQuery;
 
+        internal static CodyPage? Current { get; private set; }
+
         public CodyPage()
         {
+            Current = this;
             InitializeComponent();
             MonacoPreloadHost.Children.Add(_sharedEditor);
             _sharedEditor.ContentChanged += SharedEditor_ContentChanged;
@@ -129,6 +132,7 @@ namespace App.Pages
         // Section: Lifecycle
         private async void CodyPage_Loaded(object sender, RoutedEventArgs e)
         {
+            _unloaded = false;
             if (_loaded) return;
             _loaded = true;
             EditorTabs.SelectedItem = HomeTab;
@@ -145,8 +149,10 @@ namespace App.Pages
 
         private void CodyPage_Unloaded(object sender, RoutedEventArgs e)
         {
+            // Page is cached (NavigationCacheMode="Required"), so navigating away only
+            // detaches it from the visual tree. Agent work must keep running; only a
+            // real window close tears it down, via PrepareForWindowClose().
             _unloaded = true;
-            PrepareForWindowClose();
         }
 
         internal void PrepareForWindowClose()
@@ -2438,7 +2444,7 @@ namespace App.Pages
                 Text = CodyAgentService.BuildInstruction(_settings.CodyWorkspace, mode, _session.ContextText),
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap,
-                MaxWidth = 520
+                MaxWidth = 820
             }
         };
 
@@ -2607,7 +2613,8 @@ namespace App.Pages
                 _agentClient,
                 _agentSecretaryTools,
                 ConfirmAgentActionAsync,
-                ExecuteWorkspaceCommandConfigurationAsync)
+                ExecuteWorkspaceCommandConfigurationAsync,
+                LaunchAgentTerminalCommandAsync)
             {
                 WorkspacePath = _settings.CodyWorkspace
             };
@@ -2631,6 +2638,7 @@ namespace App.Pages
         private void SetBusy(bool busy)
         {
             _isBusy = busy;
+            AgentActivityService.SetActive("Cody", busy);
             CodyChat.SetBusy(busy);
             SmartToggle.IsEnabled = !busy;
             ThinkToggle.IsEnabled = !busy;
@@ -3415,7 +3423,7 @@ namespace App.Pages
         /// <summary>Keeps unselected consoles hidden; their tab content leaves the visual tree.</summary>
         private void UpdateAdditionalTerminalVisibility()
         {
-            foreach (var (tab, terminal) in _additionalTerminalSessions)
+            foreach (var (tab, terminal) in _additionalTerminalSessions.Concat(_terminalCommandSessions))
             {
                 if (TerminalPanel.Visibility == Visibility.Visible
                     && ReferenceEquals(TerminalTabs.SelectedItem, tab))
@@ -3507,87 +3515,111 @@ namespace App.Pages
             && TerminalPanel.Visibility == Visibility.Visible
             && ReferenceEquals(TerminalTabs.SelectedItem, InteractiveTerminalTab);
 
-        private async Task RunCommandInTerminalTabAsync(CodyCommand command)
+        private async Task<bool> RunCommandInTerminalTabAsync(CodyCommand command)
         {
-            if (!HasWorkspace()) return;
+            if (!HasWorkspace()) return false;
             if (!TryResolveCommandWorkingDirectory(command, out var workingDirectory, out var resolveError))
             {
                 await ShowMessageAsync("Run command", resolveError);
-                return;
+                return false;
             }
             if (IsRiskyCommand(command.Command)
                 && !await ConfirmActionAsync($"Run potentially destructive command '{command.Command}' in '{workingDirectory}'?"))
-                return;
+                return false;
 
             var terminalWasHidden = TerminalPanel.Visibility != Visibility.Visible;
             ShowTerminal(startInteractiveSession: false);
-            var output = new TextBox
+
+            var terminal = new EasyTerminalControl
             {
-                FontFamily = new FontFamily("Cascadia Mono"),
-                FontSize = 12,
-                Foreground = new SolidColorBrush(Colors.LightGray),
-                TextWrapping = TextWrapping.Wrap,
-                IsReadOnly = true,
-                BorderThickness = new Thickness(0),
-                Padding = new Thickness(0),
-                Background = new SolidColorBrush(Colors.Transparent)
+                StartupCommandLine = BuildCommandTerminalCommandLine(command.Command),
+                WorkingDirectory = workingDirectory,
+                FontFamilyWhenSettingTheme = new FontFamily("Cascadia Mono"),
+                FontSizeWhenSettingTheme = 10,
+                LogConPTYOutput = true,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Win32InputMode = true,
+                InputCapture = EasyTerminalControl.INPUT_CAPTURE.TabKey
+                    | EasyTerminalControl.INPUT_CAPTURE.DirectionKeys,
+                Theme = CreateTerminalTheme()
             };
-            var scroller = new ScrollViewer
-            {
-                Content = output,
-                Padding = new Thickness(16, 10, 16, 10),
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
-            };
-            // The selectable TextBlock handles the right-click, so attach the menu to it
-            // directly rather than to its ScrollViewer parent.
-            output.ContextFlyout = CreateTerminalCommandOutputMenu(command, output);
+            terminal.Terminal.ContextFlyout = CreateTerminalCommandOutputMenu(command, terminal);
             var tab = new TabViewItem
             {
                 Header = command.Name,
-                Content = scroller
+                Content = terminal
             };
             TerminalTabs.TabItems.Add(tab);
             TerminalTabs.SelectedItem = tab;
             if (terminalWasHidden) _terminalCommandTabsOpenedPanel.Add(tab);
-            AppendTerminalCommandOutput(output, scroller, $"> {command.Command}\r\n");
+            _terminalCommandSessions.Add(tab, terminal);
+
+            terminal.Loaded += (_, _) => _ = DispatcherQueue.TryEnqueue(
+                Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                () => ResizeAdditionalTerminal(terminal));
 
             try
             {
-                var executionCommand = ResolvePythonCommand(command.Command);
-                var startInfo = CodyToolService.CreateCommandStartInfo(executionCommand, workingDirectory);
-                ConfigurePythonEnvironment(startInfo, executionCommand);
-                var process = new Process
-                {
-                    StartInfo = startInfo,
-                    EnableRaisingEvents = true
-                };
-                process.OutputDataReceived += (_, args) =>
-                {
-                    if (args.Data is not null)
-                        _ = DispatcherQueue.TryEnqueue(() => AppendTerminalCommandOutput(output, scroller, $"{args.Data}\r\n"));
-                };
-                process.ErrorDataReceived += (_, args) =>
-                {
-                    if (args.Data is not null)
-                        _ = DispatcherQueue.TryEnqueue(() => AppendTerminalCommandOutput(output, scroller, $"{args.Data}\r\n"));
-                };
-                process.Exited += (_, _) => _ = DispatcherQueue.TryEnqueue(() =>
-                {
-                    if (!_terminalCommandProcesses.Remove(tab)) return;
-                    AppendTerminalCommandOutput(output, scroller, $"[process exited with code {process.ExitCode}]\r\n");
-                    CompletionNotificationService.ShowWhenMainWindowIsInactive(
-                        "Command complete",
-                        $"{command.Name} finished with exit code {process.ExitCode}.");
-                    process.Dispose();
-                });
-                process.Start();
-                _terminalCommandProcesses.Add(tab, process);
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
+                terminal.ConPTYTerm.TermReady += (_, _) =>
+                    _ = MonitorCommandTerminalCompletionAsync(tab, terminal, command);
+                return true;
             }
             catch (Exception exception)
             {
-                AppendTerminalCommandOutput(output, scroller, $"[error] {exception.Message}\r\n");
+                _terminalCommandSessions.Remove(tab);
+                TerminalTabs.TabItems.Remove(tab);
+                await ShowMessageAsync("Run command", $"Could not start '{command.Command}': {exception.Message}");
+                return false;
+            }
+        }
+
+        private async Task<ToolResult> LaunchAgentTerminalCommandAsync(string commandLine, string workingDirectorySubpath, string? name)
+        {
+            var displayName = string.IsNullOrWhiteSpace(name) ? commandLine : name;
+            var command = new CodyCommand(displayName, commandLine, workingDirectorySubpath ?? string.Empty);
+            var started = await RunCommandInTerminalTabAsync(command);
+            var details = new JsonObject { ["success"] = started, ["name"] = displayName };
+            if (!started) details["error"] = "The command could not be started in a Terminal tab.";
+            return new ToolResult(started, details.ToJsonString());
+        }
+
+        private string BuildCommandTerminalCommandLine(string command)
+        {
+            var executionCommand = ResolvePythonCommand(command);
+            if (NeedsPythonEnvironment(command))
+            {
+                var environmentDirectory = DetectVirtualEnvironments(_settings.CodyWorkspace).FirstOrDefault();
+                var activationPath = environmentDirectory is null
+                    ? null
+                    : Path.Combine(_settings.CodyWorkspace, environmentDirectory, "Scripts", "activate.bat");
+                if (activationPath is not null && File.Exists(activationPath))
+                    executionCommand = $"call \"{activationPath}\" && {executionCommand}";
+            }
+            return $"\"cmd.exe\" /C {executionCommand}";
+        }
+
+        /// <summary>
+        /// Polls the ConPTY-backed shell process for exit, since the terminal control's public
+        /// IProcess surface exposes HasExited but no completion event or exit code.
+        /// </summary>
+        private async Task MonitorCommandTerminalCompletionAsync(TabViewItem tab, EasyTerminalControl terminal, CodyCommand command)
+        {
+            try
+            {
+                var termProcess = terminal.ConPTYTerm.Process;
+                while (_terminalCommandSessions.ContainsKey(tab) && termProcess?.HasExited != true)
+                    await Task.Delay(300);
+                if (!_terminalCommandSessions.Remove(tab)) return;
+
+                _ = DispatcherQueue.TryEnqueue(() =>
+                    terminal.ConPTYTerm.WriteToUITerminal("\r\n[process exited]\r\n"));
+                CompletionNotificationService.ShowWhenMainWindowIsInactive(
+                    "Command complete",
+                    $"{command.Name} finished.");
+            }
+            catch (Exception exception) when (IsExpectedTerminalShutdownException(exception))
+            {
             }
         }
 
@@ -3614,37 +3646,32 @@ namespace App.Pages
             return true;
         }
 
-        private static void AppendTerminalCommandOutput(TextBox output, ScrollViewer scroller, string text)
-        {
-            output.Text += text;
-            scroller.UpdateLayout();
-            scroller.ChangeView(null, scroller.ScrollableHeight, null, true);
-        }
-
-        private MenuFlyout CreateTerminalCommandOutputMenu(CodyCommand command, TextBox output)
+        private MenuFlyout CreateTerminalCommandOutputMenu(CodyCommand command, EasyTerminalControl terminal)
         {
             var menu = new MenuFlyout();
             var copy = new MenuFlyoutItem { Text = "Copy" };
-            copy.Click += (_, _) => CopyTerminalCommandOutput(output.SelectedText);
+            copy.Click += (_, _) => CopyTerminalCommandOutput(terminal.Terminal.GetSelectedText());
             menu.Items.Add(copy);
 
             var copyAll = new MenuFlyoutItem { Text = "Copy all" };
-            copyAll.Click += (_, _) => CopyTerminalCommandOutput(output.Text);
+            copyAll.Click += (_, _) => CopyTerminalCommandOutput(terminal.ConPTYTerm.GetConsoleText());
             menu.Items.Add(copyAll);
             menu.Items.Add(new MenuFlyoutSeparator());
 
             var askCody = new MenuFlyoutItem();
             menu.Opening += (_, _) =>
             {
-                copy.IsEnabled = !string.IsNullOrEmpty(output.SelectedText);
-                askCody.Text = string.IsNullOrEmpty(output.SelectedText)
+                var selectedText = terminal.Terminal.GetSelectedText();
+                copy.IsEnabled = !string.IsNullOrEmpty(selectedText);
+                askCody.Text = string.IsNullOrEmpty(selectedText)
                     ? "Ask Cody about this"
                     : "Ask Cody about this selection";
                 askCody.IsEnabled = HasActiveAgent();
             };
             askCody.Click += async (_, _) =>
             {
-                var context = string.IsNullOrEmpty(output.SelectedText) ? output.Text : output.SelectedText;
+                var selectedText = terminal.Terminal.GetSelectedText();
+                var context = string.IsNullOrEmpty(selectedText) ? terminal.ConPTYTerm.GetConsoleText() : selectedText;
                 await SendCommandOutputToCodyAsync(command, context);
             };
             menu.Items.Add(askCody);
@@ -3690,6 +3717,7 @@ namespace App.Pages
 
             if (_additionalTerminalSessions.Remove(args.Tab, out var terminal))
             {
+                RequestCommandTerminalTermination(terminal);
                 StopTerminalSession(terminal);
                 sender.TabItems.Remove(args.Tab);
                 return;
@@ -3699,8 +3727,8 @@ namespace App.Pages
             var closeTerminalPanel = _terminalCommandTabsOpenedPanel.Remove(args.Tab);
             try
             {
-                if (_terminalCommandProcesses.Remove(args.Tab, out var process))
-                    await TerminateProcessTreeAsync(process);
+                if (_terminalCommandSessions.Remove(args.Tab, out var commandTerminal))
+                    await TerminateCommandTerminalAsync(commandTerminal);
 
                 sender.TabItems.Remove(args.Tab);
                 if (closeTerminalPanel && sender.TabItems.Count == 1 && _terminalControl is null) HideTerminal();
@@ -3711,63 +3739,43 @@ namespace App.Pages
             }
         }
 
-        private static async Task TerminateProcessTreeAsync(Process process)
+        private static async Task TerminateCommandTerminalAsync(EasyTerminalControl terminal)
         {
+            RequestCommandTerminalTermination(terminal);
+            var process = terminal.ConPTYTerm.Process;
+            if (process is not null && !process.HasExited)
+                await Task.Run(process.WaitForExit);
+            StopTerminalSession(terminal);
+        }
+
+        private static void RequestCommandTerminalTermination(EasyTerminalControl terminal)
+        {
+            var process = terminal.ConPTYTerm.Process;
+            if (process is null || process.HasExited) return;
+
             try
             {
-                RequestProcessTreeTermination(process);
-                await process.WaitForExitAsync();
+                process.Kill(true);
             }
             catch (InvalidOperationException)
             {
             }
-            finally
-            {
-                process.Dispose();
-            }
-        }
-
-        private static void RequestProcessTreeTermination(Process process)
-        {
-            if (process.HasExited) return;
-
-            try
-            {
-                var taskKill = new ProcessStartInfo("taskkill.exe")
-                {
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                };
-                taskKill.ArgumentList.Add("/PID");
-                taskKill.ArgumentList.Add(process.Id.ToString());
-                taskKill.ArgumentList.Add("/T");
-                taskKill.ArgumentList.Add("/F");
-                using var taskKillProcess = Process.Start(taskKill);
-                taskKillProcess?.WaitForExit(5_000);
-            }
-            catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
-            {
-            }
-
-            if (!process.HasExited) process.Kill(true);
         }
 
         private void CancelTerminalCommandProcesses()
         {
-            foreach (var process in _terminalCommandProcesses.Values)
+            foreach (var terminal in _terminalCommandSessions.Values)
             {
                 try
                 {
-                    RequestProcessTreeTermination(process);
+                    RequestCommandTerminalTermination(terminal);
+                    StopTerminalSession(terminal);
                 }
                 catch (InvalidOperationException)
                 {
                 }
-                process.Dispose();
             }
-            _terminalCommandProcesses.Clear();
+            _terminalCommandSessions.Clear();
             _terminalCommandTabsOpenedPanel.Clear();
             _terminalCommandTabsClosing.Clear();
         }
@@ -3775,7 +3783,10 @@ namespace App.Pages
         private void CancelAdditionalTerminalSessions()
         {
             foreach (var terminal in _additionalTerminalSessions.Values)
+            {
+                RequestCommandTerminalTermination(terminal);
                 StopTerminalSession(terminal);
+            }
             _additionalTerminalSessions.Clear();
             foreach (var tab in TerminalTabs.TabItems.OfType<TabViewItem>()
                 .Where(tab => !ReferenceEquals(tab, InteractiveTerminalTab)).ToList())
@@ -4226,24 +4237,6 @@ namespace App.Pages
             return string.IsNullOrWhiteSpace(shell.Arguments)
                 ? executable
                 : $"{executable} {shell.Arguments}";
-        }
-
-        private void ConfigurePythonEnvironment(ProcessStartInfo startInfo, string command)
-        {
-            if (!NeedsPythonEnvironment(command)) return;
-            var environmentDirectory = DetectVirtualEnvironments(_settings.CodyWorkspace).FirstOrDefault();
-            var activationPath = environmentDirectory is null
-                ? null
-                : Path.Combine(_settings.CodyWorkspace, environmentDirectory, "Scripts", "activate.bat");
-            if (activationPath is null || !File.Exists(activationPath)) return;
-
-            var scriptsDirectory = Path.GetDirectoryName(activationPath)!;
-            var currentPath = startInfo.Environment.TryGetValue("PATH", out var path)
-                ? path
-                : Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-            var virtualEnvironmentDirectory = Path.GetDirectoryName(scriptsDirectory)!;
-            startInfo.Environment["VIRTUAL_ENV"] = virtualEnvironmentDirectory;
-            startInfo.Environment["PATH"] = $"{scriptsDirectory}{Path.PathSeparator}{currentPath}";
         }
 
         private string ResolvePythonCommand(string command)
