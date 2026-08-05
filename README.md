@@ -1,77 +1,106 @@
 # Crster Utility
 
-Crster Utility is a native Windows desktop utility suite built with WinUI 3 and .NET 10. It combines everyday productivity tools, screen capture, media recording, local notes and todos, and AI-assisted workflows in one application.
+Crster Utility is a native Windows desktop toolbox for everyday productivity, capture, local data, and AI-assisted work. It is built with WinUI 3 and .NET 10 and runs as a packaged Windows App SDK application.
 
-## Features
+## What it does
 
-- **Chat** — Use the Secretary, Smart, and Technician AI personalities for conversation, memory, notebook and todo actions, web-assisted answers, and guided troubleshooting.
-- **Cody** — Work with an agentic coding workspace that can inspect project files, use a terminal, and perform approved local operations.
-- **Notebook** — Create notes with attachments, Markdown editing, AI-assisted writing, and generated passwords or keys.
-- **Todos** — Organize, search, categorize, complete, and schedule todo items.
-- **Snapshots** — Capture and edit screenshots using a configurable global shortcut, with optional mouse-cursor capture.
-- **Recordings** — Record the screen with optional microphone and system-audio tracks.
-- **Artist** — Generate and edit images through the configured AI provider.
-- **Caffeine** — Keep the computer active when needed.
-- **Settings and tray support** — Configure the database location, AI provider, models, location, shortcuts, microphone, and startup behavior. The app can remain available from the Windows notification area.
+The application is organized into the following pages:
+
+- **Chat** — Chat with the Secretary, Smart, or Technician personality. Conversations can use local notebook and todo data, configurable tools, weather/location context, and the configured OpenAI-compatible provider.
+- **Cody** — An agentic coding workspace with a file tree, Monaco editor, terminal, workspace context, attachments, and an optional Cody chat panel. Operations that affect the local workspace are surfaced for approval where appropriate.
+- **Notebook** — Store searchable Markdown notes, attach files and images, paste clipboard content, use formatting helpers, generate secrets/passwords, and ask the configured AI provider to improve selected writing. Notebook search can use embeddings.
+- **Todos** — Create, search, categorize, complete, and schedule tasks.
+- **Snapshots** — Capture the screen from the page or a global shortcut, optionally including the mouse pointer. Captured images can be edited, annotated, copied, saved, and processed with AI-assisted actions.
+- **Recordings** — Record the screen to MP4 with optional microphone input and system audio. A recording toolbar remains available while the main window is hidden.
+- **Artist** — Generate images through the configured provider, open local images, paste clipboard images, select/crop an image, and save the result.
+- **Tools** — Run **Caffeine**, which keeps the computer active by periodically moving the pointer, scrolling, or switching tabs. Moving the pointer at least 100 pixels from its last automated position stops it.
+
+The window can be minimized to the Windows notification area. Optional startup registration and global shortcuts are controlled in Settings. The package also exposes a Copilot-key app extension when registered by Windows.
 
 ## Requirements
 
-- Windows 11, build 22621 or later
+- Windows 11 version 22H2 (build 22621) or later
 - .NET 10 SDK
-- Visual Studio with WinUI 3 / Windows App SDK support, or the matching .NET CLI workload
-- A microphone is only required for microphone-enabled recordings.
+- A Windows App SDK/WinUI 3-capable Visual Studio installation, or the equivalent .NET CLI build environment
+- A microphone only when microphone recording is required
+- Graphics-capture and microphone permissions for the corresponding capture features
 
-The application targets `net10.0-windows10.0.26100.0` and supports `x86`, `x64`, and `ARM64` builds. The minimum supported Windows platform version is `10.0.22621.0`.
+The project targets `net10.0-windows10.0.26100.0`, has a minimum platform version of `10.0.22621.0`, and defines `x86`, `x64`, and `ARM64` platforms. The local launch script uses `x64`.
 
-## AI provider setup
+## First-run setup
 
-Crster Utility uses an OpenAI-compatible API. On first use, open **Settings** and configure:
+On first launch, choose a writable database folder and configure an OpenAI-compatible provider:
 
-1. The provider base URL.
-2. The API key.
-3. The embedding, low-cost, high-cost, and Artist models available to that provider.
+1. Enter the provider base URL, including the API version path when required (for example, `https://api.openai.com/v1`). Only `http` and `https` URLs are accepted.
+2. Enter the provider API key.
+3. After the provider is reachable, select the available models for embeddings, low-cost requests, high-cost requests, and Artist image generation.
 
-The API key is entered through the app's password field and should not be committed to source control. AI features that require a provider include Chat, Cody, Artist, AI-assisted notebook actions, semantic notebook search, and some Secretary tools.
+The same settings are available later from **Settings**. Changing the provider or embedding model marks notebook embeddings for rebuild. AI features are optional, but Chat, Cody, Artist, AI writing assistance, semantic notebook search, and some tools require a working provider and suitable model configuration.
 
-## Build and run
+### Privacy and stored data
 
-Restore and build the app for the desired platform:
+The application sends prompts, selected files/images, and tool context to the OpenAI-compatible endpoint configured by the user. Review that provider's retention and privacy policy before using private content.
+
+The configured database folder contains `CrsterUtility.db`, a LiteDB database containing application settings, notes, todos, attachments, chat state, and related local data. Changing the folder copies the database and leaves the original as a backup. The bootstrap file at `%USERPROFILE%\crster\utility\setting.ini` contains the database path, provider URL, and API key needed to open the database; protect this file and do not commit or share it.
+
+## Build
+
+From the repository root, restore and build a selected platform:
 
 ```powershell
 dotnet restore .\App\App.csproj
 dotnet build .\App\App.csproj --configuration Debug --property:Platform=x64
 ```
 
-For the supported local x64 workflow, `run-app.ps1` cleans and builds the project, copies package assets into the loose-package output, registers the generated package, and launches it:
+The solution can also be built with:
+
+```powershell
+dotnet build .\CrsterUtility.slnx --configuration Debug --property:Platform=x64
+```
+
+Build another supported architecture by changing the `Platform` property to `x86` or `ARM64`.
+
+## Run locally
+
+`run-app.ps1` is the supported local x64 workflow. It stops an existing app process, cleans and rebuilds the project, copies package assets beside the generated manifest, registers the loose MSIX package, and launches it:
 
 ```powershell
 .\run-app.ps1
 .\run-app.ps1 -Configuration Release
 ```
 
-The script targets the `x64` platform and requires permission to register an AppX package. To build another architecture, use the project or Visual Studio packaging workflow directly.
+The script requires permission to register an AppX package. It intentionally targets the output at `App\bin\x64\<Configuration>\...\win-x64` and does not launch ARM64 or x86 builds.
 
-## Packaging
+## Package and publish
 
-The project uses single-project MSIX tooling. Packaging is configured for `x86` and `x64` bundles, with publish profiles for `win-x86`, `win-x64`, and `win-arm64`. App Installer metadata is generated only when a production HTTP or HTTPS `AppInstallerUri` is supplied to the build.
+The project uses single-project MSIX tooling. Publish profiles are provided for self-contained `win-x86`, `win-x64`, and `win-arm64` builds:
 
-The current manifest version is `1.0.27.0`. Production package output is written to `Installer\CrsterUtility` with the stable `CrsterUtility` artifact name.
+```powershell
+dotnet publish .\App\App.csproj --configuration Release --property:Platform=x64 --runtime win-x64
+```
 
-## Project layout
+MSIX bundle configuration currently covers `x86` and `x64`; the ARM64 publish profile is available for an architecture-specific package. Production package artifacts are written below `Installer\CrsterUtility`. App Installer metadata is generated only when a production `AppInstallerUri` is supplied to the build. The manifest version in this source tree is `1.0.28.0`.
+
+## Repository layout
 
 | Path | Purpose |
 | --- | --- |
-| `App/Pages` | Main application pages and workflows |
-| `App/Services` | AI, storage, capture, recording, input, and utility services |
-| `App/Models` | Application and persistence models |
-| `App/Assets/Monaco` | Bundled Monaco editor assets used by Notebook and Cody |
-| `App/Properties/PublishProfiles` | Architecture-specific publish profiles |
-| `Installer` | App Installer and generated package artifacts |
-| `run-app.ps1` | Build, register, and launch the local x64 package |
+| `App/Pages` | Main feature pages and page workflows |
+| `App/Controls` | Reusable UI controls, including Cody chat and Monaco integration |
+| `App/Services` | AI clients, persistence, capture, recording, input, startup, tray, and utility services |
+| `App/Models` | Domain, settings, attachment, chat, and persistence models |
+| `App/Windows` | Main window, first-run setup, snapshot editor, and recording toolbar windows |
+| `App/Assets/Monaco` | Bundled Monaco editor runtime assets |
+| `App/Properties/PublishProfiles` | `win-x86`, `win-x64`, and `win-arm64` publish profiles |
+| `Installer` | Packaging and generated installer output |
+| `run-app.ps1` | Clean, build, register, and launch script for local x64 development |
+| `CrsterUtility.slnx` | Solution entry point |
 
-## Dependencies
+## Main dependencies
 
-The application uses Microsoft Windows App SDK, Win2D, Easy Windows Terminal Control, LiteDB, NAudio, OpenAI, Markdig, Cronos, Microsoft.CodeAnalysis.CSharp, Vortice.Direct3D11, and related Windows SDK packages.
+The application uses Microsoft Windows App SDK/WinUI 3, Windows SDK build tools, Win2D, Easy Windows Terminal Control, LiteDB, NAudio, the OpenAI .NET client, Markdig, Cronos, Microsoft.CodeAnalysis.CSharp, Vortice.Direct3D11, and Windows Runtime interop libraries.
+
+There is currently no separate automated test project in the repository. A successful `dotnet build` is the baseline validation for changes; capture, recording, provider, and packaged-launch behavior should also be checked manually on Windows.
 
 ## Attribution
 
