@@ -46,6 +46,7 @@ namespace App.Controls
         private UIElement? _pendingUserMessageContainer;
         private string _streamingAnswerText = string.Empty;
         private ThinkingCard? _liveThinking;
+        private ProcessingStatusRow? _processingStatus;
         private string _workspacePath = string.Empty;
         private bool _isBusy;
         private bool _autoScroll = true;
@@ -55,7 +56,11 @@ namespace App.Controls
             InitializeComponent();
             _streamTimer = DispatcherQueue.CreateTimer();
             _streamTimer.Interval = TimeSpan.FromMilliseconds(StreamFlushMilliseconds);
-            _streamTimer.Tick += (_, _) => FlushStreamBuffers();
+            _streamTimer.Tick += (_, _) =>
+            {
+                FlushStreamBuffers();
+                RefreshProcessingStatus();
+            };
             UpdateEmptyState();
         }
 
@@ -66,6 +71,7 @@ namespace App.Controls
         internal event EventHandler? SessionChanged;
         internal event EventHandler? PlanApproved;
         internal event EventHandler? PlanReworkRequested;
+        internal event Func<string, Task>? FileOpenRequested;
 
         internal ChatSession Session
         {
@@ -147,11 +153,16 @@ namespace App.Controls
             StopIcon.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             ToolTipService.SetToolTip(SendButton, busy ? "Stop Cody" : "Send prompt");
             AutomationProperties.SetName(SendButton, busy ? "Stop Cody" : "Send prompt");
-            if (busy) _streamTimer.Start();
+            if (busy)
+            {
+                StartProcessingStatus();
+                _streamTimer.Start();
+            }
             else
             {
                 _streamTimer.Stop();
                 FlushStreamBuffers();
+                FinishProcessingStatus();
             }
             UpdateComposerAvailability();
         }
@@ -167,6 +178,7 @@ namespace App.Controls
             _liveThinking = null;
             _liveToolRows.Clear();
             _autoScroll = true;
+            StartProcessingStatus();
         }
 
         /// <summary>Renders the submitted prompt immediately while the page prepares its session.</summary>
@@ -177,6 +189,7 @@ namespace App.Controls
             _pendingUserMessageContainer = CreateUserBubble(_pendingUserMessage);
             RemoveEmptyState();
             TranscriptHost.Children.Add(_pendingUserMessageContainer);
+            MoveProcessingStatusToEnd();
             ScrollToLatest();
         }
 
@@ -200,6 +213,7 @@ namespace App.Controls
             CommitStreamingAnswer(text);
             foreach (var row in _liveToolRows.Values) row.MarkInterrupted();
             _liveToolRows.Clear();
+            FinishProcessingStatus();
         }
 
         internal void HandleAgentEvent(CodyAgentEvent agentEvent)
@@ -232,6 +246,7 @@ namespace App.Controls
                     AddMessage(new ChatMessage(ChatItemKind.Assistant, agentEvent.Title, agentEvent.Content));
                     break;
             }
+            NoteProcessingEvent(agentEvent.Kind);
             if (!_streamTimer.IsRunning) FlushStreamBuffers();
         }
 
@@ -243,6 +258,7 @@ namespace App.Controls
                 var delta = _pendingThinking.ToString();
                 _pendingThinking.Clear();
                 EnsureThinkingCard().Append(delta);
+                MoveProcessingStatusToEnd();
                 ScrollToLatest();
             }
             if (_pendingText.Length == 0) return;
@@ -252,6 +268,7 @@ namespace App.Controls
             CommitThinking();
             _streamingAnswerText += textDelta;
             EnsureStreamingAnswer().Markdown = _streamingAnswerText;
+            MoveProcessingStatusToEnd();
             ScrollToLatest();
         }
 
@@ -260,7 +277,7 @@ namespace App.Controls
             if (_streamingAnswer is not null) return _streamingAnswer;
 
             RemoveEmptyState();
-            _streamingAnswer = new MarkdownView();
+            _streamingAnswer = CreateCodyMarkdown();
             var container = new Border
             {
                 Padding = new Thickness(2, 2, 2, 2),
@@ -269,6 +286,7 @@ namespace App.Controls
             };
             _streamingAnswerContainer = container;
             TranscriptHost.Children.Add(container);
+            MoveProcessingStatusToEnd();
             return _streamingAnswer;
         }
 
@@ -292,6 +310,7 @@ namespace App.Controls
             RemoveEmptyState();
             _liveThinking = new ThinkingCard();
             TranscriptHost.Children.Add(_liveThinking.Container);
+            MoveProcessingStatusToEnd();
             return _liveThinking;
         }
 
@@ -314,6 +333,7 @@ namespace App.Controls
             var row = new ToolRow(agentEvent.Title, DescribeTool(agentEvent.Title, agentEvent.Arguments));
             _liveToolRows[agentEvent.ToolId] = row;
             TranscriptHost.Children.Add(row.Container);
+            MoveProcessingStatusToEnd();
             ScrollToLatest();
         }
 
@@ -336,6 +356,7 @@ namespace App.Controls
         {
             _session.Messages.Add(message);
             RenderMessage(message);
+            MoveProcessingStatusToEnd();
             SessionChanged?.Invoke(this, EventArgs.Empty);
         }
 
@@ -380,6 +401,7 @@ namespace App.Controls
             DiscardPendingUserPrompt();
             TranscriptHost.Children.Clear();
             foreach (var message in _session.Messages) RenderMessage(message);
+            MoveProcessingStatusToEnd();
             UpdateEmptyState();
             ScrollToLatest();
         }
@@ -437,7 +459,7 @@ namespace App.Controls
             };
         }
 
-        private static UIElement CreateAssistantBlock(ChatMessage message)
+        private UIElement CreateAssistantBlock(ChatMessage message)
         {
             var body = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 6) };
             if (!string.IsNullOrWhiteSpace(message.Title) && message.Title != "Cody")
@@ -448,9 +470,20 @@ namespace App.Controls
                     FontWeight = FontWeights.SemiBold,
                     Foreground = Resource("TextFillColorTertiaryBrush")
                 });
-            body.Children.Add(new MarkdownView { Markdown = message.Content });
+            var markdown = CreateCodyMarkdown();
+            markdown.Markdown = message.Content;
+            body.Children.Add(markdown);
             return body;
         }
+
+        private MarkdownView CreateCodyMarkdown()
+        {
+            var markdown = new MarkdownView();
+            markdown.ConfigureCodyChat(() => _workspacePath, OpenFileRequestedAsync);
+            return markdown;
+        }
+
+        private Task OpenFileRequestedAsync(string path) => FileOpenRequested?.Invoke(path) ?? Task.CompletedTask;
 
         private static UIElement CreateErrorBlock(ChatMessage message) => new Border
         {
@@ -523,7 +556,7 @@ namespace App.Controls
             return container;
         }
 
-        private static UIElement CreateToolBlock(ChatMessage message, string workspacePath)
+        private UIElement CreateToolBlock(ChatMessage message, string workspacePath)
         {
             var succeeded = message.ToolSucceeded != false;
             var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
@@ -550,15 +583,9 @@ namespace App.Controls
             });
             var detail = DescribeTool(message.Title, message.ToolArguments);
             if (detail.Length > 0)
-                header.Children.Add(new TextBlock
-                {
-                    Text = detail,
-                    FontSize = 12,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    FontFamily = new FontFamily("Cascadia Mono"),
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                    Foreground = Resource("TextFillColorTertiaryBrush")
-                });
+                header.Children.Add(ToolFileArgument(message.Title, message.ToolArguments) is { } path
+                    ? CreateToolFileLink(detail, path)
+                    : CreateToolDetailText(detail));
             if (message.DiffOld is not null && message.DiffNew is not null)
                 return CreateDisclosure(header, BuildDiffView(message.DiffOld, message.DiffNew), HorizontalAlignment.Left, hasDetails: true);
             if (message.Title == "list_workspace_entries" && BuildListView(message.Content, workspacePath) is { } listView)
@@ -566,6 +593,38 @@ namespace App.Controls
             if (message.Title == "search_workspace_files" && BuildSearchView(message.Content, workspacePath) is { } searchView)
                 return CreateDisclosure(header, searchView, HorizontalAlignment.Left, hasDetails: true);
             return CreateDisclosure(header, FormatToolOutput(message.Title, message.Content), HorizontalAlignment.Left);
+        }
+
+        private static TextBlock CreateToolDetailText(string detail) => new()
+        {
+            Text = detail,
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontFamily = new FontFamily("Cascadia Mono"),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = Resource("TextFillColorTertiaryBrush")
+        };
+
+        private TextBlock CreateToolFileLink(string displayText, string path, double fontSize = 12)
+        {
+            var text = CreateToolDetailText(displayText);
+            text.FontSize = fontSize;
+            text.IsTextSelectionEnabled = true;
+            text.Foreground = Resource("AccentTextFillColorPrimaryBrush");
+            ToolTipService.SetToolTip(text, "Open file in editor");
+            text.PointerPressed += async (_, args) =>
+            {
+                args.Handled = true;
+                await OpenFileRequestedAsync(path);
+            };
+            return text;
+        }
+
+        private static string? ToolFileArgument(string toolName, JsonObject? arguments)
+        {
+            if (arguments is null || toolName is not ("read_workspace_file" or "write_workspace_file" or "patch_workspace_file"))
+                return null;
+            return arguments["workspace_path"]?.GetValue<string>();
         }
 
         /// <summary>Normalizes an absolute or workspace-relative path to a forward-slashed, workspace-relative path.</summary>
@@ -580,7 +639,7 @@ namespace App.Controls
         }
 
         /// <summary>Renders list_workspace_entries results as one normalized path per line instead of raw JSON.</summary>
-        private static UIElement? BuildListView(string output, string workspacePath)
+        private UIElement? BuildListView(string output, string workspacePath)
         {
             JsonObject? result;
             try { result = JsonNode.Parse(output) as JsonObject; }
@@ -593,14 +652,16 @@ namespace App.Controls
                 if (path is null) continue;
                 var isDirectory = item["attribute"]?.GetValue<string>()?.Contains("Directory", StringComparison.OrdinalIgnoreCase) == true;
                 var normalized = NormalizePath(path, workspacePath) + (isDirectory ? "/" : "");
-                panel.Children.Add(new TextBlock
-                {
-                    Text = normalized,
-                    FontFamily = new FontFamily("Cascadia Mono"),
-                    FontSize = 11,
-                    IsTextSelectionEnabled = true,
-                    Foreground = Resource(isDirectory ? "TextFillColorSecondaryBrush" : "TextFillColorPrimaryBrush")
-                });
+                panel.Children.Add(isDirectory
+                    ? new TextBlock
+                    {
+                        Text = normalized,
+                        FontFamily = new FontFamily("Cascadia Mono"),
+                        FontSize = 11,
+                        IsTextSelectionEnabled = true,
+                        Foreground = Resource("TextFillColorSecondaryBrush")
+                    }
+                    : CreateToolFileButton(normalized, path));
             }
             if (result["is_truncated"]?.GetValue<bool>() == true)
                 panel.Children.Add(new TextBlock
@@ -614,7 +675,7 @@ namespace App.Controls
         }
 
         /// <summary>Renders search_workspace_files results as normalized path + snippet, with the match highlighted.</summary>
-        private static UIElement? BuildSearchView(string output, string workspacePath)
+        private UIElement? BuildSearchView(string output, string workspacePath)
         {
             JsonObject? result;
             try { result = JsonNode.Parse(output) as JsonObject; }
@@ -631,14 +692,7 @@ namespace App.Controls
                 var matchText = match["match"]?.GetValue<string>() ?? string.Empty;
 
                 var entry = new StackPanel { Spacing = 2 };
-                entry.Children.Add(new TextBlock
-                {
-                    Text = NormalizePath(filename, workspacePath),
-                    FontFamily = new FontFamily("Cascadia Mono"),
-                    FontSize = 11,
-                    IsTextSelectionEnabled = true,
-                    Foreground = Resource("TextFillColorPrimaryBrush")
-                });
+                entry.Children.Add(CreateToolFileButton(NormalizePath(filename, workspacePath), filename));
                 entry.Children.Add(BuildHighlightedSnippet(snippet, matchStart - snippetStart, matchText.Length));
                 panel.Children.Add(entry);
             }
@@ -651,6 +705,30 @@ namespace App.Controls
                     Foreground = Resource("TextFillColorTertiaryBrush")
                 });
             return panel.Children.Count == 0 ? null : panel;
+        }
+
+        private Button CreateToolFileButton(string displayText, string path)
+        {
+            var button = new Button
+            {
+                Content = new TextBlock
+                {
+                    Text = displayText,
+                    FontFamily = new FontFamily("Cascadia Mono"),
+                    FontSize = 11,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Foreground = Resource("AccentTextFillColorPrimaryBrush")
+                },
+                Padding = new Thickness(0),
+                MinWidth = 0,
+                MinHeight = 0,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Background = new SolidColorBrush(Colors.Transparent),
+                BorderThickness = new Thickness(0)
+            };
+            ToolTipService.SetToolTip(button, "Open file in editor");
+            button.Click += async (_, _) => await OpenFileRequestedAsync(path);
+            return button;
         }
 
         private static TextBlock BuildHighlightedSnippet(string snippet, int highlightStart, int highlightLength)
@@ -1200,6 +1278,60 @@ namespace App.Controls
 
         private void RemoveEmptyState() => TranscriptHost.Children.Remove(EmptyState);
 
+        // Section: Processing status
+        // This row deliberately never becomes a ChatMessage: it is live UI feedback, not conversation history.
+        private void StartProcessingStatus()
+        {
+            _processingStatus ??= new ProcessingStatusRow();
+            RemoveEmptyState();
+            _processingStatus.SetEvent(ProcessingEvent.Processing);
+            MoveProcessingStatusToEnd();
+            ScrollToLatest();
+        }
+
+        private void NoteProcessingEvent(CodyAgentEventKind eventKind)
+        {
+            if (!_isBusy) return;
+
+            _processingStatus ??= new ProcessingStatusRow();
+            _processingStatus.SetEvent(eventKind switch
+            {
+                CodyAgentEventKind.ThinkingDelta => ProcessingEvent.Thinking,
+                CodyAgentEventKind.TextDelta => ProcessingEvent.Responding,
+                CodyAgentEventKind.ToolStarted => ProcessingEvent.ToolStarting,
+                CodyAgentEventKind.ToolCompleted => ProcessingEvent.ToolFinished,
+                CodyAgentEventKind.Notice => ProcessingEvent.Notice,
+                _ => ProcessingEvent.Processing
+            });
+            MoveProcessingStatusToEnd();
+            ScrollToLatest();
+        }
+
+        private void RefreshProcessingStatus()
+        {
+            if (_processingStatus is null) return;
+            _processingStatus.Refresh();
+            MoveProcessingStatusToEnd();
+        }
+
+        /// <summary>Keeps the ephemeral processing card below streamed text, thinking, and tool rows.</summary>
+        private void MoveProcessingStatusToEnd()
+        {
+            if (_processingStatus is null) return;
+            if (TranscriptHost.Children.Count > 0
+                && ReferenceEquals(TranscriptHost.Children[TranscriptHost.Children.Count - 1], _processingStatus.Container))
+                return;
+            TranscriptHost.Children.Remove(_processingStatus.Container);
+            TranscriptHost.Children.Add(_processingStatus.Container);
+        }
+
+        private void FinishProcessingStatus()
+        {
+            if (_processingStatus is null) return;
+            TranscriptHost.Children.Remove(_processingStatus.Container);
+            _processingStatus = null;
+        }
+
         // Section: Scrolling
         private void TranscriptScroller_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e) =>
             _autoScroll = TranscriptScroller.ScrollableHeight - TranscriptScroller.VerticalOffset <= AutoScrollThreshold;
@@ -1217,6 +1349,193 @@ namespace App.Controls
         private static Brush Resource(string key) => (Brush)Application.Current.Resources[key];
 
         // Section: Live rows
+        private enum ProcessingEvent { Processing, Thinking, Responding, ToolStarting, ToolFinished, Notice }
+
+        /// <summary>
+        /// A rotating, non-persisted status card. The word banks yield more than 64,000 distinct
+        /// sentences for every event type without carrying a 5,000-line string table in memory.
+        /// </summary>
+        private sealed class ProcessingStatusRow
+        {
+            private static readonly string[] EventOpeners =
+            [
+                "Cody is warming up the workshop", "Cody is giving the gears a friendly tap",
+                "Cody is consulting the tiny rubber duck", "Cody is lining up helpful pixels",
+                "Cody is putting on the debugging cape", "Cody is asking the keyboard nicely",
+                "Cody is brewing a fresh pot of logic", "Cody is polishing the semicolons"
+            ];
+            private static readonly string[] ThinkingOpeners =
+            [
+                "The idea hamster is on the wheel", "Cody is mapping the puzzle pieces",
+                "The brainy octopus is sorting the tabs", "Cody is following the interesting thread",
+                "A thoughtful penguin is checking the clues", "Cody is arranging the logic dominoes",
+                "The plan is getting a small detective hat", "Cody is taking the scenic route through the code"
+            ];
+            private static readonly string[] RespondingOpeners =
+            [
+                "Cody is turning notes into useful words", "The response orchestra is tuning up",
+                "Cody is translating coffee into sentences", "A polite typewriter is finding its rhythm",
+                "Cody is wrapping the answer with a neat bow", "The explanation train is leaving the station",
+                "Cody is herding the good ideas into a paragraph", "A flock of commas is landing gracefully"
+            ];
+            private static readonly string[] ToolStartingOpeners =
+            [
+                "A tool expedition is packing snacks", "Cody is sending in the code spelunker",
+                "The utility belt just clicked open", "Cody is handing a magnifying glass to the workspace",
+                "A tiny robot is pressing the careful button", "Cody is rolling out the inspection cart",
+                "The toolbox is doing a cheerful stretch", "Cody is checking the map before the next move"
+            ];
+            private static readonly string[] ToolFinishedOpeners =
+            [
+                "That tool returned with a little victory flag", "Cody is filing the fresh clue",
+                "The workspace scout is back from its stroll", "A useful breadcrumb just landed",
+                "Cody is high-fiving the toolbox", "The command goblin delivered its report",
+                "Another puzzle piece has clicked into place", "Cody is adding the result to the evidence board"
+            ];
+            private static readonly string[] NoticeOpeners =
+            [
+                "A friendly signal flare just popped up", "Cody received a note from the workshop",
+                "The status bell gave a tiny ding", "A helpful pigeon delivered an update",
+                "Cody spotted a fresh signpost", "The progress lantern is glowing",
+                "A small announcement is doing a cartwheel", "Cody tucked a new clue into the notebook"
+            ];
+            private static readonly string[] Actions =
+            [
+                "untangles a noodle of logic", "does a careful moonwalk through the details",
+                "stacks the useful bits into a tidy tower", "checks every pocket for a missing clue",
+                "gives the plan an extra pair of socks", "whispers encouragingly to the brackets",
+                "turns the crank on the idea machine", "keeps the bug-catching net at the ready",
+                "adds a pinch of practical magic", "makes the pixels stand in a nice line",
+                "asks the edge cases how they are doing", "follows the trail of curious breadcrumbs",
+                "keeps the good gears turning", "shines a flashlight under the tricky part",
+                "sends the boring bits out for a walk", "nudges the solution toward the finish line",
+                "checks the map twice and the compass once", "puts the next thought in a tiny parade",
+                "keeps the code garden watered", "coaxes a clear answer from the clouds",
+                "makes room for one more clever idea", "sorts the puzzle pieces by sparkle level",
+                "holds the thread while the knot loosens", "keeps the helpful robots happily employed",
+                "does the responsible thing with great enthusiasm"
+            ];
+            private static readonly string[] Companions =
+            [
+                "a caffeinated rubber duck", "the observant desk plant", "a squad of friendly semicolons",
+                "the tiny lighthouse in the IDE", "an extremely serious paperclip", "the neighborhood keyboard wizard",
+                "a pocket-sized astronomer", "the code's emotional-support comma", "a cheerful error message",
+                "the last clean build", "a stopwatch wearing sneakers", "the calmest octopus in the office",
+                "a detective-shaped cursor", "the backup plan's backup plan", "a very organized squirrel",
+                "the debugging raccoon", "a box of freshly sharpened pixels", "the syntax confetti cannon",
+                "a brave little loading spinner", "the team mascot in a lab coat"
+            ];
+            private static readonly string[] Flourishes =
+            [
+                "with excellent vibes", "without spilling the imaginary tea", "while keeping it delightfully tidy",
+                "at precisely the right amount of zoom", "with a sensible amount of sparkle", "and nobody has to panic",
+                "while the snacks remain metaphorical", "with the confidence of a well-labeled button",
+                "and a surprisingly good playlist", "before the next coffee molecule lands", "with a tiny triumphant nod",
+                "while making the boring parts less boring", "and the ducks approve", "with a respectful nod to the edge cases",
+                "while the progress bar practices its dance", "and the pixels are rooting for us"
+            ];
+
+            private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+            private readonly TextBlock _title;
+            private readonly TextBlock _message;
+            private ProcessingEvent _event;
+            private int _lastElapsedSecond = -1;
+            private bool _hasMessage;
+
+            public ProcessingStatusRow()
+            {
+                _title = new TextBlock
+                {
+                    FontSize = 12,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = Resource("TextFillColorSecondaryBrush")
+                };
+                _message = new TextBlock
+                {
+                    FontSize = 12,
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = Resource("TextFillColorTertiaryBrush")
+                };
+                var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                header.Children.Add(new ProgressRing { Width = 14, Height = 14, IsActive = true });
+                header.Children.Add(_title);
+                var content = new StackPanel { Spacing = 4 };
+                content.Children.Add(header);
+                content.Children.Add(_message);
+                Container = new Border
+                {
+                    Padding = new Thickness(10, 8, 12, 9),
+                    Margin = new Thickness(0, 4, 0, 2),
+                    CornerRadius = new CornerRadius(10),
+                    Background = Resource("ControlFillColorSecondaryBrush"),
+                    Child = content
+                };
+                SetEvent(ProcessingEvent.Processing);
+            }
+
+            public FrameworkElement Container { get; }
+
+            public void SetEvent(ProcessingEvent processingEvent)
+            {
+                _event = processingEvent;
+                Refresh(forceNewMessage: true);
+            }
+
+            public void Refresh() => Refresh(forceNewMessage: false);
+
+            private void Refresh(bool forceNewMessage)
+            {
+                var elapsedSeconds = Math.Max(0, (int)_stopwatch.Elapsed.TotalSeconds);
+                if (_lastElapsedSecond != elapsedSeconds)
+                {
+                    _lastElapsedSecond = elapsedSeconds;
+                    _title.Text = $"{TitleFor(_event)} · {elapsedSeconds}s {DotsFor(elapsedSeconds)}";
+                }
+                if (forceNewMessage || !_hasMessage)
+                {
+                    _message.Text = CreateFunSentence(_event);
+                    _hasMessage = true;
+                }
+            }
+
+            private static string TitleFor(ProcessingEvent processingEvent) => processingEvent switch
+            {
+                ProcessingEvent.Thinking => "Thinking",
+                ProcessingEvent.Responding => "Writing a response",
+                ProcessingEvent.ToolStarting => "Using a workspace tool",
+                ProcessingEvent.ToolFinished => "Tool finished",
+                ProcessingEvent.Notice => "Fresh update",
+                _ => "Cody is working"
+            };
+
+            private static string DotsFor(int elapsedSeconds) => (elapsedSeconds % 4) switch
+            {
+                0 => "·",
+                1 => "··",
+                2 => "···",
+                _ => "··"
+            };
+
+            private static string CreateFunSentence(ProcessingEvent processingEvent)
+            {
+                var opener = OpenersFor(processingEvent)[Random.Shared.Next(OpenersFor(processingEvent).Length)];
+                var action = Actions[Random.Shared.Next(Actions.Length)];
+                var companion = Companions[Random.Shared.Next(Companions.Length)];
+                var flourish = Flourishes[Random.Shared.Next(Flourishes.Length)];
+                return $"{opener}: {action} with {companion}, {flourish}.";
+            }
+
+            private static string[] OpenersFor(ProcessingEvent processingEvent) => processingEvent switch
+            {
+                ProcessingEvent.Thinking => ThinkingOpeners,
+                ProcessingEvent.Responding => RespondingOpeners,
+                ProcessingEvent.ToolStarting => ToolStartingOpeners,
+                ProcessingEvent.ToolFinished => ToolFinishedOpeners,
+                ProcessingEvent.Notice => NoticeOpeners,
+                _ => EventOpeners
+            };
+        }
+
         /// <summary>The streaming thinking block shown while the model reasons.</summary>
         private sealed class ThinkingCard
         {

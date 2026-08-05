@@ -169,9 +169,9 @@ namespace App.Pages
                 if (_normalizedSelection.HasValue)
                 {
                     if (_image is null) throw new InvalidOperationException("There is no image to edit.");
-                    contextImages.Add(await CreateJpegContextImageAsync(_image));
-                    var selection = new GeneratedImage(await CropSelectionAsync(), "image/jpeg");
-                    contextImages.Add(await CreateJpegContextImageAsync(selection));
+                    contextImages.Add(_image);
+                    var selection = new GeneratedImage(await CropSelectionAsync(), "image/png");
+                    contextImages.Add(selection);
                     generationPrompt =
                         "Edit the first image and return the complete edited image. " +
                         "The second image is a close-up of the selected region to change. " +
@@ -180,7 +180,7 @@ namespace App.Pages
                 }
                 else if ((_includePreviewOnNextSend || _hasGeneratedPreview) && _image is not null)
                 {
-                    contextImages.Add(await CreateJpegContextImageAsync(_image));
+                    contextImages.Add(_image);
                 }
                 if (_pendingAttachment is not null) contextImages.Add(_pendingAttachment);
 
@@ -218,7 +218,7 @@ namespace App.Pages
             {
                 var selected = _normalizedSelection.HasValue;
                 var data = selected ? await CropSelectionAsync() : _image.Data;
-                var mimeType = selected ? "image/jpeg" : _image.MimeType;
+                var mimeType = selected ? "image/png" : _image.MimeType;
                 var extension = ExtensionForMimeType(mimeType);
                 var picker = new FileSavePicker { SuggestedFileName = selected ? "artist-selection" : "artist-image" };
                 picker.FileTypeChoices.Add(NameForExtension(extension), [extension]);
@@ -286,7 +286,7 @@ namespace App.Pages
                 ExifOrientationMode.RespectExifOrientation,
                 ColorManagementMode.ColorManageToSRgb);
             using var output = new InMemoryRandomAccessStream();
-            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.JpegEncoderId, output);
+            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, output);
             encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore,
                 sourceRect.Width, sourceRect.Height, 96, 96, pixels.DetachPixelData());
             await encoder.FlushAsync();
@@ -358,7 +358,7 @@ namespace App.Pages
             {
                 var bitmapReference = await content.GetBitmapAsync();
                 using var input = await bitmapReference.OpenReadAsync();
-                _pendingAttachment = new GeneratedImage(await ConvertToJpegAsync(input), "image/jpeg");
+                _pendingAttachment = new GeneratedImage(await ConvertToPngAsync(input), "image/png");
                 UpdateControls();
             }
             catch (Exception exception)
@@ -367,44 +367,13 @@ namespace App.Pages
             }
         }
 
-        private static async Task<GeneratedImage> CreateJpegContextImageAsync(GeneratedImage image)
-        {
-            using var source = new InMemoryRandomAccessStream();
-            await source.WriteAsync(image.Data.AsBuffer());
-            source.Seek(0);
-            return new GeneratedImage(await ConvertToJpegAsync(source), "image/jpeg");
-        }
-
-        private static async Task<byte[]> ConvertToJpegAsync(IRandomAccessStream source)
+        private static async Task<byte[]> ConvertToPngAsync(IRandomAccessStream source)
         {
             var decoder = await BitmapDecoder.CreateAsync(source);
-            const uint maximumDimension = 720;
-            var scale = Math.Min(
-                1d,
-                maximumDimension / (double)Math.Max(decoder.OrientedPixelWidth, decoder.OrientedPixelHeight));
-            var width = Math.Max(1u, (uint)Math.Round(decoder.OrientedPixelWidth * scale));
-            var height = Math.Max(1u, (uint)Math.Round(decoder.OrientedPixelHeight * scale));
-            var transform = new BitmapTransform
-            {
-                ScaledWidth = width,
-                ScaledHeight = height,
-            };
-            var pixels = await decoder.GetPixelDataAsync(
-                BitmapPixelFormat.Bgra8,
-                BitmapAlphaMode.Ignore,
-                transform,
-                ExifOrientationMode.RespectExifOrientation,
-                ColorManagementMode.ColorManageToSRgb);
+            using var bitmap = await decoder.GetSoftwareBitmapAsync();
             using var output = new InMemoryRandomAccessStream();
-            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.JpegEncoderId, output);
-            encoder.SetPixelData(
-                BitmapPixelFormat.Bgra8,
-                BitmapAlphaMode.Ignore,
-                width,
-                height,
-                decoder.DpiX,
-                decoder.DpiY,
-                pixels.DetachPixelData());
+            var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, output);
+            encoder.SetSoftwareBitmap(bitmap);
             await encoder.FlushAsync();
             output.Seek(0);
             var data = new byte[output.Size];

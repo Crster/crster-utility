@@ -4,8 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:App.Controls"
     PreviewKeyDown="CodyPage_PreviewKeyDown">
-    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
-          KeyboardAcceleratorPlacementMode="Hidden">
+    <Grid x:Name="RootGrid" KeyboardAcceleratorPlacementMode="Hidden">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -243,12 +242,10 @@
 
             <Grid x:Name="MonacoPreloadHost" Grid.Column="2" Margin="0,42,0,0"
                   Visibility="Collapsed" Opacity="0" IsHitTestVisible="False" Canvas.ZIndex="10"
-                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-                  Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"/>
+                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
 
             <Border x:Name="CodyChatDock" Grid.Column="3" Visibility="Collapsed"
-                    BorderThickness="1,0,0,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+                    BorderThickness="1,0,0,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
                 <ContentControl x:Name="CodyChatHost"
                                 HorizontalContentAlignment="Stretch"
                                 VerticalContentAlignment="Stretch"/>

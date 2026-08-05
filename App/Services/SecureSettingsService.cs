@@ -73,7 +73,16 @@ namespace App.Services
         {
             if (!IsConfigured) throw new InvalidOperationException("Application storage has not been configured.");
             settings.OpenAiCompatibleBaseUrl = ValidateBaseUrl(settings.OpenAiCompatibleBaseUrl);
-            if (!string.Equals(Current.OpenAiCompatibleBaseUrl, settings.OpenAiCompatibleBaseUrl, StringComparison.OrdinalIgnoreCase)
+            var providerChanged = !string.Equals(Current.OpenAiCompatibleBaseUrl, settings.OpenAiCompatibleBaseUrl, StringComparison.OrdinalIgnoreCase);
+            if (providerChanged)
+            {
+                // Models belong to a provider. Never carry a model ID over to a different endpoint.
+                settings.EmbeddingModel = string.Empty;
+                settings.LowCostModel = string.Empty;
+                settings.HighCostModel = string.Empty;
+                settings.ArtistModel = string.Empty;
+            }
+            if (providerChanged
                 || !string.Equals(Current.EmbeddingModel, settings.EmbeddingModel, StringComparison.OrdinalIgnoreCase))
                 settings.EmbeddingsNeedRebuild = true;
             if (!string.Equals(Current.DatabaseFolder, settings.DatabaseFolder, StringComparison.OrdinalIgnoreCase))
@@ -188,11 +197,11 @@ namespace App.Services
             new("recording.microphoneDeviceId", "Recording microphone", "", value => value.RecordingMicrophoneDeviceId),
             new("caffeine.shortcut", "Caffeine shortcut", "Ctrl+Shift+Alt+F12", value => value.CaffeineShortcut),
             new("ai.lastChatPersonality", "Last chat personality", "Secretary", value => value.LastChatPersonality),
-            new("ai.embeddingModel", "Embedding model", "text-embedding-3-small", value => value.EmbeddingModel),
+            new("ai.embeddingModel", "Embedding model", "", value => value.EmbeddingModel),
             new("ai.embeddingsNeedRebuild", "Embeddings need rebuild", false, value => value.EmbeddingsNeedRebuild),
-            new("ai.lowCostModel", "Low cost model", "gpt-4.1-mini", value => value.LowCostModel),
-            new("ai.highCostModel", "High cost model", "gpt-4.1", value => value.HighCostModel),
-            new("ai.artistModel", "Artist model", "gpt-image-2", value => value.ArtistModel),
+            new("ai.lowCostModel", "Low cost model", "", value => value.LowCostModel),
+            new("ai.highCostModel", "High cost model", "", value => value.HighCostModel),
+            new("ai.artistModel", "Artist model", "", value => value.ArtistModel),
             new("technician.workspace", "Technician workspace", "", value => value.TechnicianWorkspace),
             new("cody.workspace", "Cody workspace", "", value => value.CodyWorkspace),
             new("general.city", "City", "Manila", value => value.City),
@@ -209,11 +218,11 @@ namespace App.Services
         public string RecordingMicrophoneDeviceId { get; set; } = string.Empty;
         public string CaffeineShortcut { get; set; } = "Ctrl+Shift+Alt+F12";
         public string LastChatPersonality { get; set; } = "Secretary";
-        public string EmbeddingModel { get; set; } = "text-embedding-3-small";
+        public string EmbeddingModel { get; set; } = string.Empty;
         public bool EmbeddingsNeedRebuild { get; set; }
-        public string LowCostModel { get; set; } = "gpt-4.1-mini";
-        public string HighCostModel { get; set; } = "gpt-4.1";
-        public string ArtistModel { get; set; } = "gpt-image-2";
+        public string LowCostModel { get; set; } = string.Empty;
+        public string HighCostModel { get; set; } = string.Empty;
+        public string ArtistModel { get; set; } = string.Empty;
         public string TechnicianWorkspace { get; set; } = string.Empty;
         public string CodyWorkspace { get; set; } = string.Empty;
         public string City { get; set; } = "Manila";
@@ -241,8 +250,6 @@ namespace App.Services
             result.LowCostModel = Text("ai.lowCostModel", result.LowCostModel);
             result.HighCostModel = Text("ai.highCostModel", result.HighCostModel);
             result.ArtistModel = Text("ai.artistModel", result.ArtistModel);
-            if (string.Equals(result.ArtistModel, "gpt-image-1", StringComparison.OrdinalIgnoreCase))
-                result.ArtistModel = "gpt-image-2";
             result.TechnicianWorkspace = Text("technician.workspace", result.TechnicianWorkspace);
             result.CodyWorkspace = Text("cody.workspace", result.CodyWorkspace);
             result.City = Text("general.city", result.City);

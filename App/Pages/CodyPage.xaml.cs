@@ -120,6 +120,7 @@ namespace App.Pages
             CodyChat.PlanReworkRequested += CodyChat_PlanReworkRequested;
             CodyChat.WorkspaceRequested += CodyChat_WorkspaceRequested;
             CodyChat.SessionChanged += CodyChat_SessionChanged;
+            CodyChat.FileOpenRequested += CodyChat_FileOpenRequestedAsync;
             Loaded += CodyPage_Loaded;
             Unloaded += CodyPage_Unloaded;
             UpdateModeDisplay();
@@ -1700,6 +1701,61 @@ namespace App.Pages
             return resolved;
         }
 
+        private async Task CodyChat_FileOpenRequestedAsync(string fileReference)
+        {
+            var file = ResolveCodyFileReference(fileReference);
+            if (file is null) return;
+            await OpenEditorAsync(file, false);
+        }
+
+        private WorkspaceFileItem? ResolveCodyFileReference(string fileReference)
+        {
+            var candidate = Regex.Replace(fileReference.Trim(), @"(?:#L|:L?)\d+(?::\d+)?$", string.Empty);
+            if (Uri.TryCreate(candidate, UriKind.Absolute, out var uri))
+            {
+                if (!uri.IsFile) return null;
+                candidate = uri.LocalPath;
+            }
+
+            try
+            {
+                if (Path.IsPathFullyQualified(candidate) && File.Exists(candidate))
+                    return CreateWorkspaceFileItem(candidate);
+                if (string.IsNullOrWhiteSpace(_settings.CodyWorkspace)) return null;
+
+                var workspacePath = Path.GetFullPath(_settings.CodyWorkspace);
+                var directPath = Path.GetFullPath(Path.Combine(workspacePath, candidate));
+                if (File.Exists(directPath)) return CreateWorkspaceFileItem(directPath);
+
+                // A response may mention only a filename. Resolve it when that name is unique in the workspace.
+                if (candidate.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0) return null;
+                var matches = EnumerateWorkspaceFiles(workspacePath)
+                    .Where(file => file.Name.Equals(candidate, StringComparison.OrdinalIgnoreCase))
+                    .Take(2)
+                    .ToList();
+                return matches.Count == 1 ? matches[0] : null;
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+            catch (NotSupportedException)
+            {
+                return null;
+            }
+        }
+
+        private WorkspaceFileItem CreateWorkspaceFileItem(string fullPath)
+        {
+            var relativePath = Path.GetFileName(fullPath);
+            if (!string.IsNullOrWhiteSpace(_settings.CodyWorkspace))
+            {
+                try { relativePath = Path.GetRelativePath(_settings.CodyWorkspace, fullPath); }
+                catch (ArgumentException) { }
+            }
+            return new WorkspaceFileItem(Path.GetFileName(fullPath), relativePath, fullPath);
+        }
+
         private async Task OpenEditorAsync(WorkspaceFileItem file, bool preview)
         {
             var searchQuery = _contentSearchQuery;
@@ -2368,7 +2424,9 @@ namespace App.Pages
             var thinking = mode.ThinkDeep ? "high thinking" : "no thinking";
             var search = CodyAgentService.WebSearchFor(mode) ? " · web search" : string.Empty;
             ModelStatusText.Text = $"{CodyAgentService.ModelFor(mode)} · {thinking}{search}";
-            ToolTipService.SetToolTip(SmartToggle, $"Use {App.Settings.Current.HighCostModel} with web search");
+            ToolTipService.SetToolTip(SmartToggle, CodyAgentService.WebSearchFor(mode)
+                ? $"Use {App.Settings.Current.HighCostModel} with web search"
+                : $"Use {App.Settings.Current.HighCostModel}; this model does not support built-in web search");
             ToolTipService.SetToolTip(ThinkToggle, "Use high reasoning effort");
             ToolTipService.SetToolTip(ModelStatusText, CreateInstructionToolTip(mode));
         }

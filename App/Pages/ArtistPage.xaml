@@ -29,8 +29,8 @@
                     <Grid x:Name="PreviewHost" MinWidth="360" MinHeight="260">
                         <Image x:Name="PreviewImage" Stretch="None" />
 
-                        <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center"
-                            Margin="24">
+                        <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Top"
+                            Margin="0,48,0,0">
                             <FontIcon Glyph="&#xE91B;" FontSize="64"
                               Foreground="{ThemeResource TextFillColorDisabledBrush}"
                               HorizontalAlignment="Center" />

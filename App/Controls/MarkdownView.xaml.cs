@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
@@ -30,6 +31,8 @@ namespace App.Controls
         private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
         private readonly List<FrameworkElement> _thumbnailImages = [];
         private Func<string, string?>? _attachmentResolver;
+        private Func<string>? _codyWorkspacePath;
+        private Func<string, Task>? _openCodyFileAsync;
         private bool _notebookMode;
         private PasswordCopyValue? _activePassword;
         private sealed record PasswordCopyValue(string RawValue);
@@ -55,6 +58,13 @@ namespace App.Controls
             _notebookMode = true;
             _attachmentResolver = attachmentResolver;
             Render(Markdown);
+        }
+
+        /// <summary>Enables Cody-specific links without changing the behavior of notebook markdown.</summary>
+        internal void ConfigureCodyChat(Func<string> workspacePath, Func<string, Task> openFileAsync)
+        {
+            _codyWorkspacePath = workspacePath;
+            _openCodyFileAsync = openFileAsync;
         }
 
         private static void OnMarkdownChanged(DependencyObject dependencyObject, DependencyPropertyChangedEventArgs args) =>
@@ -167,10 +177,13 @@ namespace App.Controls
                         target.Add(new Run { Text = emoji.Match });
                         break;
                     case LiteralInline literal:
-                        target.Add(new Run { Text = literal.Content.ToString() });
+                        AddTargetAwareText(literal.Content.ToString(), target);
                         break;
                     case CodeInline code:
-                        target.Add(new Run { Text = code.Content, FontFamily = new FontFamily("Cascadia Mono") });
+                        if (CanOpenTarget(code.Content))
+                            target.Add(CreateTargetHyperlink(code.Content, code.Content, new FontFamily("Cascadia Mono")));
+                        else
+                            target.Add(new Run { Text = code.Content, FontFamily = new FontFamily("Cascadia Mono") });
                         break;
                     case LineBreakInline:
                         target.Add(new LineBreak());
@@ -244,14 +257,65 @@ namespace App.Controls
         {
             var targetValue = link.Url ?? string.Empty;
             var hyperlink = new Hyperlink();
-            AddInlines(link, hyperlink.Inlines);
-            if (!CanOpenTarget(targetValue)) hyperlink.Foreground = (Brush)Application.Current.Resources["TextFillColorDisabledBrush"];
-            else hyperlink.Click += async (_, _) =>
+            // Do not run target detection within link text; nested Hyperlinks are invalid.
+            hyperlink.Inlines.Add(new Run { Text = PlainText(link) });
+            ConfigureTargetHyperlink(hyperlink, targetValue);
+            return hyperlink;
+        }
+
+        /// <summary>Adds raw URLs and existing file paths as links in Cody responses.</summary>
+        private void AddTargetAwareText(string value, InlineCollection target)
+        {
+            if (_openCodyFileAsync is null)
             {
-                if (!IsControlDown()) return;
+                target.Add(new Run { Text = value });
+                return;
+            }
+
+            var lastIndex = 0;
+            foreach (Match match in Regex.Matches(value, @"\S+"))
+            {
+                if (match.Index > lastIndex) target.Add(new Run { Text = value[lastIndex..match.Index] });
+                var token = match.Value;
+                var candidate = TrimTargetPunctuation(token);
+                if (candidate.Length > 0 && CanOpenTarget(candidate))
+                {
+                    var prefixLength = token.IndexOf(candidate, StringComparison.Ordinal);
+                    if (prefixLength > 0) target.Add(new Run { Text = token[..prefixLength] });
+                    target.Add(CreateTargetHyperlink(candidate, candidate));
+                    var suffixIndex = prefixLength + candidate.Length;
+                    if (suffixIndex < token.Length) target.Add(new Run { Text = token[suffixIndex..] });
+                }
+                else
+                {
+                    target.Add(new Run { Text = token });
+                }
+                lastIndex = match.Index + match.Length;
+            }
+            if (lastIndex < value.Length) target.Add(new Run { Text = value[lastIndex..] });
+        }
+
+        private Hyperlink CreateTargetHyperlink(string displayText, string targetValue, FontFamily? fontFamily = null)
+        {
+            var hyperlink = new Hyperlink();
+            if (fontFamily is not null) hyperlink.FontFamily = fontFamily;
+            hyperlink.Inlines.Add(new Run { Text = displayText });
+            ConfigureTargetHyperlink(hyperlink, targetValue);
+            return hyperlink;
+        }
+
+        private void ConfigureTargetHyperlink(Hyperlink hyperlink, string targetValue)
+        {
+            if (!CanOpenTarget(targetValue))
+            {
+                hyperlink.Foreground = (Brush)Application.Current.Resources["TextFillColorDisabledBrush"];
+                return;
+            }
+            hyperlink.Click += async (_, _) =>
+            {
+                if (_openCodyFileAsync is null && !IsControlDown()) return;
                 await OpenTargetAsync(targetValue);
             };
-            return hyperlink;
         }
 
         private Microsoft.UI.Xaml.Documents.Inline CreateImageInline(LinkInline link)
@@ -390,7 +454,64 @@ namespace App.Controls
             foreach (var image in _thumbnailImages) image.Width = width;
         }
 
-        private bool CanOpenTarget(string target) => ResolveTarget(target) is not null;
+        private bool CanOpenTarget(string target) =>
+            TryResolveCodyFilePath(target, out _)
+            || IsCodyFileReference(target)
+            || ResolveTarget(target) is not null;
+
+        private bool IsCodyFileReference(string target)
+        {
+            if (_openCodyFileAsync is null || string.IsNullOrWhiteSpace(target)) return false;
+            var candidate = StripLineReference(target.Trim());
+            if (Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && !uri.IsFile) return false;
+            var fileName = Path.GetFileName(candidate);
+            return fileName.Length > 0
+                && (Path.HasExtension(fileName) || fileName.StartsWith(".", StringComparison.Ordinal));
+        }
+
+        private bool TryResolveCodyFilePath(string target, out string path)
+        {
+            path = string.Empty;
+            if (_openCodyFileAsync is null || string.IsNullOrWhiteSpace(target)) return false;
+
+            var candidate = StripLineReference(target.Trim());
+            if (Uri.TryCreate(candidate, UriKind.Absolute, out var uri))
+            {
+                if (!uri.IsFile) return false;
+                candidate = uri.LocalPath;
+            }
+
+            try
+            {
+                if (!Path.IsPathFullyQualified(candidate))
+                {
+                    var workspacePath = _codyWorkspacePath?.Invoke();
+                    if (string.IsNullOrWhiteSpace(workspacePath)) return false;
+                    candidate = Path.Combine(workspacePath, candidate);
+                }
+                candidate = Path.GetFullPath(candidate);
+                if (!File.Exists(candidate)) return false;
+                path = candidate;
+                return true;
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+            catch (NotSupportedException)
+            {
+                return false;
+            }
+        }
+
+        private static string StripLineReference(string target)
+        {
+            var match = Regex.Match(target, @"(?:#L|:L?)(\d+)(?::\d+)?$");
+            return match.Success ? target[..match.Index] : target;
+        }
+
+        private static string TrimTargetPunctuation(string target) =>
+            target.Trim('"', '\'', '`', '(', ')', '[', ']', '{', '}', '<', '>', '.', ',', ';', ':', '!', '?');
 
         private (Uri Uri, string? FilePath)? ResolveTarget(string target)
         {
@@ -410,6 +531,16 @@ namespace App.Controls
 
         private async Task OpenTargetAsync(string target)
         {
+            if (_openCodyFileAsync is not null && TryResolveCodyFilePath(target, out var filePath))
+            {
+                await _openCodyFileAsync(filePath);
+                return;
+            }
+            if (_openCodyFileAsync is not null && IsCodyFileReference(target))
+            {
+                await _openCodyFileAsync(StripLineReference(target.Trim()));
+                return;
+            }
             var resolved = ResolveTarget(target);
             if (resolved is null) return;
             try

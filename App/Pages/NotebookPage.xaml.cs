@@ -333,9 +333,23 @@ namespace App.Pages
                 var content = Clipboard.GetContent();
                 var containsStorageItems = content.Contains(StandardDataFormats.StorageItems);
                 var containsBitmap = content.Contains(StandardDataFormats.Bitmap);
-                if (!containsStorageItems && !containsBitmap) return;
+                var containsText = content.Contains(StandardDataFormats.Text);
+                if (!containsStorageItems && !containsBitmap && !containsText) return;
 
+                // Clipboard reads are asynchronous. Take ownership before awaiting so the
+                // TextBox does not also try to paste the same content on its native path.
                 e.Handled = true;
+
+                if (containsText)
+                {
+                    var selectionStart = NoteEditor.SelectionStart;
+                    var selectionLength = NoteEditor.SelectionLength;
+                    var text = await content.GetTextAsync();
+                    InsertPastedText(editingEntry, selectionStart, selectionLength, text);
+                    SaveStatusText.Text = string.Empty;
+                    return;
+                }
+
                 var references = new List<string>();
                 if (containsStorageItems)
                 {
@@ -349,7 +363,7 @@ namespace App.Pages
                             : $"[{file.Name}]({target})");
                     }
                 }
-                else
+                if (references.Count == 0 && containsBitmap)
                 {
                     var attachmentId = await _attachmentStorage.CopyBitmapAsync(await content.GetBitmapAsync());
                     references.Add($"![Pasted image](local://{attachmentId}.png)");
@@ -363,6 +377,21 @@ namespace App.Pages
             {
                 SaveStatusText.Text = $"Paste failed: {exception.Message}";
             }
+        }
+
+        private void InsertPastedText(NotebookEntry editingEntry, int selectionStart, int selectionLength, string text)
+        {
+            if (!ReferenceEquals(editingEntry, _editingEntry)) return;
+
+            var editorText = NoteEditor.Text;
+            var start = Math.Clamp(selectionStart, 0, editorText.Length);
+            NoteEditor.SelectionStart = start;
+            NoteEditor.SelectionLength = Math.Clamp(selectionLength, 0, editorText.Length - start);
+            NoteEditor.SelectedText = text;
+            // TextBox may normalize line endings while inserting clipboard text.
+            NoteEditor.SelectionStart = Math.Min(start + text.Length, NoteEditor.Text.Length);
+            NoteEditor.SelectionLength = 0;
+            NoteEditor.Focus(FocusState.Keyboard);
         }
 
         private async Task InsertSelectedFilePathAsync()

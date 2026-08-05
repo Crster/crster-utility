@@ -35,10 +35,7 @@ namespace App.Services
     /// <summary>Runs Cody's agentic coding loop against the configured AI provider and the workspace tools.</summary>
     internal sealed class CodyAgentService
     {
-        private const int MaximumToolCalls = 24;
-        private const int MaximumRounds = 60;
         private const int MaximumAgentInstructionsCharacters = 60_000;
-        private const string ToolLimitResult = "{\"success\":false,\"error\":\"Cody blocked this tool call because the tool-call limit was reached.\",\"suggestion\":\"Summarize what you found and tell the user what remains.\"}";
         private const string EmptyResponseRecoveryPrompt = "Write the answer for the user now, using the tool results already gathered. Do not call another tool.";
 
         private static readonly HashSet<string> AgentToolNames = new(StringComparer.Ordinal)
@@ -81,7 +78,10 @@ namespace App.Services
             ? OpenAiCompatibleThinkingLevel.High
             : OpenAiCompatibleThinkingLevel.Disabled;
 
-        public static bool WebSearchFor(CodyAgentMode mode) => mode.BeSmart;
+        // Model Studio's GLM series supports function calling but not built-in web search.
+        // Keep Smart mode available for its stronger model, without advertising a tool it cannot use.
+        public static bool WebSearchFor(CodyAgentMode mode) => mode.BeSmart
+            && !ModelFor(mode).StartsWith("glm-", StringComparison.OrdinalIgnoreCase);
 
         // Section: Instruction
         private const string InstructionTemplate = """
@@ -127,12 +127,15 @@ namespace App.Services
             bool planOnly = false)
         {
             var builder = new StringBuilder(InstructionTemplate);
+            var webSearchEnabled = WebSearchFor(mode);
             builder.Append("\n\nSelected workspace: ")
                 .Append(string.IsNullOrWhiteSpace(workspacePath) ? "none chosen yet" : workspacePath);
             builder.Append("\nActive model: ").Append(ModelFor(mode))
-                .Append(mode.BeSmart ? " (Be smart: high-capability model with web search)" : " (default: low-cost model)");
+                .Append(mode.BeSmart
+                    ? webSearchEnabled ? " (Be smart: high-capability model with web search)" : " (Be smart: high-capability model; web search unavailable)"
+                    : " (default: low-cost model)");
             builder.Append("\nThinking effort: ").Append(mode.ThinkDeep ? "high (Think deep)" : "none");
-            builder.Append("\nWeb search: ").Append(WebSearchFor(mode) ? "enabled" : "disabled");
+            builder.Append("\nWeb search: ").Append(webSearchEnabled ? "enabled" : "disabled");
             AppendAgentInstructions(builder, workspacePath);
             if (planOnly)
             {
@@ -222,22 +225,20 @@ namespace App.Services
             var instruction = BuildInstruction(_tools.WorkspacePath, mode, session.ContextText, planOnly);
             var declarations = CreateToolDeclarations(planOnly);
             IReadOnlyList<JsonObject> nextSteps = [OpenAiCompatibleClient.CreateUserStep(prompt, attachments)];
-            var toolCallCount = 0;
             var recoveryAttempted = false;
             var answer = string.Empty;
 
             if (mode.ThinkDeep)
                 Debug.WriteLine($"[Cody:ThinkDeep] Turn start. Prompt=\"{Truncate(prompt, 120)}\" HistoryCount={session.History.Count}");
 
-            for (var round = 0; round < MaximumRounds; round++)
+            for (var round = 0; ; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var toolLimitReached = toolCallCount >= MaximumToolCalls;
                 var result = await CreateTurnAsync(
                     session.History,
                     nextSteps,
                     instruction,
-                    toolLimitReached ? null : declarations,
+                    declarations,
                     mode,
                     report,
                     cancellationToken);
@@ -305,14 +306,11 @@ namespace App.Services
                             ["suggestion"] = "Retry the same tool call with strictly valid JSON arguments."
                         }.ToJsonString());
                     }
-                    else if (toolCallCount >= MaximumToolCalls)
-                        toolResult = new ToolResult(false, ToolLimitResult);
                     else if (!(planOnly ? PlanOnlyToolNames : AgentToolNames).Contains(call.Name))
                         toolResult = new ToolResult(false, $"{{\"success\":false,\"error\":\"Cody cannot use the tool \\u201C{call.Name}\\u201D.\"}}");
                     else
                         toolResult = await _tools.ExecuteAsync(call.Name, call.Arguments, cancellationToken);
 
-                    toolCallCount++;
                     report(new CodyAgentEvent(
                         CodyAgentEventKind.ToolCompleted,
                         call.Name,
@@ -327,12 +325,6 @@ namespace App.Services
                 nextSteps = [];
             }
 
-            if (mode.ThinkDeep)
-                Debug.WriteLine($"[Cody:ThinkDeep] Step limit reached (MaximumRounds={MaximumRounds}). AnswerEmpty={string.IsNullOrWhiteSpace(answer)}");
-
-            return string.IsNullOrWhiteSpace(answer)
-                ? "Cody reached the step limit for this request. Ask a narrower follow-up to continue."
-                : answer;
         }
 
         private static string Truncate(string value, int maxLength) =>
@@ -357,7 +349,8 @@ namespace App.Services
                     instruction,
                     declarations,
                     cancellationToken,
-                    ThinkingFor(mode));
+                    ThinkingFor(mode),
+                    includeWebSearch: WebSearchFor(mode));
             }
             catch (Exception exception) when (mode.ThinkDeep)
             {

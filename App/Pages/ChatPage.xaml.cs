@@ -182,7 +182,13 @@ namespace App.Pages
                         ChatPersonality.Smart => OpenAiCompatibleThinkingLevel.High,
                         _ => OpenAiCompatibleThinkingLevel.Disabled
                     };
+                    var webSearchEnabled = _personality == ChatPersonality.Smart
+                        && _client!.SupportsBuiltInWebSearch(model);
                     var systemInstruction = EffectiveSystemInstruction();
+                    if (_personality == ChatPersonality.Smart && !webSearchEnabled)
+                    {
+                        systemInstruction += "\nThe selected model does not provide built-in web search. Do not claim to have searched the web or call a web-search tool; answer from your existing knowledge and clearly state when current information needs a supported model.";
+                    }
                     var result = await _client!.CreateSimpleInteractionAsync(
                         model,
                         Session.History,
@@ -191,8 +197,8 @@ namespace App.Pages
                         tools,
                         operationCancellation.Token,
                         thinkingLevel,
-                        _personality == ChatPersonality.Smart,
-                        _personality == ChatPersonality.Smart ? QueueStreamedAssistantText : null);
+                        webSearchEnabled,
+                        webSearchEnabled ? QueueStreamedAssistantText : null);
                     foreach (var nextStep in nextSteps)
                     {
                         var historyStep = CreateHistoryStep(nextStep);
@@ -549,16 +555,15 @@ namespace App.Pages
             StatusText.Text = CopyText(summary) ? "Summary copied." : "Clipboard is busy. Try again.";
         }
 
-        private async Task SaveHistoryToNoteAsync(string history)
+        private async Task SaveMessageToNoteAsync(string message)
         {
-            var note = await GenerateHistorySummaryAsync(history, "Create concise, standalone Markdown documentation that is easy to understand later. Start with a descriptive level-one title. Then use exactly these level-two sections in this order: 'User request/problem/issue' and 'Solution/Answer'. Restate the user's request, problem, or issue clearly in the first section. Document the final solution or answer clearly in the second section, including essential decisions or steps when useful. Use compact paragraphs or bullets. Include only information supported by the conversation, do not address the reader, invent details, or mention the source conversation, and label unresolved points clearly.");
-            if (note is null) return;
+            if (_isBusy || string.IsNullOrWhiteSpace(message)) return;
 
             SetBusy(true, "Saving note...");
             try
             {
-                await _notebookDatabase.CreateAsync(note);
-                StatusText.Text = "Saved summary to Notes.";
+                await _notebookDatabase.CreateAsync(message);
+                StatusText.Text = "Saved reply to Notes.";
             }
             catch (Exception exception)
             {
@@ -1071,8 +1076,8 @@ namespace App.Pages
             }));
             if (message.Kind == ChatItemKind.Assistant)
             {
-                actions.Children.Add(CreateHistoryActionButton("\uE9CE", "Copy summary", () => CopySummaryAsync(HistoryThrough(message))));
-                actions.Children.Add(CreateHistoryActionButton("\uE74E", "Save to Note", () => SaveHistoryToNoteAsync(HistoryThrough(message))));
+                actions.Children.Add(CreateHistoryActionButton("\uE9CE", "Copy summary", () => CopySummaryAsync(message.Content)));
+                actions.Children.Add(CreateHistoryActionButton("\uE74E", "Save to Note", () => SaveMessageToNoteAsync(message.Content)));
             }
             return actions;
         }

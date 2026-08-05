@@ -22,7 +22,8 @@
                         <TextBlock Text="Models available to this API key. Changes are saved immediately." TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                         <Grid ColumnSpacing="8" HorizontalAlignment="Left">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="320"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <ComboBox x:Name="EmbeddingModelBox" Header="Embedding" DisplayMemberPath="Name" SelectionChanged="EmbeddingModelBox_SelectionChanged"/>
+                            <AutoSuggestBox x:Name="EmbeddingModelBox" Header="Embedding" PlaceholderText="Select a model" TextMemberPath="Name"
+                                            PointerPressed="ModelBox_PointerPressed" LostFocus="ModelBox_LostFocus" PreviewKeyDown="ModelBox_PreviewKeyDown" TextChanged="ModelBox_TextChanged" SuggestionChosen="EmbeddingModelBox_SuggestionChosen"/>
                             <Button x:Name="RebuildEmbeddingsButton" Grid.Column="1" VerticalAlignment="Bottom" Visibility="Collapsed"
                                     Click="RebuildEmbeddingsButton_Click"
                                     ToolTipService.ToolTip="Clear and regenerate every note, memo, and todo embedding with the selected model"
@@ -35,9 +36,14 @@
                         </Grid>
                         <TextBlock x:Name="EmbeddingRebuildHint" Text="The embedding endpoint or model changed. Rebuild to regenerate stored vectors."
                                    Visibility="Collapsed" TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <ComboBox x:Name="LowCostModelBox" Header="Low Cost" DisplayMemberPath="Name" SelectionChanged="LowCostModelBox_SelectionChanged"/>
-                        <ComboBox x:Name="HighCostModelBox" Header="High Cost" DisplayMemberPath="Name" SelectionChanged="HighCostModelBox_SelectionChanged"/>
-                        <ComboBox x:Name="ArtistModelBox" Header="Artist" DisplayMemberPath="Name" SelectionChanged="ArtistModelBox_SelectionChanged"/>
+                        <TextBlock x:Name="RebuildEmbeddingsErrorText" Visibility="Collapsed" TextWrapping="Wrap" FontSize="12"
+                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"/>
+                        <AutoSuggestBox x:Name="LowCostModelBox" Header="Low Cost" PlaceholderText="Select a model" TextMemberPath="Name"
+                                        PointerPressed="ModelBox_PointerPressed" LostFocus="ModelBox_LostFocus" PreviewKeyDown="ModelBox_PreviewKeyDown" TextChanged="ModelBox_TextChanged" SuggestionChosen="LowCostModelBox_SuggestionChosen"/>
+                        <AutoSuggestBox x:Name="HighCostModelBox" Header="High Cost" PlaceholderText="Select a model" TextMemberPath="Name"
+                                        PointerPressed="ModelBox_PointerPressed" LostFocus="ModelBox_LostFocus" PreviewKeyDown="ModelBox_PreviewKeyDown" TextChanged="ModelBox_TextChanged" SuggestionChosen="HighCostModelBox_SuggestionChosen"/>
+                        <AutoSuggestBox x:Name="ArtistModelBox" Header="Artist" PlaceholderText="Select a model" TextMemberPath="Name"
+                                        PointerPressed="ModelBox_PointerPressed" LostFocus="ModelBox_LostFocus" PreviewKeyDown="ModelBox_PreviewKeyDown" TextChanged="ModelBox_TextChanged" SuggestionChosen="ArtistModelBox_SuggestionChosen"/>
                     </StackPanel>
                     <!-- Section: Location -->
                     <StackPanel Spacing="6">

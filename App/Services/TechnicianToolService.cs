@@ -15,8 +15,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Channels;
 using App.Models;
-using OpenAI.Responses;
-#pragma warning disable OPENAI001
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -60,7 +58,7 @@ namespace App.Services
 
         public string WorkspacePath { get; set; } = string.Empty;
 
-        public static JsonArray CreateExecutionDeclarations(bool includeGoogleSearch = false)
+        public static JsonArray CreateExecutionDeclarations(bool includeWebSearch = false)
         {
             JsonArray declarations =
             [
@@ -78,9 +76,9 @@ namespace App.Services
                 Function("terminate_process", "Use to stop one running process by its numeric ID. Always requires user confirmation.", Props(("process_id", Integer("Positive process ID returned by list_running_processes."))), "process_id"),
                 Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", SecretaryToolService.DataKindSchema())), "context_type")
             ];
-            if (includeGoogleSearch)
+            if (includeWebSearch)
                 declarations.Add(Function(
-                    "google_search",
+                    "web_search",
                     "Search the web for current external information. Use a focused query and rely only on the returned grounded answer and sources.",
                     Props(("query", String())),
                     "query"));
@@ -109,7 +107,7 @@ namespace App.Services
                     "list_workspace_commands" or "update_workspace_command" => await ExecuteWorkspaceCommandConfigurationAsync(name, arguments),
                     "list_running_processes" => ListProcesses(),
                     "terminate_process" => await KillProcessAsync(OptionalInt(arguments, "process_id", 0)),
-                    "google_search" => await GoogleSearchAsync(Required(arguments, "query"), token),
+                    "web_search" => await WebSearchAsync(Required(arguments, "query"), token),
                     "get_local_context" => NormalizeResult(await _secretaryTools.ExecuteAsync("get_local_context", arguments, token)),
                     _ => Error("unknown_tool", $"Technician cannot use the tool “{name}”.")
                 };
@@ -1615,16 +1613,25 @@ namespace App.Services
             return Ok("Terminated the process.", new JsonObject { ["process_id"] = processId });
         }
 
-        private async Task<ToolResult> GoogleSearchAsync(string query, CancellationToken token)
+        private async Task<ToolResult> WebSearchAsync(string query, CancellationToken token)
         {
-            var options = new CreateResponseOptions { Model = App.Settings.Current.LowCostModel };
-            options.Tools.Add(ResponseTool.CreateWebSearchTool());
-            options.InputItems.Add(ResponseItem.CreateUserMessageItem(
-                "Answer the search query using grounded web results. Be concise and factual. Include uncertainty when the available sources do not establish a claim.\n\n" + query));
-            var response = await _client.Responses.CreateResponseAsync(options, token);
-            var result = new OpenAiCompatibleTurnResult { Text = response.Value.GetOutputText() };
+            if (!_client.SupportsBuiltInWebSearch(App.Settings.Current.LowCostModel))
+            {
+                return Error(
+                    "search_unavailable",
+                    "The selected model does not support built-in web search. Choose a model with web-search support, then retry.");
+            }
+            var result = await _client.CreateSimpleInteractionAsync(
+                App.Settings.Current.LowCostModel,
+                [],
+                [OpenAiCompatibleClient.CreateUserStep(query, [])],
+                "Answer the search query using grounded web results. Be concise and factual. Include uncertainty when the available sources do not establish a claim.",
+                null,
+                token,
+                OpenAiCompatibleThinkingLevel.Disabled,
+                includeWebSearch: true);
             if (string.IsNullOrWhiteSpace(result.Text))
-                return Error("search_unavailable", "Google Search returned no grounded answer.");
+                return Error("search_unavailable", "Web search returned no grounded answer.");
 
             var sources = new JsonArray(result.Sources
                 .DistinctBy(source => source.Uri)

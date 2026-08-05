@@ -23,9 +23,10 @@ namespace App.Services
     {
         private const int MaximumFunctionResultCharacters = 12_000;
         private const string ArtistOutputSizeInstruction =
-            "Generate a clear, sharp image with a maximum output dimension of 720 pixels on its longest edge.\n\n";
+            "Generate a clear, sharp landscape image at exactly 720 by 540 pixels (4:3 aspect ratio).\n\n";
         private readonly HttpClient _downloadClient = new() { Timeout = TimeSpan.FromMinutes(5) };
         private readonly string _apiKey;
+        private readonly string _compatibleApiBaseUrl;
         private readonly string _imageApiBaseUrl;
         private readonly string _nativeDashScopeBaseUrl;
         private readonly OpenAIClient _openAiClient;
@@ -35,11 +36,12 @@ namespace App.Services
         public OpenAiCompatibleClient(string baseUrl, string apiKey)
         {
             _apiKey = apiKey;
-            _imageApiBaseUrl = $"{baseUrl.TrimEnd('/')}/images";
-            _nativeDashScopeBaseUrl = baseUrl.TrimEnd('/').Replace("/compatible-mode/v1", "/api/v1", StringComparison.OrdinalIgnoreCase);
+            _compatibleApiBaseUrl = baseUrl.TrimEnd('/');
+            _imageApiBaseUrl = $"{_compatibleApiBaseUrl}/images";
+            _nativeDashScopeBaseUrl = _compatibleApiBaseUrl.Replace("/compatible-mode/v1", "/api/v1", StringComparison.OrdinalIgnoreCase);
             _openAiClient = new OpenAIClient(
                 new ApiKeyCredential(apiKey),
-                new OpenAIClientOptions { Endpoint = new Uri($"{baseUrl.TrimEnd('/')}/") });
+                new OpenAIClientOptions { Endpoint = new Uri($"{_compatibleApiBaseUrl}/") });
         }
 
         // Section: Models
@@ -63,30 +65,7 @@ namespace App.Services
                     SupportsThinking = true
                 });
             }
-            AddDefaultModel(models, App.Settings.Current.LowCostModel, supportsChat: true);
-            AddDefaultModel(models, App.Settings.Current.HighCostModel, supportsChat: true);
-            AddDefaultModel(models, App.Settings.Current.EmbeddingModel, supportsEmbedding: true);
-            AddDefaultModel(models, App.Settings.Current.ArtistModel, supportsImageGeneration: true);
             return models.OrderBy(model => model.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
-        }
-
-        private static void AddDefaultModel(
-            ICollection<OpenAiCompatibleModel> models,
-            string id,
-            bool supportsChat = false,
-            bool supportsEmbedding = false,
-            bool supportsImageGeneration = false)
-        {
-            if (models.Any(model => string.Equals(model.Id, id, StringComparison.OrdinalIgnoreCase))) return;
-            models.Add(new OpenAiCompatibleModel
-            {
-                Id = id,
-                DisplayName = id,
-                SupportsChat = supportsChat,
-                SupportsEmbedding = supportsEmbedding,
-                SupportsImageGeneration = supportsImageGeneration,
-                SupportsThinking = supportsChat
-            });
         }
 
         // Section: Attachments
@@ -114,6 +93,7 @@ namespace App.Services
 
         private async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken)
         {
+            RequireSelectedModel(App.Settings.Current.EmbeddingModel, "an embedding");
             if (text.Length > 24_000) text = text[..24_000];
             var options = new EmbeddingGenerationOptions
             {
@@ -150,6 +130,8 @@ namespace App.Services
             bool includeWebSearch = false,
             Action<string>? onTextDelta = null)
         {
+            RequireSelectedModel(model, "a low-cost or high-cost");
+            includeWebSearch &= SupportsBuiltInWebSearch(model);
             if (includeWebSearch)
                 return await CreateResponsesInteractionAsync(
                     model,
@@ -199,6 +181,10 @@ namespace App.Services
             return ParseChatCompletion(root);
         }
 
+        /// <summary>Whether the selected provider/model combination exposes a server-side web-search tool.</summary>
+        public bool SupportsBuiltInWebSearch(string model) => !IsDashScopeEndpoint()
+            || !model.StartsWith("glm-", StringComparison.OrdinalIgnoreCase);
+
         /// <summary>Streams a turn through the Responses API. Web search, reasoning effort, and thinking deltas are opt-in.</summary>
         public Task<OpenAiCompatibleTurnResult> CreateStreamingInteractionAsync(
             string model,
@@ -210,8 +196,10 @@ namespace App.Services
             OpenAiCompatibleThinkingLevel thinkingLevel,
             bool includeWebSearch,
             Action<string>? onTextDelta,
-            Action<string>? onThinkingDelta) =>
-            CreateResponsesInteractionAsync(
+            Action<string>? onThinkingDelta)
+        {
+            RequireSelectedModel(model, "a low-cost or high-cost");
+            return CreateResponsesInteractionAsync(
                 model,
                 history,
                 newSteps,
@@ -222,6 +210,7 @@ namespace App.Services
                 includeWebSearch,
                 onTextDelta,
                 onThinkingDelta);
+        }
 
         private async Task<OpenAiCompatibleTurnResult> CreateResponsesInteractionAsync(
             string model,
@@ -235,6 +224,20 @@ namespace App.Services
             Action<string>? onTextDelta,
             Action<string>? onThinkingDelta)
         {
+            // DashScope's Responses API uses the built-in tool type "web_search". The OpenAI
+            // SDK serializes its own web-search tool as "web_search_preview", which DashScope
+            // can expose as a function call instead of running it. Send the documented native
+            // compatible payload for DashScope so web search stays server-side.
+            if (includeWebSearch && IsDashScopeEndpoint())
+                return await CreateDashScopeResponsesInteractionAsync(
+                    model,
+                    history,
+                    newSteps,
+                    systemInstruction,
+                    tools,
+                    cancellationToken,
+                    thinkingLevel);
+
             var options = new CreateResponseOptions
             {
                 Model = model,
@@ -327,6 +330,143 @@ namespace App.Services
                 });
             return result;
         }
+
+        private async Task<OpenAiCompatibleTurnResult> CreateDashScopeResponsesInteractionAsync(
+            string model,
+            IReadOnlyList<JsonObject> history,
+            IReadOnlyList<JsonObject> newSteps,
+            string systemInstruction,
+            JsonArray? tools,
+            CancellationToken cancellationToken,
+            OpenAiCompatibleThinkingLevel thinkingLevel)
+        {
+            var input = new JsonArray();
+            foreach (var step in history.Concat(newSteps))
+                input.Add(CreateDashScopeResponseInputItem(step));
+
+            var requestTools = new JsonArray { new JsonObject { ["type"] = "web_search" } };
+            foreach (var tool in tools?.OfType<JsonObject>() ?? [])
+            {
+                var name = tool["name"]?.GetValue<string>();
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                requestTools.Add(new JsonObject
+                {
+                    ["type"] = "function",
+                    ["name"] = name,
+                    ["description"] = tool["description"]?.GetValue<string>() ?? string.Empty,
+                    ["parameters"] = tool["parameters"]?.DeepClone() ?? new JsonObject()
+                });
+            }
+
+            var body = new JsonObject
+            {
+                ["model"] = model,
+                ["instructions"] = systemInstruction,
+                ["input"] = input,
+                ["tools"] = requestTools
+            };
+            if (DashScopeReasoningEffort(thinkingLevel) is { } effort)
+                body["reasoning"] = new JsonObject { ["effort"] = effort };
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{_compatibleApiBaseUrl}/responses")
+            {
+                Content = JsonContent.Create(body)
+            };
+            var response = await SendAuthorizedJsonRequestAsync(request, cancellationToken);
+            return ParseDashScopeResponse(response);
+        }
+
+        private static JsonObject CreateDashScopeResponseInputItem(JsonObject step) => step["type"]?.GetValue<string>() switch
+        {
+            "user_input" => new JsonObject { ["role"] = "user", ["content"] = ReadInternalText(step) },
+            "model_output" => new JsonObject { ["role"] = "assistant", ["content"] = ReadInternalText(step) },
+            "function_call" => new JsonObject
+            {
+                ["type"] = "function_call",
+                ["name"] = step["name"]?.GetValue<string>() ?? throw new InvalidOperationException("A function call did not include a name."),
+                ["arguments"] = (step["arguments"] as JsonObject)?.ToJsonString() ?? "{}",
+                ["call_id"] = step["call_id"]?.GetValue<string>() ?? step["id"]?.GetValue<string>() ?? throw new InvalidOperationException("A function call did not include an id.")
+            },
+            "function_result" => new JsonObject
+            {
+                ["type"] = "function_call_output",
+                ["call_id"] = step["call_id"]?.GetValue<string>() ?? throw new InvalidOperationException("A function result did not include a call id."),
+                ["output"] = step["result"]?.GetValue<string>() ?? string.Empty
+            },
+            _ => throw new InvalidOperationException("The conversation contains an unsupported response item.")
+        };
+
+        private static OpenAiCompatibleTurnResult ParseDashScopeResponse(JsonObject root)
+        {
+            var result = new OpenAiCompatibleTurnResult
+            {
+                InteractionId = root["id"]?.GetValue<string>(),
+                InputTokens = root["usage"]?["input_tokens"]?.GetValue<int>(),
+                OutputTokens = root["usage"]?["output_tokens"]?.GetValue<int>()
+            };
+
+            foreach (var item in root["output"]?.AsArray().OfType<JsonObject>() ?? [])
+            {
+                switch (item["type"]?.GetValue<string>())
+                {
+                    case "message":
+                        result.Text += string.Concat(item["content"]?.AsArray()
+                            .Where(content => content?["type"]?.GetValue<string>() == "output_text")
+                            .Select(content => content?["text"]?.GetValue<string>()) ?? []);
+                        break;
+                    case "reasoning":
+                        result.Thinking += string.Concat(item["summary"]?.AsArray()
+                            .Where(summary => summary?["type"]?.GetValue<string>() == "summary_text")
+                            .Select(summary => summary?["text"]?.GetValue<string>()) ?? []);
+                        break;
+                    case "function_call":
+                        var argumentsText = item["arguments"]?.GetValue<string>() ?? "{}";
+                        var (arguments, argumentsError) = ParseFunctionArguments(argumentsText);
+                        var call = new OpenAiCompatibleFunctionCall(
+                            item["call_id"]?.GetValue<string>() ?? item["id"]?.GetValue<string>() ?? Guid.NewGuid().ToString("N"),
+                            item["name"]?.GetValue<string>() ?? string.Empty,
+                            arguments,
+                            argumentsError);
+                        result.FunctionCalls.Add(call);
+                        result.Steps.Add(new JsonObject
+                        {
+                            ["type"] = "function_call",
+                            ["id"] = call.Id,
+                            ["name"] = call.Name,
+                            ["arguments"] = call.Arguments.DeepClone()
+                        });
+                        break;
+                    case "web_search_call":
+                        foreach (var source in item["action"]?["sources"]?.AsArray().OfType<JsonObject>() ?? [])
+                        {
+                            var uri = source["url"]?.GetValue<string>();
+                            if (!string.IsNullOrWhiteSpace(uri)) result.Sources.Add(new GroundedSource(uri, uri));
+                        }
+                        break;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(result.Text))
+                result.Steps.Insert(0, new JsonObject
+                {
+                    ["type"] = "model_output",
+                    ["content"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = result.Text } }
+                });
+            return result;
+        }
+
+        private bool IsDashScopeEndpoint() => Uri.TryCreate(_compatibleApiBaseUrl, UriKind.Absolute, out var endpoint)
+            && (endpoint.Host.EndsWith("dashscope.aliyuncs.com", StringComparison.OrdinalIgnoreCase)
+                || endpoint.Host.EndsWith("maas.aliyuncs.com", StringComparison.OrdinalIgnoreCase));
+
+        private static string? DashScopeReasoningEffort(OpenAiCompatibleThinkingLevel thinkingLevel) => thinkingLevel switch
+        {
+            OpenAiCompatibleThinkingLevel.Disabled => "none",
+            OpenAiCompatibleThinkingLevel.Minimal => "minimal",
+            OpenAiCompatibleThinkingLevel.Low => "low",
+            OpenAiCompatibleThinkingLevel.High => "high",
+            _ => null
+        };
 
         /// <summary>Parses tool-call arguments leniently. Local/open-weight models sometimes wrap JSON in code
         /// fences, leave a trailing comma, or truncate output; repair those before giving up. On failure the
@@ -597,6 +737,12 @@ namespace App.Services
             message.Contains("invalid", StringComparison.OrdinalIgnoreCase)
             && message.Contains("json", StringComparison.OrdinalIgnoreCase);
 
+        private static void RequireSelectedModel(string model, string modelType)
+        {
+            if (string.IsNullOrWhiteSpace(model))
+                throw new InvalidOperationException($"Select {modelType} model in Settings before using this feature.");
+        }
+
         // Section: Images
         public async Task<GeneratedImage> GenerateImageAsync(
             string prompt,
@@ -606,6 +752,7 @@ namespace App.Services
             if (string.IsNullOrWhiteSpace(prompt)) throw new ArgumentException("An image prompt is required.", nameof(prompt));
             var artistPrompt = ArtistOutputSizeInstruction + prompt.Trim();
             var model = App.Settings.Current.ArtistModel;
+            RequireSelectedModel(model, "an artist");
             if (IsQwenImageModel(model))
                 return await GenerateQwenImageAsync(model, artistPrompt, contextImages, cancellationToken);
 

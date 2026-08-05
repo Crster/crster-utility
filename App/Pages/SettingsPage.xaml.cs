@@ -21,6 +21,8 @@ namespace App.Pages
         private bool _isRebuilding;
         private AppSettings _settings = null!;
         private string _loadedModelEndpoint = string.Empty;
+        private IReadOnlyList<ModelChoice> _availableModelChoices = [];
+        private const int InitialModelSuggestionCount = 5;
 
         private sealed record MicrophoneChoice(string Id, string Name)
         {
@@ -136,15 +138,16 @@ namespace App.Pages
         private async Task LoadModelsAsync()
         {
             SetModelBoxesEnabled(false);
+            ClearModelChoices();
             _loadedModelEndpoint = string.Empty;
             try
             {
                 using var client = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
                 var models = await client.ListModelsAsync(System.Threading.CancellationToken.None);
-                SetModelChoices(EmbeddingModelBox, models.Where(model => model.SupportsEmbedding), _settings.EmbeddingModel);
-                SetModelChoices(LowCostModelBox, models.Where(model => model.SupportsChat && !model.SupportsImageGeneration), _settings.LowCostModel);
-                SetModelChoices(HighCostModelBox, models.Where(model => model.SupportsChat && !model.SupportsImageGeneration), _settings.HighCostModel);
-                SetModelChoices(ArtistModelBox, models.Where(model => model.SupportsImageGeneration), _settings.ArtistModel);
+                SetModelChoices(EmbeddingModelBox, models, _settings.EmbeddingModel);
+                SetModelChoices(LowCostModelBox, models, _settings.LowCostModel);
+                SetModelChoices(HighCostModelBox, models, _settings.HighCostModel);
+                SetModelChoices(ArtistModelBox, models, _settings.ArtistModel);
                 _loadedModelEndpoint = ModelEndpointKey(_settings);
                 SetModelBoxesEnabled(true);
             }
@@ -154,14 +157,14 @@ namespace App.Pages
             }
         }
 
-        private static void SetModelChoices(ComboBox box, IEnumerable<OpenAiCompatibleModel> models, string selectedId)
+        private void SetModelChoices(AutoSuggestBox box, IEnumerable<OpenAiCompatibleModel> models, string selectedId)
         {
             var choices = models.Select(model => new ModelChoice(model.Id, string.IsNullOrWhiteSpace(model.Description) ? model.DisplayName : $"{model.DisplayName} — {model.Description}"))
                 .OrderBy(choice => choice.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
-            if (!choices.Any(choice => string.Equals(choice.Id, selectedId, StringComparison.OrdinalIgnoreCase)))
-                choices.Insert(0, new ModelChoice(selectedId, $"{selectedId} (saved model; unavailable)"));
-            box.ItemsSource = choices;
-            box.SelectedItem = choices.First(choice => string.Equals(choice.Id, selectedId, StringComparison.OrdinalIgnoreCase));
+            _availableModelChoices = choices;
+            box.ItemsSource = InitialModelSuggestions();
+            box.Text = choices.FirstOrDefault(choice => string.Equals(choice.Id, selectedId, StringComparison.OrdinalIgnoreCase))?.Name
+                ?? string.Empty;
         }
 
         private void SetModelBoxesEnabled(bool enabled)
@@ -171,6 +174,19 @@ namespace App.Pages
             HighCostModelBox.IsEnabled = enabled;
             ArtistModelBox.IsEnabled = enabled;
             UpdateEmbeddingRebuildUi();
+        }
+
+        private void ClearModelChoices()
+        {
+            _availableModelChoices = [];
+            EmbeddingModelBox.Text = string.Empty;
+            LowCostModelBox.Text = string.Empty;
+            HighCostModelBox.Text = string.Empty;
+            ArtistModelBox.Text = string.Empty;
+            EmbeddingModelBox.ItemsSource = null;
+            LowCostModelBox.ItemsSource = null;
+            HighCostModelBox.ItemsSource = null;
+            ArtistModelBox.ItemsSource = null;
         }
 
         private void UpdateEmbeddingRebuildUi()
@@ -256,10 +272,53 @@ namespace App.Pages
             }
             await ReloadModelsIfEndpointChangedAsync();
         }
-        private void EmbeddingModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && EmbeddingModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.EmbeddingModel = choice.Id); }
+        private void ModelBox_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (sender is AutoSuggestBox box && box.ItemsSource is not null)
+                box.IsSuggestionListOpen = true;
+        }
+
+        private void ModelBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            if (!_loading && sender is AutoSuggestBox box)
+                SaveModel(box, ModelIdForText(box.Text));
+        }
+
+        private void ModelBox_PreviewKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+        {
+            if (e.Key != VirtualKey.Escape || sender is not AutoSuggestBox box) return;
+            box.IsSuggestionListOpen = false;
+            e.Handled = true;
+        }
+
+        private void ModelBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs e)
+        {
+            if (_loading || e.Reason != AutoSuggestionBoxTextChangeReason.UserInput) return;
+            var query = sender.Text.Trim();
+            sender.ItemsSource = string.IsNullOrWhiteSpace(query)
+                ? InitialModelSuggestions()
+                : _availableModelChoices.Where(choice =>
+                    choice.Id.Contains(query, StringComparison.OrdinalIgnoreCase)
+                    || choice.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+            sender.IsSuggestionListOpen = true;
+        }
+
+        private IReadOnlyList<ModelChoice> InitialModelSuggestions() =>
+            _availableModelChoices.Take(InitialModelSuggestionCount).ToList();
+
+        private string ModelIdForText(string text) =>
+            _availableModelChoices.FirstOrDefault(choice => string.Equals(choice.Name, text, StringComparison.OrdinalIgnoreCase))?.Id
+            ?? text.Trim();
+
+        private void EmbeddingModelBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs e)
+        {
+            SaveSelectedModel(sender, e.SelectedItem);
+        }
         private async void RebuildEmbeddingsButton_Click(object sender, RoutedEventArgs e)
         {
             var rebuiltConfiguration = EmbeddingMaintenanceService.CurrentConfigurationKey;
+            RebuildEmbeddingsErrorText.Visibility = Visibility.Collapsed;
+            CloseModelSuggestionLists();
             SetRebuildEmbeddingsBusy(true);
             StatusText.Text = "Rebuilding embeddings…";
             try
@@ -278,9 +337,24 @@ namespace App.Pages
             }
             catch (Exception exception)
             {
-                StatusText.Text = $"Embeddings could not be rebuilt: {exception.Message}";
+                RebuildEmbeddingsErrorText.Text = $"Embeddings could not be rebuilt: {exception.Message}";
+                RebuildEmbeddingsErrorText.Visibility = Visibility.Visible;
+                StatusText.Text = string.Empty;
             }
-            finally { SetRebuildEmbeddingsBusy(false); }
+            finally
+            {
+                SetRebuildEmbeddingsBusy(false);
+                CloseModelSuggestionLists();
+                EmbeddingModelBox.Focus(FocusState.Programmatic);
+            }
+        }
+
+        private void CloseModelSuggestionLists()
+        {
+            EmbeddingModelBox.IsSuggestionListOpen = false;
+            LowCostModelBox.IsSuggestionListOpen = false;
+            HighCostModelBox.IsSuggestionListOpen = false;
+            ArtistModelBox.IsSuggestionListOpen = false;
         }
 
         private void SetRebuildEmbeddingsBusy(bool isBusy)
@@ -292,9 +366,36 @@ namespace App.Pages
             UpdateEmbeddingRebuildUi();
         }
 
-        private void LowCostModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && LowCostModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.LowCostModel = choice.Id); }
-        private void HighCostModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && HighCostModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.HighCostModel = choice.Id); }
-        private void ArtistModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { if (!_loading && ArtistModelBox.SelectedItem is ModelChoice choice) Save(settings => settings.ArtistModel = choice.Id); }
+        private void LowCostModelBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs e)
+        {
+            SaveSelectedModel(sender, e.SelectedItem);
+        }
+
+        private void HighCostModelBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs e)
+        {
+            SaveSelectedModel(sender, e.SelectedItem);
+        }
+
+        private void ArtistModelBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs e)
+        {
+            SaveSelectedModel(sender, e.SelectedItem);
+        }
+
+        private void SaveSelectedModel(AutoSuggestBox box, object selectedItem)
+        {
+            if (_loading || selectedItem is not ModelChoice choice) return;
+            box.Text = choice.Name;
+            box.IsSuggestionListOpen = false;
+            SaveModel(box, choice.Id);
+        }
+
+        private void SaveModel(AutoSuggestBox box, string modelId)
+        {
+            if (ReferenceEquals(box, EmbeddingModelBox)) Save(settings => settings.EmbeddingModel = modelId);
+            else if (ReferenceEquals(box, LowCostModelBox)) Save(settings => settings.LowCostModel = modelId);
+            else if (ReferenceEquals(box, HighCostModelBox)) Save(settings => settings.HighCostModel = modelId);
+            else if (ReferenceEquals(box, ArtistModelBox)) Save(settings => settings.ArtistModel = modelId);
+        }
         private void LocationBox_LostFocus(object sender, RoutedEventArgs e)
         {
             if (_loading) return;

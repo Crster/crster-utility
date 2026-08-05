@@ -76,6 +76,12 @@ namespace App.Services
 
         private async Task<ToolResult> SearchWebAsync(string query, CancellationToken token)
         {
+            if (!_client.SupportsBuiltInWebSearch(App.Settings.Current.HighCostModel))
+            {
+                return Error(
+                    "search_unavailable",
+                    "The selected model does not support built-in web search. Choose a model with web-search support, then retry.");
+            }
             var previousResponse = _previousResponse();
             var context = string.IsNullOrWhiteSpace(previousResponse)
                 ? string.Empty
