@@ -184,8 +184,11 @@ namespace App.Pages
             CancelAdditionalTerminalSessions();
             CancelTerminalCommandProcesses();
             CloseAllEditorTabs();
-            _settings.CodyWorkspace = folder.Path;
-            await App.Settings.SaveAsync(_settings);
+            // Save on top of the current settings; this page's snapshot can be older.
+            var settings = App.Settings.Current.Clone();
+            settings.CodyWorkspace = folder.Path;
+            await App.Settings.SaveAsync(settings);
+            _settings = settings;
             LoadWorkspaceCommands();
             LoadAvailableTerminalShells();
             RefreshWorkspace();

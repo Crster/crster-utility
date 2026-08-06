@@ -79,6 +79,7 @@ namespace App.Services
             {
                 // Models belong to a provider. Never carry a model ID over to a different endpoint.
                 settings.LowCostModel = string.Empty;
+                settings.CodingModel = string.Empty;
                 settings.HighCostModel = string.Empty;
             }
             if (!string.Equals(Current.DatabaseFolder, settings.DatabaseFolder, StringComparison.OrdinalIgnoreCase))
@@ -196,6 +197,7 @@ namespace App.Services
             new("caffeine.shortcut", "Caffeine shortcut", "Ctrl+Shift+Alt+F12", value => value.CaffeineShortcut),
             new("ai.lastChatPersonality", "Last chat personality", "Secretary", value => value.LastChatPersonality),
             new("ai.lowCostModel", "Low cost model", "", value => value.LowCostModel),
+            new("ai.codingModel", "Coding model", "", value => value.CodingModel),
             new("ai.highCostModel", "High cost model", "", value => value.HighCostModel),
             new("technician.workspace", "Technician workspace", "", value => value.TechnicianWorkspace),
             new("cody.workspace", "Cody workspace", "", value => value.CodyWorkspace),
@@ -214,6 +216,7 @@ namespace App.Services
         public string CaffeineShortcut { get; set; } = "Ctrl+Shift+Alt+F12";
         public string LastChatPersonality { get; set; } = "Secretary";
         public string LowCostModel { get; set; } = string.Empty;
+        public string CodingModel { get; set; } = string.Empty;
         public string HighCostModel { get; set; } = string.Empty;
         public string TechnicianWorkspace { get; set; } = string.Empty;
         public string CodyWorkspace { get; set; } = string.Empty;
@@ -238,6 +241,7 @@ namespace App.Services
             result.CaffeineShortcut = Text("caffeine.shortcut", result.CaffeineShortcut);
             result.LastChatPersonality = Text("ai.lastChatPersonality", result.LastChatPersonality);
             result.LowCostModel = Text("ai.lowCostModel", result.LowCostModel);
+            result.CodingModel = Text("ai.codingModel", result.CodingModel);
             result.HighCostModel = Text("ai.highCostModel", result.HighCostModel);
             result.TechnicianWorkspace = Text("technician.workspace", result.TechnicianWorkspace);
             result.CodyWorkspace = Text("cody.workspace", result.CodyWorkspace);

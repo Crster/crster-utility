@@ -32,6 +32,8 @@
                                         PointerPressed="ModelBox_PointerPressed" LostFocus="ModelBox_LostFocus" PreviewKeyDown="ModelBox_PreviewKeyDown" TextChanged="ModelBox_TextChanged" SuggestionChosen="LowCostModelBox_SuggestionChosen"/>
                         <AutoSuggestBox x:Name="HighCostModelBox" Header="High Cost" PlaceholderText="Select a model" TextMemberPath="Name"
                                         PointerPressed="ModelBox_PointerPressed" LostFocus="ModelBox_LostFocus" PreviewKeyDown="ModelBox_PreviewKeyDown" TextChanged="ModelBox_TextChanged" SuggestionChosen="HighCostModelBox_SuggestionChosen"/>
+                        <AutoSuggestBox x:Name="CodingModelBox" Header="Coding" PlaceholderText="Select a model" TextMemberPath="Name"
+                                        PointerPressed="ModelBox_PointerPressed" LostFocus="ModelBox_LostFocus" PreviewKeyDown="ModelBox_PreviewKeyDown" TextChanged="ModelBox_TextChanged" SuggestionChosen="CodingModelBox_SuggestionChosen"/>
                     </StackPanel>
                     <!-- Section: Location -->
                     <StackPanel Spacing="6">

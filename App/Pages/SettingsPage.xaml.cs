@@ -139,6 +139,7 @@ namespace App.Pages
                 using var client = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
                 var models = await client.ListModelsAsync(System.Threading.CancellationToken.None);
                 SetModelChoices(LowCostModelBox, models, _settings.LowCostModel);
+                SetModelChoices(CodingModelBox, models, _settings.CodingModel);
                 SetModelChoices(HighCostModelBox, models, _settings.HighCostModel);
                 _loadedModelEndpoint = ModelEndpointKey(_settings);
                 SetModelBoxesEnabled(true);
@@ -155,13 +156,13 @@ namespace App.Pages
                 .OrderBy(choice => choice.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
             _availableModelChoices = choices;
             box.ItemsSource = InitialModelSuggestions();
-            box.Text = choices.FirstOrDefault(choice => string.Equals(choice.Id, selectedId, StringComparison.OrdinalIgnoreCase))?.Name
-                ?? string.Empty;
+            box.Text = DisplayNameForModel(selectedId);
         }
 
         private void SetModelBoxesEnabled(bool enabled)
         {
             LowCostModelBox.IsEnabled = enabled;
+            CodingModelBox.IsEnabled = enabled;
             HighCostModelBox.IsEnabled = enabled;
         }
 
@@ -169,8 +170,10 @@ namespace App.Pages
         {
             _availableModelChoices = [];
             LowCostModelBox.Text = string.Empty;
+            CodingModelBox.Text = string.Empty;
             HighCostModelBox.Text = string.Empty;
             LowCostModelBox.ItemsSource = null;
+            CodingModelBox.ItemsSource = null;
             HighCostModelBox.ItemsSource = null;
         }
 
@@ -255,10 +258,25 @@ namespace App.Pages
                 box.IsSuggestionListOpen = true;
         }
 
+        /// <summary>Keeps a half-typed query from being stored as a model ID, which would clear the box on the next visit.</summary>
         private void ModelBox_LostFocus(object sender, RoutedEventArgs e)
         {
-            if (!_loading && sender is AutoSuggestBox box)
-                SaveModel(box, ModelIdForText(box.Text));
+            if (_loading || sender is not AutoSuggestBox box) return;
+            var text = box.Text.Trim();
+            if (text.Length == 0) { SaveModel(box, string.Empty); return; }
+
+            var modelId = ModelIdForText(text);
+            if (modelId is null)
+            {
+                _loading = true;
+                box.Text = DisplayNameForModel(SavedModelId(box));
+                _loading = false;
+                return;
+            }
+            SaveModel(box, modelId);
+            _loading = true;
+            box.Text = DisplayNameForModel(modelId);
+            _loading = false;
         }
 
         private void ModelBox_PreviewKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
@@ -283,11 +301,35 @@ namespace App.Pages
         private IReadOnlyList<ModelChoice> InitialModelSuggestions() =>
             _availableModelChoices.Take(InitialModelSuggestionCount).ToList();
 
-        private string ModelIdForText(string text) =>
-            _availableModelChoices.FirstOrDefault(choice => string.Equals(choice.Name, text, StringComparison.OrdinalIgnoreCase))?.Id
-            ?? text.Trim();
+        /// <summary>The model ID for a display name or a pasted ID, or null when the text matches no known model.</summary>
+        private string? ModelIdForText(string text)
+        {
+            var query = text.Trim();
+            return _availableModelChoices.FirstOrDefault(choice => string.Equals(choice.Name, query, StringComparison.OrdinalIgnoreCase))?.Id
+                ?? _availableModelChoices.FirstOrDefault(choice => string.Equals(choice.Id, query, StringComparison.OrdinalIgnoreCase))?.Id;
+        }
+
+        private string DisplayNameForModel(string modelId)
+        {
+            if (string.IsNullOrWhiteSpace(modelId)) return string.Empty;
+            return _availableModelChoices.FirstOrDefault(choice => string.Equals(choice.Id, modelId, StringComparison.OrdinalIgnoreCase))?.Name
+                ?? modelId;
+        }
+
+        private string SavedModelId(AutoSuggestBox box)
+        {
+            if (ReferenceEquals(box, LowCostModelBox)) return _settings.LowCostModel;
+            if (ReferenceEquals(box, HighCostModelBox)) return _settings.HighCostModel;
+            if (ReferenceEquals(box, CodingModelBox)) return _settings.CodingModel;
+            return string.Empty;
+        }
 
         private void LowCostModelBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs e)
+        {
+            SaveSelectedModel(sender, e.SelectedItem);
+        }
+
+        private void CodingModelBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs e)
         {
             SaveSelectedModel(sender, e.SelectedItem);
         }
@@ -308,6 +350,7 @@ namespace App.Pages
         private void SaveModel(AutoSuggestBox box, string modelId)
         {
             if (ReferenceEquals(box, LowCostModelBox)) Save(settings => settings.LowCostModel = modelId);
+            else if (ReferenceEquals(box, CodingModelBox)) Save(settings => settings.CodingModel = modelId);
             else if (ReferenceEquals(box, HighCostModelBox)) Save(settings => settings.HighCostModel = modelId);
         }
         private void LocationBox_LostFocus(object sender, RoutedEventArgs e)

@@ -88,13 +88,22 @@ namespace App.Pages
                 .ToArray();
             PersonalityBox.SelectedItem = _personality;
             if (string.IsNullOrWhiteSpace(_settings.OpenAiCompatibleApiKey) && !await RequestApiKeyAsync()) { StatusText.Text = "An AI provider API key is required."; return; }
-            _client = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
             _secretaryMemory = new SecretaryMemoryService();
             _secretaryTools = new SecretaryToolService(_secretaryMemory);
             _smartTools = new SmartToolService(_secretaryTools);
+            ConnectClient();
+            App.Settings.Changed += Settings_Changed;
+            RenderSession();
+        }
+
+        /// <summary>Builds the provider client, and the tools that hold it, from the current URL and key.</summary>
+        private void ConnectClient()
+        {
+            _client?.Dispose();
+            _client = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
             _technicianTools = new TechnicianToolService(
                 _client,
-                _smartTools,
+                _smartTools!,
                 () => _sessions[ChatPersonality.Technician].Messages
                     .Where(message => message.Kind == ChatItemKind.User)
                     .Select(message => message.Content)
@@ -102,7 +111,17 @@ namespace App.Pages
                 () => _sessions[ChatPersonality.Technician].Messages
                     .LastOrDefault(message => message.Kind == ChatItemKind.Assistant)?.Content,
                 ConfirmTechnicianActionAsync);
-            RenderSession();
+        }
+
+        /// <summary>Reconnects when the provider endpoint changes, so a reply never uses the old URL or key.</summary>
+        private void Settings_Changed(object? sender, AppSettings settings)
+        {
+            var endpointChanged = !string.Equals(_settings.OpenAiCompatibleBaseUrl, settings.OpenAiCompatibleBaseUrl, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(_settings.OpenAiCompatibleApiKey, settings.OpenAiCompatibleApiKey, StringComparison.Ordinal);
+            _settings = settings.Clone();
+            if (!endpointChanged || _operationCancellation is not null) return;
+            ConnectClient();
+            RefreshModelStatus();
         }
 
         private async Task<bool> RequestApiKeyAsync()
@@ -110,7 +129,11 @@ namespace App.Pages
             var input = new PasswordBox { Header = "API key", PlaceholderText = "Paste your key", MinWidth = 380 };
             var dialog = new ContentDialog { XamlRoot = XamlRoot, Title = "Connect AI provider", Content = input, PrimaryButtonText = "Save", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Primary };
             if (await dialog.ShowAsync() != ContentDialogResult.Primary || string.IsNullOrWhiteSpace(input.Password)) return false;
-            _settings.OpenAiCompatibleApiKey = input.Password.Trim(); await _settingsService.SaveAsync(_settings); return true;
+            var settings = App.Settings.Current.Clone();
+            settings.OpenAiCompatibleApiKey = input.Password.Trim();
+            await _settingsService.SaveAsync(settings);
+            _settings = settings;
+            return true;
         }
 
         private async Task SendAsync(string? promptOverride = null)
@@ -894,8 +917,12 @@ namespace App.Pages
                 finally { _changingPersonality = false; }
             }
             ComposerBox.PlaceholderText = $"Message {personality}...";
-            _settings.LastChatPersonality = personality.ToString();
-            await _settingsService.SaveAsync(_settings);
+            // Save on top of the current settings. This page's snapshot can be older than
+            // what the Settings page stored in the meantime.
+            var settings = App.Settings.Current.Clone();
+            settings.LastChatPersonality = personality.ToString();
+            await _settingsService.SaveAsync(settings);
+            _settings = settings;
             RenderSession();
             StatusText.Text = string.Empty;
         }
@@ -1760,6 +1787,7 @@ namespace App.Pages
 
         internal void PrepareForWindowClose()
         {
+            App.Settings.Changed -= Settings_Changed;
             _operationCancellation?.Cancel();
             ConversationHost.Children.Clear();
             _messageAttachments.Clear();

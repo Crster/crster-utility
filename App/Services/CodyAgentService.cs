@@ -72,7 +72,12 @@ namespace App.Services
         // Section: Mode
         public static string ModelFor(CodyAgentMode mode) => mode.BeSmart
             ? App.Settings.Current.HighCostModel
-            : App.Settings.Current.LowCostModel;
+            : CodingModel;
+
+        // Cody runs on the coding model. Fall back to the low cost model until one is picked in settings.
+        private static string CodingModel => string.IsNullOrWhiteSpace(App.Settings.Current.CodingModel)
+            ? App.Settings.Current.LowCostModel
+            : App.Settings.Current.CodingModel;
 
         public static OpenAiCompatibleThinkingLevel ThinkingFor(CodyAgentMode mode) => mode.ThinkDeep
             ? OpenAiCompatibleThinkingLevel.High
@@ -412,7 +417,7 @@ namespace App.Services
             try
             {
                 var result = await _client.CreateSimpleInteractionAsync(
-                    App.Settings.Current.LowCostModel,
+                    CodingModel,
                     [],
                     [OpenAiCompatibleClient.CreateUserStep(request, [])],
                     instruction,
