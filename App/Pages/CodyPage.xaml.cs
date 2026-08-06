@@ -15,7 +15,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using App.Models;
 using App.Services;
+using App.Services.Mcp;
 using EasyWindowsTerminalControl;
+using Microsoft.Windows.AppNotifications;
+using Microsoft.Windows.AppNotifications.Builder;
 using Microsoft.UI;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
@@ -36,7 +39,7 @@ using WinRT.Interop;
 
 namespace App.Pages
 {
-    public sealed partial class CodyPage : Page
+    public sealed partial class CodyPage : Page, ICodyMcpHost
     {
         private const int MaximumWorkspaceFileBytes = 1_000_000;
         private const string DiffTabTag = "diff";
@@ -54,6 +57,7 @@ namespace App.Pages
             ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".ico"
         };
         private readonly ChatSessionStorageService _sessionStorage = new();
+        private readonly TodoRepository _todos = new();
         private readonly List<WorkspaceFileItem> _workspaceFiles = [];
         private readonly List<WorkspaceTreeEntry> _workspaceRoots = [];
         private readonly HashSet<string> _loadedWorkspaceDirectories = new(StringComparer.OrdinalIgnoreCase);
@@ -102,7 +106,12 @@ namespace App.Pages
         private bool _loadingTerminalShells;
         private string? _savedTerminalShellName;
         private CliAgentTool? _activeCliAgent;
+        private CliAgentTool? _mcpWiredAgent;
+        private CodyMcpServer? _mcpServer;
+        private string _mcpWiredWorkspace = string.Empty;
         private string? _selectedAgentId;
+        private bool _exposeCodyMcp = true;
+        private bool _updatingMcpToggle;
         private double _filesPanelWidth = 280;
         private double _terminalPanelHeight = 230;
         private double _filesResizeStartX;
@@ -173,6 +182,9 @@ namespace App.Pages
             CancelAdditionalTerminalSessions();
             CancelTerminalCommandProcesses();
             CliAgentView.StopSession();
+            TearDownMcp();
+            _mcpServer?.Dispose();
+            _mcpServer = null;
             DisposeWorkspaceWatcher();
         }
 
@@ -195,6 +207,8 @@ namespace App.Pages
             CancelAdditionalTerminalSessions();
             CancelTerminalCommandProcesses();
             CliAgentView.StopSession();
+            // Cleared while the old workspace path is still known, so its config files go back as they were.
+            TearDownMcp();
             CloseAllEditorTabs();
             // Save on top of the current settings; this page's snapshot can be older.
             var settings = App.Settings.Current.Clone();
@@ -337,8 +351,268 @@ namespace App.Pages
             // A full-screen console UI needs more room than a chat rail, so raise the docked floor.
             CodyChatDock.MinWidth = codyIsActive ? 340 : 460;
 
+            // The Cody tools toggle takes the place the Cody-only buttons leave behind.
+            McpToggle.Visibility = codyIsActive ? Visibility.Collapsed : Visibility.Visible;
+            _updatingMcpToggle = true;
+            McpToggle.IsChecked = _exposeCodyMcp;
+            _updatingMcpToggle = false;
+
+            var wiring = UpdateMcpWiring(agent);
             CliAgentView.WorkspacePath = HasWorkspace() ? _settings.CodyWorkspace : string.Empty;
-            if (agent is not null) CliAgentView.Activate(agent);
+            if (agent is not null) CliAgentView.Activate(agent, wiring);
+        }
+
+        private void McpToggle_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_updatingMcpToggle) return;
+            _exposeCodyMcp = McpToggle.IsChecked == true;
+            DiagnosticLog.Write("CodyPage", $"McpToggle changed to {_exposeCodyMcp}");
+            // A CLI reads its MCP configuration at launch, so ApplyActiveAgent restarts the session.
+            ApplyActiveAgent();
+            SaveWorkspaceCommands();
+        }
+
+        // Section: Cody MCP server
+        /// <summary>Starts the Cody MCP server and points the active CLI at it, or takes both away.
+        /// Returns the launch arguments and environment the agent needs, or null when it gets nothing.</summary>
+        private CliAgentMcpWiring? UpdateMcpWiring(CliAgentTool? agent)
+        {
+            if (agent is null || !_exposeCodyMcp || !HasWorkspace())
+            {
+                TearDownMcp();
+                return null;
+            }
+
+            var endpoint = (_mcpServer ??= new CodyMcpServer(this)).Start();
+            if (endpoint is null)
+            {
+                TearDownMcp();
+                return null;
+            }
+
+            if (_mcpWiredAgent is not null && !ReferenceEquals(_mcpWiredAgent, agent))
+                RemoveMcpConfiguration();
+
+            try
+            {
+                var wiring = CliAgentMcpConfigurator.Apply(agent, _settings.CodyWorkspace, endpoint);
+                _mcpWiredAgent = agent;
+                _mcpWiredWorkspace = _settings.CodyWorkspace;
+                return wiring;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                AppendTerminal($"[mcp] Could not offer the Cody tools to {agent.Name}: {exception.Message}\r\n");
+                TearDownMcp();
+                return null;
+            }
+        }
+
+        private void TearDownMcp()
+        {
+            DiagnosticLog.Write("CodyPage", $"TearDownMcp wired={_mcpWiredAgent?.Id ?? "none"}");
+            RemoveMcpConfiguration();
+            _mcpServer?.Stop();
+            DiagnosticLog.Write("CodyPage", "TearDownMcp done");
+        }
+
+        private void RemoveMcpConfiguration()
+        {
+            if (_mcpWiredAgent is { } agent && _mcpWiredWorkspace.Length > 0)
+                CliAgentMcpConfigurator.Remove(agent, _mcpWiredWorkspace);
+            _mcpWiredAgent = null;
+            _mcpWiredWorkspace = string.Empty;
+        }
+
+        /// <summary>Runs an MCP tool on the UI thread, which owns the editor, the dialogs and the command list.</summary>
+        private Task<ToolResult> RunMcpToolOnUiThreadAsync(Func<Task<ToolResult>> work)
+        {
+            if (DispatcherQueue.HasThreadAccess) return work();
+
+            var completion = new TaskCompletionSource<ToolResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!DispatcherQueue.TryEnqueue(async () =>
+            {
+                try
+                {
+                    completion.TrySetResult(await work());
+                }
+                catch (Exception exception)
+                {
+                    completion.TrySetResult(CodyMcpTools.Error("operation_failed", exception.Message));
+                }
+            }))
+            {
+                completion.TrySetResult(
+                    CodyMcpTools.Error("operation_unavailable", "The Cody workspace is no longer available."));
+            }
+            return completion.Task;
+        }
+
+        bool ICodyMcpHost.HasWorkspace => HasWorkspace();
+
+        Task<ToolResult> ICodyMcpHost.OpenInEditorAsync(string path, string reveal) =>
+            RunMcpToolOnUiThreadAsync(async () =>
+            {
+                var file = ResolveCodyFileReference(path);
+                if (file is null)
+                    return CodyMcpTools.Error("not_found", $"No workspace file matches '{path}'.");
+
+                await OpenEditorAsync(file, false);
+                if (reveal.Length > 0
+                    && _editors.Values.FirstOrDefault(document =>
+                        string.Equals(document.FullPath, file.FullPath, StringComparison.OrdinalIgnoreCase))
+                        is { } opened)
+                {
+                    await (opened.Editor ?? _sharedEditor).RevealMatchAsync(opened.DocumentId, reveal);
+                }
+
+                return CodyMcpTools.Ok(new JsonObject { ["opened"] = file.RelativePath });
+            });
+
+        Task<ToolResult> ICodyMcpHost.OpenDiffAsync(string path) =>
+            RunMcpToolOnUiThreadAsync(async () =>
+            {
+                var file = ResolveCodyFileReference(path);
+                if (file is null)
+                    return CodyMcpTools.Error("not_found", $"No workspace file matches '{path}'.");
+
+                var error = await OpenDiffTabAsync(file.Name, file.RelativePath, file.FullPath);
+                return error.Length == 0
+                    ? CodyMcpTools.Ok(new JsonObject { ["diff"] = file.RelativePath })
+                    : CodyMcpTools.Error("no_diff", error);
+            });
+
+        Task<ToolResult> ICodyMcpHost.AskUserAsync(string question, IReadOnlyList<string> choices) =>
+            RunMcpToolOnUiThreadAsync(async () =>
+            {
+                var body = new StackPanel { Spacing = 12 };
+                body.Children.Add(new TextBlock { Text = question, TextWrapping = TextWrapping.Wrap });
+
+                RadioButtons? picker = null;
+                TextBox? answerBox = null;
+                if (choices.Count > 0)
+                {
+                    picker = new RadioButtons();
+                    foreach (var choice in choices) picker.Items.Add(choice);
+                    picker.SelectedIndex = 0;
+                    body.Children.Add(picker);
+                }
+                else
+                {
+                    answerBox = new TextBox
+                    {
+                        PlaceholderText = "Your answer",
+                        AcceptsReturn = true,
+                        TextWrapping = TextWrapping.Wrap,
+                        MinHeight = 84
+                    };
+                    body.Children.Add(answerBox);
+                }
+
+                var dialog = new ContentDialog
+                {
+                    XamlRoot = XamlRoot,
+                    Title = $"{_activeCliAgent?.Name ?? "The agent"} is asking",
+                    Content = new ScrollViewer
+                    {
+                        MaxHeight = 360,
+                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                        Content = body
+                    },
+                    PrimaryButtonText = "Answer",
+                    CloseButtonText = "Skip",
+                    DefaultButton = ContentDialogButton.Primary
+                };
+                if (await ShowDialogAsync(dialog) != ContentDialogResult.Primary)
+                    return CodyMcpTools.Error("declined", "The user skipped the question.");
+
+                var answer = (picker is not null
+                    ? picker.SelectedItem as string ?? string.Empty
+                    : answerBox!.Text).Trim();
+                return answer.Length == 0
+                    ? CodyMcpTools.Error("declined", "The user gave no answer.")
+                    : CodyMcpTools.Ok(new JsonObject { ["answer"] = answer });
+            });
+
+        Task<ToolResult> ICodyMcpHost.NotifyAsync(string title, string message) =>
+            RunMcpToolOnUiThreadAsync(() =>
+            {
+                var notification = new AppNotificationBuilder()
+                    .AddText(title)
+                    .AddText(message)
+                    .BuildNotification();
+                AppNotificationManager.Default.Show(notification);
+                return Task.FromResult(CodyMcpTools.Ok(new JsonObject { ["shown"] = true }));
+            });
+
+        Task<ToolResult> ICodyMcpHost.ListWorkspaceCommandsAsync() =>
+            RunMcpToolOnUiThreadAsync(() =>
+            {
+                // Re-read the file first, so a command the user just added is visible.
+                LoadWorkspaceCommands();
+                return Task.FromResult(ListWorkspaceCommands());
+            });
+
+        Task<ToolResult> ICodyMcpHost.RunWorkspaceCommandAsync(string name) =>
+            RunMcpToolOnUiThreadAsync(async () =>
+            {
+                LoadWorkspaceCommands();
+                var command = _commands.FirstOrDefault(saved =>
+                    string.Equals(saved.Name, name, StringComparison.OrdinalIgnoreCase));
+                if (command is null)
+                {
+                    return CodyMcpTools.Error(
+                        "not_found",
+                        $"No saved command is named '{name}'. Call cody_list_workspace_commands first.");
+                }
+
+                return await RunCommandAsync(command)
+                    ? CodyMcpTools.Ok(new JsonObject
+                    {
+                        ["started"] = command.Name,
+                        ["command_line"] = command.CommandLine
+                    })
+                    : CodyMcpTools.Error("not_started", $"'{command.Name}' did not start.");
+            });
+
+        Task<ToolResult> ICodyMcpHost.AddTodoAsync(string text, string category) =>
+            RunMcpToolOnUiThreadAsync(() =>
+            {
+                var list = category.Length > 0 ? category : WorkspaceTodoCategory();
+                var todo = _todos.Create(text, list, "secretary");
+                return Task.FromResult(CodyMcpTools.Ok(new JsonObject
+                {
+                    ["added"] = todo.Value,
+                    ["category"] = todo.Category
+                }));
+            });
+
+        private string WorkspaceTodoCategory()
+        {
+            if (!HasWorkspace()) return "Cody";
+            var name = Path.GetFileName(_settings.CodyWorkspace.TrimEnd(Path.DirectorySeparatorChar));
+            return string.IsNullOrWhiteSpace(name) ? "Cody" : name;
+        }
+
+        // The hosted console lives in its own child window, which draws above every XAML popup,
+        // so it has to step aside while a menu, flyout or dialog is open over the panel.
+        private void OverlappingFlyout_Opening(object? sender, object e) =>
+            CliAgentView.SetConsoleSuppressed(true);
+
+        private void OverlappingFlyout_Closed(object? sender, object e) =>
+            CliAgentView.SetConsoleSuppressed(false);
+
+        private async Task<ContentDialogResult> ShowDialogAsync(ContentDialog dialog)
+        {
+            CliAgentView.SetConsoleSuppressed(true);
+            try
+            {
+                return await dialog.ShowAsync();
+            }
+            finally
+            {
+                CliAgentView.SetConsoleSuppressed(false);
+            }
         }
 
         private async Task RefreshWorkspaceFilesAsync(bool showLoading = true, bool notifyOnCompletion = false)
@@ -1563,27 +1837,32 @@ namespace App.Pages
             var entry = _contextTreeEntry;
             if (entry is not { IsDirectory: false, GitState: GitFileState.Modified }) return;
 
-            var original = await Task.Run(() => ReadGitHeadFile(_settings.CodyWorkspace, entry.RelativePath));
-            if (original is null)
-            {
-                await ShowMessageAsync("No diff available", $"Git did not return a diff for {entry.RelativePath}.");
-                return;
-            }
+            var error = await OpenDiffTabAsync(entry.Name, entry.RelativePath, entry.FullPath);
+            if (error.Length > 0) await ShowMessageAsync("No diff available", error);
+        }
 
-            var workingCopy = await File.ReadAllTextAsync(entry.FullPath);
+        /// <summary>Opens a working copy against its last commit in a diff tab.
+        /// Returns an empty string on success, or the reason it could not be shown.</summary>
+        private async Task<string> OpenDiffTabAsync(string name, string relativePath, string fullPath)
+        {
+            var original = await Task.Run(() => ReadGitHeadFile(_settings.CodyWorkspace, relativePath));
+            if (original is null) return $"Git did not return a diff for {relativePath}.";
+
+            var workingCopy = await File.ReadAllTextAsync(fullPath);
             var viewer = new global::App.Controls.MonacoEditorControl();
             viewer.AskCodyRequested += Editor_AskCodyRequested;
             viewer.TerminalToggleRequested += Editor_TerminalToggleRequested;
             var tab = new TabViewItem
             {
-                Header = $"{entry.Name} diff",
+                Header = $"{name} diff",
                 ContentTransitions = null,
                 Content = viewer,
                 Tag = DiffTabTag
             };
             EditorTabs.TabItems.Add(tab);
             EditorTabs.SelectedItem = tab;
-            await viewer.OpenDiffAsync(entry.RelativePath, original, workingCopy, MonacoLanguage(entry.FullPath));
+            await viewer.OpenDiffAsync(relativePath, original, workingCopy, MonacoLanguage(fullPath));
+            return string.Empty;
         }
 
         private static string? ReadGitHeadFile(string workingDirectory, string relativePath)
@@ -1630,7 +1909,7 @@ namespace App.Pages
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Primary
             };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+            if (await ShowDialogAsync(dialog) != ContentDialogResult.Primary) return;
             var name = input.Text.Trim();
             if (!IsValidEntryName(name))
             {
@@ -1784,7 +2063,7 @@ namespace App.Pages
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Close
             };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+            if (await ShowDialogAsync(dialog) != ContentDialogResult.Primary) return;
 
             var path = ResolveWorkspaceOperationPath(entry.FullPath);
             if (affectedEditors.Any(pair => ReferenceEquals(pair.Key, _activeEditorTab)))
@@ -2309,7 +2588,7 @@ namespace App.Pages
                     CloseButtonText = "Cancel",
                     DefaultButton = ContentDialogButton.Close
                 };
-                if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+                if (await ShowDialogAsync(dialog) != ContentDialogResult.Primary) return;
             }
             var editor = document.Editor ?? _sharedEditor;
             var text = await editor.GetTextAsync(document.DocumentId);
@@ -2487,7 +2766,7 @@ namespace App.Pages
                 CloseButtonText = "Keep editing",
                 DefaultButton = ContentDialogButton.Close
             };
-            return await dialog.ShowAsync() == ContentDialogResult.Primary;
+            return await ShowDialogAsync(dialog) == ContentDialogResult.Primary;
         }
 
         private void CloseAllEditorTabs()
@@ -3370,6 +3649,7 @@ namespace App.Pages
             _selectedCommand = null;
             _savedTerminalShellName = null;
             _selectedAgentId = null;
+            _exposeCodyMcp = true;
             if (!HasWorkspace()) { RefreshRunMenu(); return; }
             var path = WorkspaceSettingsPath();
             if (!File.Exists(path)) { RefreshRunMenu(); return; }
@@ -3382,6 +3662,7 @@ namespace App.Pages
                 {
                     _savedTerminalShellName = settings.SelectedTerminalShell;
                     _selectedAgentId = settings.SelectedAgent;
+                    _exposeCodyMcp = settings.ExposeCodyMcp ?? true;
                     _commands.AddRange((settings.Commands ?? [])
                         .Select(ReadCommandEntry)
                         .OfType<CodyCommand>());
@@ -3497,7 +3778,8 @@ namespace App.Pages
                     ["commands"] = new JsonArray(_commands.Select(command => (JsonNode?)CommandToJson(command)).ToArray()),
                     ["selectedCommand"] = _selectedCommand?.CommandLine ?? string.Empty,
                     ["selectedTerminalShell"] = GetSelectedTerminalShell().Name,
-                    ["selectedAgent"] = _activeCliAgent?.Id ?? string.Empty
+                    ["selectedAgent"] = _activeCliAgent?.Id ?? string.Empty,
+                    ["exposeCodyMcp"] = _exposeCodyMcp
                 };
                 File.WriteAllText(
                     path,
@@ -4973,7 +5255,7 @@ namespace App.Pages
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Close
             };
-            return await dialog.ShowAsync() == ContentDialogResult.Primary;
+            return await ShowDialogAsync(dialog) == ContentDialogResult.Primary;
         }
 
         private async Task ShowMessageAsync(string title, string message)
@@ -4985,7 +5267,7 @@ namespace App.Pages
                 Content = message,
                 CloseButtonText = "Close"
             };
-            await dialog.ShowAsync();
+            await ShowDialogAsync(dialog);
         }
 
         private sealed record WorkspaceFileItem(string Name, string RelativePath, string FullPath);
@@ -5063,7 +5345,8 @@ namespace App.Pages
             [property: JsonPropertyName("commands")] List<CodyCommandFile>? Commands = null,
             [property: JsonPropertyName("selectedCommand")] string? SelectedCommand = null,
             [property: JsonPropertyName("selectedTerminalShell")] string? SelectedTerminalShell = null,
-            [property: JsonPropertyName("selectedAgent")] string? SelectedAgent = null);
+            [property: JsonPropertyName("selectedAgent")] string? SelectedAgent = null,
+            [property: JsonPropertyName("exposeCodyMcp")] bool? ExposeCodyMcp = null);
         private enum WorkspaceDocumentKind { Text, Image, Binary }
 
         private sealed class EditorDocument(

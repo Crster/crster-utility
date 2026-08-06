@@ -94,8 +94,14 @@ namespace App.Services
         }
 
         /// <summary>Builds the console command that starts the agent with its PATH, environment and flags.
-        /// The shell stays open after the agent exits so the session output can still be read.</summary>
-        public static string CreateCommandLine(CliAgentTool tool, string workspace)
+        /// The shell stays open after the agent exits so the session output can still be read.
+        /// Extra arguments and environment come from whatever is wired into the session, such as the
+        /// Cody MCP server.</summary>
+        public static string CreateCommandLine(
+            CliAgentTool tool,
+            string workspace,
+            string extraArguments = "",
+            IReadOnlyDictionary<string, string>? extraEnvironment = null)
         {
             var steps = new List<string> { "chcp 65001>nul" };
 
@@ -112,7 +118,9 @@ namespace App.Services
             steps.Add("set \"FORCE_COLOR=1\"");
             steps.Add("set \"NO_UPDATE_NOTIFIER=1\"");
             if (workspace.Length > 0) steps.Add($"set \"CRSTER_WORKSPACE={workspace}\"");
-            steps.Add(CreateInvocation(tool));
+            foreach (var (key, value) in extraEnvironment ?? new Dictionary<string, string>())
+                steps.Add($"set \"{key}={value}\"");
+            steps.Add(CreateInvocation(tool, extraArguments));
 
             var script = string.Join(" && ", steps);
             var shell = ExecutableLocator.Find("cmd.exe") ?? "cmd.exe";
@@ -120,9 +128,11 @@ namespace App.Services
             return $"\"{shell}\" /d /s /k \"{script}\"";
         }
 
-        private static string CreateInvocation(CliAgentTool tool)
+        private static string CreateInvocation(CliAgentTool tool, string extraArguments)
         {
-            var arguments = tool.Definition.YoloArguments;
+            var arguments = string.Join(
+                " ",
+                new[] { tool.Definition.YoloArguments, extraArguments }.Where(part => part.Length > 0));
             var suffix = arguments.Length > 0 ? $" {arguments}" : string.Empty;
 
             if (!string.Equals(Path.GetExtension(tool.FileName), ".ps1", StringComparison.OrdinalIgnoreCase))

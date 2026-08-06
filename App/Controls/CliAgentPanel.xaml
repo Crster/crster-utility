@@ -2,14 +2,14 @@
     x:Class="App.Controls.CliAgentPanel"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid Background="#FF0C0C0C">
+    <Grid Background="#FF0C0C0C" SizeChanged="Panel_SizeChanged">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
         <!-- Section: Session header -->
-        <Border Padding="12,7" BorderThickness="0,0,0,1"
+        <Border x:Name="HeaderBorder" Padding="12,7" BorderThickness="0,0,0,1"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
             <Grid ColumnSpacing="8">
@@ -36,6 +36,13 @@
                         <TextBlock Text="No approval prompts" FontSize="11"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                     </Border>
+                    <Border x:Name="McpBadge" CornerRadius="9" Padding="8,2"
+                            VerticalAlignment="Center" Visibility="Collapsed"
+                            Background="{ThemeResource AccentFillColorSelectedTextBackgroundBrush}"
+                            ToolTipService.ToolTip="This agent can use Cody's editor, dialogs, saved commands and todo list.">
+                        <TextBlock Text="Cody tools" FontSize="11"
+                                   Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                    </Border>
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
@@ -58,9 +65,10 @@
         </Border>
 
         <!-- Section: Hosted console -->
-        <Grid x:Name="TerminalHost" Grid.Row="1" MinHeight="120"
-              HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-              SizeChanged="TerminalHost_SizeChanged"/>
+        <!-- Height is pinned in code before a console is hosted: measured against an unbounded
+             height the console reports an infinite size and the layout system rejects it. -->
+        <Grid x:Name="TerminalHost" Grid.Row="1"
+              HorizontalAlignment="Stretch" VerticalAlignment="Top"/>
 
         <StackPanel x:Name="PlaceholderPanel" Grid.Row="1" Spacing="12" MaxWidth="360"
                     HorizontalAlignment="Center" VerticalAlignment="Center">

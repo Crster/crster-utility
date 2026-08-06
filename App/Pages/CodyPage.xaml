@@ -50,7 +50,7 @@
                             </StackPanel>
                         </SplitButton.Content>
                         <SplitButton.Flyout>
-                            <MenuFlyout>
+                            <MenuFlyout Opening="OverlappingFlyout_Opening" Closed="OverlappingFlyout_Closed">
                                 <MenuFlyoutItem Text="Change workspace" Click="ChangeWorkspaceMenuItem_Click">
                                     <MenuFlyoutItem.Icon>
                                         <FontIcon Glyph="&#xE8B7;"/>
@@ -69,7 +69,8 @@
                                        MaxWidth="150" TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
                         <DropDownButton.Flyout>
-                            <MenuFlyout x:Name="AgentSelectorFlyout" Placement="BottomEdgeAlignedLeft"/>
+                            <MenuFlyout x:Name="AgentSelectorFlyout" Placement="BottomEdgeAlignedLeft"
+                                        Opening="OverlappingFlyout_Opening" Closed="OverlappingFlyout_Closed"/>
                         </DropDownButton.Flyout>
                     </DropDownButton>
                     <Button x:Name="InstructionButton" Height="34" Padding="8,0"
@@ -155,6 +156,15 @@
                                 <TextBlock Text="Think deep" FontSize="12"/>
                             </StackPanel>
                         </ToggleButton>
+                        <ToggleButton x:Name="McpToggle" Height="34" Padding="10,0" Visibility="Collapsed"
+                                      Checked="McpToggle_Changed" Unchecked="McpToggle_Changed"
+                                      ToolTipService.ToolTip="Let the hosted CLI use Cody's editor, dialogs, saved commands and todo list"
+                                      AutomationProperties.Name="Offer Cody tools to the hosted CLI">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xE71B;" FontSize="12"/>
+                                <TextBlock Text="Cody tools" FontSize="12"/>
+                            </StackPanel>
+                        </ToggleButton>
                         <Button x:Name="ClearButton" Width="34" Height="34" Padding="0"
                                 Click="ClearButton_Click"
                                 ToolTipService.ToolTip="Clear history and start a new session"
@@ -174,7 +184,8 @@
                                 </StackPanel>
                             </SplitButton.Content>
                             <SplitButton.Flyout>
-                                <Flyout Placement="BottomEdgeAlignedRight">
+                                <Flyout Placement="BottomEdgeAlignedRight"
+                                        Opening="OverlappingFlyout_Opening" Closed="OverlappingFlyout_Closed">
                                     <Flyout.FlyoutPresenterStyle>
                                         <Style TargetType="FlyoutPresenter">
                                             <Setter Property="Padding" Value="0"/>

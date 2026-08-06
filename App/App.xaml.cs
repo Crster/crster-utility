@@ -1,3 +1,4 @@
+using System;
 using App.Services;
 using Microsoft.Windows.AppLifecycle;
 using Microsoft.Windows.AppNotifications;
@@ -17,7 +18,35 @@ namespace App
         public App()
         {
             InitializeComponent();
+            UnhandledException += (_, args) =>
+            {
+                if (IsHostedTerminalFocusFault(args.Exception))
+                {
+                    // Known defect in the hosted console control: it hands focus to its native child
+                    // by cancelling the XAML focus move, and that cancel is rejected once the control
+                    // has left the visual tree. The throw escapes its own event handler, so we cannot
+                    // catch it at the call site. Nothing is left in a bad state, so the app must not
+                    // die for it. CliAgentPanel.StopSession already stops it being raised.
+                    DiagnosticLog.Write("App.Unhandled", "ignored hosted terminal focus fault");
+                    args.Handled = true;
+                    return;
+                }
+
+                DiagnosticLog.WriteException("App.Unhandled", args.Exception);
+                DiagnosticLog.Write("App.Unhandled", $"message={args.Message}");
+            };
+            AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+                DiagnosticLog.WriteException("AppDomain.Unhandled", args.ExceptionObject as Exception);
+            System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (_, args) =>
+                DiagnosticLog.WriteException("Task.Unobserved", args.Exception);
         }
+
+        /// <summary>True for the one failure the hosted terminal control raises from its own
+        /// GettingFocus handler after it has been detached. Deliberately narrow: it must not swallow
+        /// any other ArgumentException.</summary>
+        private static bool IsHostedTerminalFocusFault(Exception? exception) =>
+            exception is ArgumentException
+            && exception.StackTrace?.Contains("TerminalControl_GettingFocus", StringComparison.Ordinal) == true;
 
         protected override void OnLaunched(LaunchActivatedEventArgs args)
         {
