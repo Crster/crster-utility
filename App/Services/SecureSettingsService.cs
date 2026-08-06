@@ -11,6 +11,8 @@ namespace App.Services
     internal sealed class SecureSettingsService : IDisposable
     {
         private const string SettingsDirectoryName = "crster\\utility";
+        // Keys of removed features. Old databases still hold their rows.
+        private static readonly string[] RetiredSettingKeys = ["ai.artistModel"];
         private readonly string _path;
         private LiteDatabaseService? _database;
 
@@ -73,18 +75,12 @@ namespace App.Services
         {
             if (!IsConfigured) throw new InvalidOperationException("Application storage has not been configured.");
             settings.OpenAiCompatibleBaseUrl = ValidateBaseUrl(settings.OpenAiCompatibleBaseUrl);
-            var providerChanged = !string.Equals(Current.OpenAiCompatibleBaseUrl, settings.OpenAiCompatibleBaseUrl, StringComparison.OrdinalIgnoreCase);
-            if (providerChanged)
+            if (!string.Equals(Current.OpenAiCompatibleBaseUrl, settings.OpenAiCompatibleBaseUrl, StringComparison.OrdinalIgnoreCase))
             {
                 // Models belong to a provider. Never carry a model ID over to a different endpoint.
-                settings.EmbeddingModel = string.Empty;
                 settings.LowCostModel = string.Empty;
                 settings.HighCostModel = string.Empty;
-                settings.ArtistModel = string.Empty;
             }
-            if (providerChanged
-                || !string.Equals(Current.EmbeddingModel, settings.EmbeddingModel, StringComparison.OrdinalIgnoreCase))
-                settings.EmbeddingsNeedRebuild = true;
             if (!string.Equals(Current.DatabaseFolder, settings.DatabaseFolder, StringComparison.OrdinalIgnoreCase))
                 MoveDatabase(settings.DatabaseFolder);
 
@@ -138,6 +134,8 @@ namespace App.Services
         {
             MigrateTextSetting(collection, "secretary.city", "general.city");
             MigrateTextSetting(collection, "secretary.country", "general.country");
+            foreach (var key in RetiredSettingKeys)
+                collection.Delete(key);
             foreach (var definition in AppSettings.Definitions)
                 if (collection.FindById(definition.Key) is null)
                     collection.Insert(new SettingDocument { Id = definition.Key, Name = definition.Name, Value = definition.Default, Default = definition.Default });
@@ -197,11 +195,8 @@ namespace App.Services
             new("recording.microphoneDeviceId", "Recording microphone", "", value => value.RecordingMicrophoneDeviceId),
             new("caffeine.shortcut", "Caffeine shortcut", "Ctrl+Shift+Alt+F12", value => value.CaffeineShortcut),
             new("ai.lastChatPersonality", "Last chat personality", "Secretary", value => value.LastChatPersonality),
-            new("ai.embeddingModel", "Embedding model", "", value => value.EmbeddingModel),
-            new("ai.embeddingsNeedRebuild", "Embeddings need rebuild", false, value => value.EmbeddingsNeedRebuild),
             new("ai.lowCostModel", "Low cost model", "", value => value.LowCostModel),
             new("ai.highCostModel", "High cost model", "", value => value.HighCostModel),
-            new("ai.artistModel", "Artist model", "", value => value.ArtistModel),
             new("technician.workspace", "Technician workspace", "", value => value.TechnicianWorkspace),
             new("cody.workspace", "Cody workspace", "", value => value.CodyWorkspace),
             new("general.city", "City", "Manila", value => value.City),
@@ -218,11 +213,8 @@ namespace App.Services
         public string RecordingMicrophoneDeviceId { get; set; } = string.Empty;
         public string CaffeineShortcut { get; set; } = "Ctrl+Shift+Alt+F12";
         public string LastChatPersonality { get; set; } = "Secretary";
-        public string EmbeddingModel { get; set; } = string.Empty;
-        public bool EmbeddingsNeedRebuild { get; set; }
         public string LowCostModel { get; set; } = string.Empty;
         public string HighCostModel { get; set; } = string.Empty;
-        public string ArtistModel { get; set; } = string.Empty;
         public string TechnicianWorkspace { get; set; } = string.Empty;
         public string CodyWorkspace { get; set; } = string.Empty;
         public string City { get; set; } = "Manila";
@@ -245,11 +237,8 @@ namespace App.Services
             result.RecordingMicrophoneDeviceId = Text("recording.microphoneDeviceId", result.RecordingMicrophoneDeviceId);
             result.CaffeineShortcut = Text("caffeine.shortcut", result.CaffeineShortcut);
             result.LastChatPersonality = Text("ai.lastChatPersonality", result.LastChatPersonality);
-            result.EmbeddingModel = Text("ai.embeddingModel", result.EmbeddingModel);
-            result.EmbeddingsNeedRebuild = Bool("ai.embeddingsNeedRebuild", result.EmbeddingsNeedRebuild);
             result.LowCostModel = Text("ai.lowCostModel", result.LowCostModel);
             result.HighCostModel = Text("ai.highCostModel", result.HighCostModel);
-            result.ArtistModel = Text("ai.artistModel", result.ArtistModel);
             result.TechnicianWorkspace = Text("technician.workspace", result.TechnicianWorkspace);
             result.CodyWorkspace = Text("cody.workspace", result.CodyWorkspace);
             result.City = Text("general.city", result.City);

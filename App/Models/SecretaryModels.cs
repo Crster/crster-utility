@@ -9,8 +9,7 @@ namespace App.Models
         string UserText,
         string AssistantText,
         string AttachmentNames,
-        DateTimeOffset CreatedUtc,
-        byte[]? Embedding);
+        DateTimeOffset CreatedUtc);
 
     internal sealed record SecretaryMemory(
         string Id,
@@ -18,8 +17,7 @@ namespace App.Models
         string SubjectKey,
         string Content,
         int Importance,
-        DateTimeOffset UpdatedUtc,
-        byte[]? Embedding);
+        DateTimeOffset UpdatedUtc);
 
     internal sealed record SecretaryScheduleEvent(
         string Id,
@@ -30,12 +28,10 @@ namespace App.Models
         bool IsAllDay,
         string? Location,
         string? Notes,
-        string Status,
-        byte[]? Embedding);
+        string Status);
 
     internal sealed record SecretaryResumeChunk(
         long Id,
         string SectionTitle,
-        string Content,
-        byte[]? Embedding);
+        string Content);
 }

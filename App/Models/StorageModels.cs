@@ -18,7 +18,6 @@ namespace App.Models
     internal sealed class NoteDocument
     {
         [BsonId] public string Id { get; set; } = Guid.NewGuid().ToString("D");
-        [BsonField("embedding")] public byte[] Embedding { get; set; } = [];
         [BsonField("value")] public string Value { get; set; } = string.Empty;
         [BsonField("attachments")] public List<string> Attachments { get; set; } = [];
         [BsonField("timestamp")] public DateTime Timestamp { get; set; } = DateTime.UtcNow;
@@ -38,7 +37,6 @@ namespace App.Models
     internal sealed class MemoDocument
     {
         [BsonId] public string Id { get; set; } = Guid.NewGuid().ToString("D");
-        [BsonField("embedding")] public byte[] Embedding { get; set; } = [];
         [BsonField("value")] public string Value { get; set; } = string.Empty;
         [BsonField("attachments")] public List<string> Attachments { get; set; } = [];
         [BsonField("timestamp")] public DateTime Timestamp { get; set; } = DateTime.UtcNow;
@@ -47,7 +45,6 @@ namespace App.Models
     internal sealed class TodoDocument
     {
         [BsonId] public string Id { get; set; } = Guid.NewGuid().ToString("D");
-        [BsonField("embedding")] public byte[] Embedding { get; set; } = [];
         [BsonField("value")] public string Value { get; set; } = string.Empty;
         [BsonField("category")] public string Category { get; set; } = string.Empty;
         [BsonField("is_done")] public bool IsDone { get; set; }

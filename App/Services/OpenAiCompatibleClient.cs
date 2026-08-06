@@ -13,7 +13,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using App.Models;
 using OpenAI;
-using OpenAI.Embeddings;
 using OpenAI.Responses;
 #pragma warning disable OPENAI001
 
@@ -22,13 +21,9 @@ namespace App.Services
     internal sealed class OpenAiCompatibleClient : IDisposable
     {
         private const int MaximumFunctionResultCharacters = 12_000;
-        private const string ArtistOutputSizeInstruction =
-            "Generate a clear, sharp landscape image at exactly 720 by 540 pixels (4:3 aspect ratio).\n\n";
         private readonly HttpClient _downloadClient = new() { Timeout = TimeSpan.FromMinutes(5) };
         private readonly string _apiKey;
         private readonly string _compatibleApiBaseUrl;
-        private readonly string _imageApiBaseUrl;
-        private readonly string _nativeDashScopeBaseUrl;
         private readonly OpenAIClient _openAiClient;
 
         public OpenAiCompatibleClient(string apiKey) : this(App.Settings.Current.OpenAiCompatibleBaseUrl, apiKey) { }
@@ -37,8 +32,6 @@ namespace App.Services
         {
             _apiKey = apiKey;
             _compatibleApiBaseUrl = baseUrl.TrimEnd('/');
-            _imageApiBaseUrl = $"{_compatibleApiBaseUrl}/images";
-            _nativeDashScopeBaseUrl = _compatibleApiBaseUrl.Replace("/compatible-mode/v1", "/api/v1", StringComparison.OrdinalIgnoreCase);
             _openAiClient = new OpenAIClient(
                 new ApiKeyCredential(apiKey),
                 new OpenAIClientOptions { Endpoint = new Uri($"{_compatibleApiBaseUrl}/") });
@@ -57,7 +50,6 @@ namespace App.Services
                 {
                     Id = id,
                     DisplayName = id,
-                    SupportsEmbedding = id.Contains("embedding", StringComparison.OrdinalIgnoreCase),
                     SupportsImageGeneration = id.Contains("image", StringComparison.OrdinalIgnoreCase)
                         || id.StartsWith("wan", StringComparison.OrdinalIgnoreCase),
                     SupportsChat = !id.Contains("embedding", StringComparison.OrdinalIgnoreCase)
@@ -78,31 +70,6 @@ namespace App.Services
         }
 
         public Task DeleteFileAsync(string remoteName, CancellationToken cancellationToken) => Task.CompletedTask;
-
-        // Section: Embeddings
-        // Queries and documents must be embedded the same way; instruction prefixes or label scaffolding
-        // that appears on only one side dominates the vector and makes every document look similar.
-        public Task<float[]> EmbedRetrievalQueryAsync(string query, CancellationToken cancellationToken) =>
-            EmbedAsync(query.Trim(), cancellationToken);
-
-        public Task<float[]> EmbedRetrievalDocumentAsync(string title, string text, CancellationToken cancellationToken) =>
-            EmbedAsync(string.IsNullOrWhiteSpace(title) ? text.Trim() : $"{title.Trim()}\n{text.Trim()}", cancellationToken);
-
-        public Task<float[]> EmbedNoteAsync(string text, CancellationToken cancellationToken) =>
-            EmbedAsync(text, cancellationToken);
-
-        private async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken)
-        {
-            RequireSelectedModel(App.Settings.Current.EmbeddingModel, "an embedding");
-            if (text.Length > 24_000) text = text[..24_000];
-            var options = new EmbeddingGenerationOptions
-            {
-                Dimensions = 768
-            };
-            var client = _openAiClient.GetEmbeddingClient(App.Settings.Current.EmbeddingModel);
-            var response = await client.GenerateEmbeddingAsync(text, options, cancellationToken);
-            return response.Value.ToFloats().ToArray();
-        }
 
         // Section: Text and tools
         public async Task<string> ImproveWritingAsync(string text, CancellationToken cancellationToken)
@@ -751,179 +718,6 @@ namespace App.Services
                 throw new InvalidOperationException($"Select {modelType} model in Settings before using this feature.");
         }
 
-        // Section: Images
-        public async Task<GeneratedImage> GenerateImageAsync(
-            string prompt,
-            IReadOnlyList<GeneratedImage> contextImages,
-            CancellationToken cancellationToken)
-        {
-            if (string.IsNullOrWhiteSpace(prompt)) throw new ArgumentException("An image prompt is required.", nameof(prompt));
-            var artistPrompt = ArtistOutputSizeInstruction + prompt.Trim();
-            var model = App.Settings.Current.ArtistModel;
-            RequireSelectedModel(model, "an artist");
-            if (IsQwenImageModel(model))
-                return await GenerateQwenImageAsync(model, artistPrompt, contextImages, cancellationToken);
-
-            if (contextImages.Count == 0)
-            {
-                using var request = new HttpRequestMessage(HttpMethod.Post, $"{_imageApiBaseUrl}/generations")
-                {
-                    Content = JsonContent.Create(new
-                    {
-                        model,
-                        prompt = artistPrompt,
-                        n = 1
-                    })
-                };
-                return await SendImageRequestAsync(request, cancellationToken);
-            }
-
-            using var form = new MultipartFormDataContent();
-            form.Add(new StringContent(model), "model");
-            form.Add(new StringContent(artistPrompt), "prompt");
-            form.Add(new StringContent("1"), "n");
-            foreach (var context in contextImages)
-            {
-                if (context.Data.Length == 0) throw new ArgumentException("The context image is empty.", nameof(contextImages));
-                var imageContent = new ByteArrayContent(context.Data);
-                imageContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(context.MimeType);
-                form.Add(imageContent, "image[]", $"reference{MimeTypeExtension(context.MimeType)}");
-            }
-
-            using var editRequest = new HttpRequestMessage(HttpMethod.Post, $"{_imageApiBaseUrl}/edits") { Content = form };
-            return await SendImageRequestAsync(editRequest, cancellationToken);
-        }
-
-        private async Task<GeneratedImage> SendImageRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
-            using var response = await _downloadClient.SendAsync(request, cancellationToken);
-            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-            if (!response.IsSuccessStatusCode)
-            {
-                try
-                {
-                    var error = JsonNode.Parse(responseBody)?["error"]?["message"]?.GetValue<string>();
-                    throw new InvalidOperationException(error ?? $"The image API returned HTTP {(int)response.StatusCode}.");
-                }
-                catch (JsonException)
-                {
-                    throw new InvalidOperationException($"The image API returned HTTP {(int)response.StatusCode}.");
-                }
-            }
-
-            var imageBase64 = JsonNode.Parse(responseBody)?["data"]?[0]?["b64_json"]?.GetValue<string>();
-            if (string.IsNullOrWhiteSpace(imageBase64)) throw new InvalidOperationException("The image API returned no image data.");
-            return new GeneratedImage(Convert.FromBase64String(imageBase64), "image/png");
-        }
-
-        private async Task<GeneratedImage> GenerateQwenImageAsync(
-            string model,
-            string prompt,
-            IReadOnlyList<GeneratedImage> contextImages,
-            CancellationToken cancellationToken)
-        {
-            if (model.Contains("image-plus", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(model, "qwen-image", StringComparison.OrdinalIgnoreCase))
-            {
-                if (contextImages.Count > 0)
-                    throw new NotSupportedException("The selected Qwen model generates images from text only. Choose a qwen-image-2.0 or qwen-image-3.0 model to edit images.");
-                return await GenerateQwenAsyncTextToImageAsync(model, prompt, cancellationToken);
-            }
-
-            var content = new JsonArray();
-            foreach (var context in contextImages)
-            {
-                if (context.Data.Length == 0) throw new ArgumentException("The context image is empty.", nameof(contextImages));
-                content.Add(new JsonObject
-                {
-                    ["image"] = $"data:{context.MimeType};base64,{Convert.ToBase64String(context.Data)}"
-                });
-            }
-            content.Add(new JsonObject { ["text"] = prompt });
-
-            using var request = new HttpRequestMessage(HttpMethod.Post, NativeDashScopeUrl("/services/aigc/multimodal-generation/generation"))
-            {
-                Content = JsonContent.Create(new
-                {
-                    model,
-                    input = new
-                    {
-                        messages = new[]
-                        {
-                            new
-                            {
-                                role = "user",
-                                content
-                            }
-                        }
-                    },
-                    parameters = new { prompt_extend = true, watermark = false }
-                })
-            };
-            var imageUrl = await SendQwenRequestAsync(request, cancellationToken);
-            return await DownloadGeneratedImageAsync(imageUrl, cancellationToken);
-        }
-
-        private async Task<GeneratedImage> GenerateQwenAsyncTextToImageAsync(
-            string model,
-            string prompt,
-            CancellationToken cancellationToken)
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Post, NativeDashScopeUrl("/services/aigc/text2image/image-synthesis"))
-            {
-                Content = JsonContent.Create(new
-                {
-                    model,
-                    input = new { prompt },
-                    parameters = new { n = 1, prompt_extend = true, watermark = false }
-                })
-            };
-            request.Headers.Add("X-DashScope-Async", "enable");
-            var taskId = await SendQwenTaskCreationAsync(request, cancellationToken);
-            var deadline = DateTimeOffset.UtcNow.AddMinutes(2);
-            while (DateTimeOffset.UtcNow < deadline)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
-                using var statusRequest = new HttpRequestMessage(HttpMethod.Get, NativeDashScopeUrl($"/tasks/{taskId}"));
-                var imageUrl = await ReadQwenTaskStatusAsync(statusRequest, cancellationToken);
-                if (imageUrl is not null) return await DownloadGeneratedImageAsync(imageUrl, cancellationToken);
-            }
-            throw new TimeoutException("Qwen image generation did not finish within two minutes.");
-        }
-
-        private async Task<string> SendQwenRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var root = await SendAuthorizedJsonRequestAsync(request, cancellationToken);
-            var imageUrl = root["output"]?["choices"]?[0]?["message"]?["content"]?[0]?["image"]?.GetValue<string>();
-            return !string.IsNullOrWhiteSpace(imageUrl)
-                ? imageUrl
-                : throw new InvalidOperationException("Qwen returned no image URL.");
-        }
-
-        private async Task<string> SendQwenTaskCreationAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var root = await SendAuthorizedJsonRequestAsync(request, cancellationToken);
-            var taskId = root["output"]?["task_id"]?.GetValue<string>();
-            return !string.IsNullOrWhiteSpace(taskId)
-                ? taskId
-                : throw new InvalidOperationException("Qwen returned no image task ID.");
-        }
-
-        private async Task<string?> ReadQwenTaskStatusAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var root = await SendAuthorizedJsonRequestAsync(request, cancellationToken);
-            var output = root["output"] as JsonObject;
-            var status = output?["task_status"]?.GetValue<string>();
-            if (string.Equals(status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase))
-                return output?["results"]?[0]?["url"]?.GetValue<string>()
-                    ?? throw new InvalidOperationException("Qwen completed the image task without an image URL.");
-            if (string.Equals(status, "FAILED", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(status, "CANCELED", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException(output?["message"]?.GetValue<string>() ?? "Qwen image generation failed.");
-            return null;
-        }
-
         private async Task<JsonObject> SendAuthorizedJsonRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
@@ -940,21 +734,9 @@ namespace App.Services
                 throw new InvalidOperationException("Qwen returned an invalid JSON response.", exception);
             }
             if (!response.IsSuccessStatusCode)
-                throw new InvalidOperationException(root["message"]?.GetValue<string>() ?? root["error"]?["message"]?.GetValue<string>() ?? $"The Qwen image API returned HTTP {(int)response.StatusCode}.");
+                throw new InvalidOperationException(root["message"]?.GetValue<string>() ?? root["error"]?["message"]?.GetValue<string>() ?? $"The Qwen API returned HTTP {(int)response.StatusCode}.");
             return root;
         }
-
-        private async Task<GeneratedImage> DownloadGeneratedImageAsync(string imageUrl, CancellationToken cancellationToken)
-        {
-            using var response = await _downloadClient.GetAsync(imageUrl, cancellationToken);
-            response.EnsureSuccessStatusCode();
-            return new GeneratedImage(await response.Content.ReadAsByteArrayAsync(cancellationToken), response.Content.Headers.ContentType?.MediaType ?? "image/png");
-        }
-
-        private string NativeDashScopeUrl(string path) => $"{_nativeDashScopeBaseUrl}{path}";
-
-        private static bool IsQwenImageModel(string model) =>
-            model.StartsWith("qwen-image", StringComparison.OrdinalIgnoreCase);
 
         // Section: HTTP
         private static string TruncateFunctionResult(string value) => value.Length <= MaximumFunctionResultCharacters
@@ -977,13 +759,6 @@ namespace App.Services
             ".md" => "text/markdown",
             ".txt" or ".log" or ".ini" or ".conf" or ".env" or ".cs" or ".xaml" or ".js" or ".ts" or ".py" => "text/plain",
             _ => "application/octet-stream"
-        };
-
-        private static string MimeTypeExtension(string mimeType) => mimeType.ToLowerInvariant() switch
-        {
-            "image/jpeg" => ".jpg",
-            "image/webp" => ".webp",
-            _ => ".png"
         };
 
         public void Dispose()

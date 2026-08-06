@@ -28,12 +28,11 @@ namespace App.Windows
             new() { Title = "Cody", Details = "Open the agentic coding workspace", SearchTerms = "cody code coding agent workspace terminal files", Destination = "CodyPage" },
             new() { Title = "Take a screenshot", Details = "Capture and edit your screen", SearchTerms = "screenshot screen capture snapshot take picture", Destination = "SnapshotsPage" },
             new() { Title = "Record screen", Details = "Start a screen recording", SearchTerms = "record screen recording video capture start recording", Destination = "RecordingsPage" },
-            new() { Title = "Artist", Details = "Generate and edit images with your AI provider", SearchTerms = "artist image generate generator edit ai provider", Destination = "ArtistPage" },
             new() { Title = "Todos", Details = "View and complete your todos", SearchTerms = "todo todos tasks checklist complete done", Destination = "TodoPage" },
             new() { Title = "Start with Windows", Details = "Launch Crster Utility after sign-in", SearchTerms = "settings preferences startup launch boot login tray", Destination = "SettingsPage" },
             new() { Title = "Database folder", Details = "Choose where Crster Utility stores its database", SearchTerms = "settings preferences storage notebook path location browse", Destination = "SettingsPage" },
             new() { Title = "AI provider", Details = "Configure the OpenAI-compatible URL and API key", SearchTerms = "settings preferences openai compatible url api key credential", Destination = "SettingsPage" },
-            new() { Title = "AI models", Details = "Choose embedding, low-cost, high-cost, and artist models", SearchTerms = "settings preferences ai model embedding low cost high artist", Destination = "SettingsPage" },
+            new() { Title = "AI models", Details = "Choose low-cost and high-cost models", SearchTerms = "settings preferences ai model low cost high", Destination = "SettingsPage" },
             new() { Title = "Location", Details = "Set the city and country", SearchTerms = "settings preferences city country region", Destination = "SettingsPage" },
             new() { Title = "Snapshot shortcut", Details = "Choose the keyboard shortcut for snapshots", SearchTerms = "settings preferences screenshot capture hotkey keyboard", Destination = "SettingsPage" },
             new() { Title = "Capture mouse cursor", Details = "Include the pointer in snapshots", SearchTerms = "settings preferences screenshot snapshot pointer mouse", Destination = "SettingsPage" },
@@ -195,10 +194,6 @@ namespace App.Windows
                 {
                     NavigationPresenter.Navigate(typeof(Pages.TodoPage));
                 }
-                else if (tag == "ArtistPage")
-                {
-                    NavigationPresenter.Navigate(typeof(Pages.ArtistPage));
-                }
                 else if (tag == "ChatPage")
                 {
                     NavigationPresenter.Navigate(typeof(Pages.ChatPage));
@@ -290,16 +285,14 @@ namespace App.Windows
                 return;
             }
 
-            if (!await OfferEmbeddingRebuildBeforeSearchAsync()) return;
-
             try
             {
-                var notebookSearch = _notebookDatabase.SearchAsync(query);
-                var todoSearch = _todoSearch.SearchAsync(query);
-                await Task.WhenAll(notebookSearch, todoSearch);
-                var notebookResults = await notebookSearch;
-                var todoResults = await todoSearch;
+                // One model call builds the patterns; both stores are then searched locally.
+                using var client = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
+                var patterns = await KeywordSearchService.CreatePatternsAsync(client, query, CancellationToken.None);
                 if (searchVersion != _searchVersion) return;
+                var todoResults = _todoSearch.Search(patterns);
+                var notebookResults = _notebookDatabase.Search(patterns);
                 var featureResults = FeatureSearchResults.Where(result => MatchesSearch(result, query));
                 sender.ItemsSource = featureResults.Cast<object>()
                     .Concat(todoResults)
@@ -310,58 +303,6 @@ namespace App.Windows
             {
                 if (searchVersion == _searchVersion) sender.ItemsSource = null;
             }
-        }
-
-        private async Task<bool> OfferEmbeddingRebuildBeforeSearchAsync()
-        {
-            if (!App.Settings.Current.EmbeddingsNeedRebuild) return true;
-
-            var dialog = new ContentDialog
-            {
-                XamlRoot = GlobalSearchBox.XamlRoot,
-                Title = "Rebuild embeddings?",
-                Content = "Your embedding endpoint or model changed. Rebuild stored embeddings before searching for accurate results.",
-                PrimaryButtonText = "Rebuild",
-                SecondaryButtonText = "Search without rebuilding",
-                CloseButtonText = "Cancel",
-                DefaultButton = ContentDialogButton.Primary
-            };
-
-            var choice = await dialog.ShowAsync();
-            if (choice == ContentDialogResult.Secondary) return true;
-            if (choice != ContentDialogResult.Primary) return false;
-
-            var rebuiltConfiguration = EmbeddingMaintenanceService.CurrentConfigurationKey;
-            GlobalSearchBox.IsEnabled = false;
-            try
-            {
-                await EmbeddingMaintenanceService.RebuildAllAsync(CancellationToken.None);
-                if (EmbeddingMaintenanceService.MarkCurrentConfigurationRebuilt(rebuiltConfiguration)) return true;
-
-                await ShowEmbeddingRebuildMessageAsync("Embeddings were rebuilt, but the endpoint or model changed during the rebuild. Rebuild again before searching.");
-                return false;
-            }
-            catch (Exception exception)
-            {
-                await ShowEmbeddingRebuildMessageAsync($"Embeddings could not be rebuilt: {exception.Message}");
-                return false;
-            }
-            finally
-            {
-                GlobalSearchBox.IsEnabled = true;
-            }
-        }
-
-        private async Task ShowEmbeddingRebuildMessageAsync(string message)
-        {
-            var dialog = new ContentDialog
-            {
-                XamlRoot = GlobalSearchBox.XamlRoot,
-                Title = "Embedding rebuild",
-                Content = message,
-                CloseButtonText = "OK"
-            };
-            await dialog.ShowAsync();
         }
 
         private void NavigateToSearchResult(object result)
@@ -402,9 +343,6 @@ namespace App.Windows
                     break;
                 case "ToolsPage":
                     SidebarNavigation.SelectedItem = ToolsNavItem;
-                    break;
-                case "ArtistPage":
-                    SidebarNavigation.SelectedItem = ArtistNavItem;
                     break;
                 case "TodoPage":
                     SidebarNavigation.SelectedItem = TodoNavItem;

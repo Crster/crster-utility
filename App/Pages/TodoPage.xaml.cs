@@ -21,7 +21,6 @@ namespace App.Pages
         private sealed record TodoItemContext(string Id, bool Urgent);
 
         private readonly TodoRepository _repository = new();
-        private readonly TodoSearchService _search = new();
         private readonly HashSet<string> _expandedGroups = new(StringComparer.Ordinal);
         private Action? _cancelOperation;
         private string? _requestedTodoId;
@@ -229,7 +228,7 @@ namespace App.Pages
                 _creatingTodoCategory = null;
                 RefreshGroup(grid, category);
             }
-            async void Save()
+            void Save()
             {
                 if (string.IsNullOrWhiteSpace(input.Text)) return;
                 var todo = _repository.Create(input.Text, category, "user");
@@ -257,8 +256,6 @@ namespace App.Pages
                     var todos = _repository.ListByCategory(category);
                     group.Children.Add(CreateGroupActions(group, category, todos, _expandedGroups.Contains(category)));
                 }
-                try { await _search.RefreshEmbeddingAsync(todo); }
-                catch (Exception) { }
             }
             _cancelOperation = Cancel;
             cancel.Click += (_, _) => Cancel();
@@ -587,7 +584,7 @@ namespace App.Pages
             input.SelectAll();
             input.Focus(FocusState.Programmatic);
             void Cancel() => ReplaceTodoItem(root, todo, urgent);
-            async void Save()
+            void Save()
             {
                 if (string.IsNullOrWhiteSpace(input.Text))
                 {
@@ -604,11 +601,8 @@ namespace App.Pages
                 }
 
                 todo.Value = value;
-                todo.Embedding = [];
                 _repository.Update(todo);
                 ReplaceTodoItems(todo);
-                try { await _search.RefreshEmbeddingAsync(todo); }
-                catch (Exception) { }
             }
             _cancelOperation = Cancel;
             cancel.Click += (_, _) => Cancel();

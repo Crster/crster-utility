@@ -8,11 +8,10 @@ The application is organized into the following pages:
 
 - **Chat** — Chat with the Secretary, Smart, or Technician personality. Conversations can use local notebook and todo data, configurable tools, weather/location context, and the configured OpenAI-compatible provider.
 - **Cody** — An agentic coding workspace with a file tree, Monaco editor, terminal, workspace context, attachments, and an optional Cody chat panel. Operations that affect the local workspace are surfaced for approval where appropriate.
-- **Notebook** — Store searchable Markdown notes, attach files and images, paste clipboard content, use formatting helpers, generate secrets/passwords, and ask the configured AI provider to improve selected writing. Notebook search can use embeddings.
+- **Notebook** — Store searchable Markdown notes, attach files and images, paste clipboard content, use formatting helpers, generate secrets/passwords, and ask the configured AI provider to improve selected writing. Notebook search asks the low-cost model for keyword patterns and matches them locally.
 - **Todos** — Create, search, categorize, complete, and schedule tasks.
 - **Snapshots** — Capture the screen from the page or a global shortcut, optionally including the mouse pointer. Captured images can be edited, annotated, copied, saved, and processed with AI-assisted actions.
 - **Recordings** — Record the screen to MP4 with optional microphone input and system audio. A recording toolbar remains available while the main window is hidden.
-- **Artist** — Generate images through the configured provider, open local images, paste clipboard images, select/crop an image, and save the result.
 - **Tools** — Run **Caffeine**, which keeps the computer active by periodically moving the pointer, scrolling, or switching tabs. Moving the pointer at least 100 pixels from its last automated position stops it.
 
 The window can be minimized to the Windows notification area. Optional startup registration and global shortcuts are controlled in Settings. The package also exposes a Copilot-key app extension when registered by Windows.
@@ -33,9 +32,9 @@ On first launch, choose a writable database folder and configure an OpenAI-compa
 
 1. Enter the provider base URL, including the API version path when required (for example, `https://api.openai.com/v1`). Only `http` and `https` URLs are accepted.
 2. Enter the provider API key.
-3. After the provider is reachable, select the available models for embeddings, low-cost requests, high-cost requests, and Artist image generation.
+3. After the provider is reachable, select the available models for low-cost requests and high-cost requests.
 
-The same settings are available later from **Settings**. Changing the provider or embedding model marks notebook embeddings for rebuild. AI features are optional, but Chat, Cody, Artist, AI writing assistance, semantic notebook search, and some tools require a working provider and suitable model configuration.
+The same settings are available later from **Settings**. Changing the provider clears the selected models. AI features are optional, but Chat, Cody, AI writing assistance, keyword search, and some tools require a working provider and suitable model configuration.
 
 ### Privacy and stored data
 

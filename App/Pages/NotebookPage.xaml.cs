@@ -481,7 +481,6 @@ namespace App.Pages
                         Type = "note",
                         Content = entry.Content,
                         Attachments = [.. entry.Attachments],
-                        Embedding = entry.Embedding,
                         Timestamp = entry.Timestamp
                     }).ToList();
                     try

@@ -3,7 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -11,9 +11,6 @@ namespace App.Services
 {
     internal sealed class NotebookDatabaseService
     {
-        private const double MinimumSearchSimilarity = 0.45;
-        private const double MaximumSimilarityDropFromBest = 0.12;
-
         public NotebookDatabaseService() { }
 
         private LiteDatabaseService Database => App.Settings.Database;
@@ -22,23 +19,15 @@ namespace App.Services
         public Task<List<NotebookEntry>> LoadAsync() =>
             Task.FromResult(Database.Notes.Query().OrderByDescending(item => item.Timestamp).ToList().Select(ToEntry).ToList());
 
-        public async Task<List<NotebookSearchResult>> SearchAsync(string query, int maximumResults = 10, CancellationToken cancellationToken = default)
+        /// <summary>Ranks notes by how many of the supplied search patterns they contain.</summary>
+        public List<NotebookSearchResult> Search(IReadOnlyList<Regex> patterns, int maximumResults = 10)
         {
-            if (string.IsNullOrWhiteSpace(query)) return [];
-            using var openAiCompatible = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
-            var embedding = await openAiCompatible.EmbedRetrievalQueryAsync(query, cancellationToken);
-            var ranked = Database.Notes.FindAll()
-                .Where(item => item.Embedding.Length > 0)
-                .Select(item => (Item: item, Score: Cosine(embedding, BytesToFloats(item.Embedding))))
-                .Where(item => item.Score >= MinimumSearchSimilarity)
-                .OrderByDescending(item => item.Score)
+            if (patterns.Count == 0) return [];
+            return Database.Notes.FindAll()
+                .Select(item => (Item: item, Matches: KeywordSearchService.CountMatches(patterns, NotebookFormat.CreateSearchText(item.Value))))
+                .Where(item => item.Matches > 0)
+                .OrderByDescending(item => item.Matches)
                 .ThenByDescending(item => item.Item.Timestamp)
-                .ToList();
-            if (ranked.Count == 0) return [];
-
-            var relativeCutoff = ranked[0].Score - MaximumSimilarityDropFromBest;
-            return ranked
-                .Where(item => item.Score >= relativeCutoff)
                 .Take(maximumResults)
                 .Select(item => new NotebookSearchResult
                 {
@@ -74,59 +63,45 @@ namespace App.Services
             return Task.FromResult(document is null ? null : ToEntry(document));
         }
 
-        public async Task<NotebookEntry> CreateAsync(string content, CancellationToken cancellationToken = default)
+        public Task<NotebookEntry> CreateAsync(string content, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             content = content.Trim();
             if (content.Length == 0) throw new ArgumentException("Note content is required.", nameof(content));
 
-            var embeddingText = NotebookFormat.CreateEmbeddingText(content);
-            using var openAiCompatible = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
             var document = new NoteDocument
             {
                 Value = content,
-                Embedding = string.IsNullOrWhiteSpace(embeddingText)
-                    ? []
-                    : FloatsToBytes(await openAiCompatible.EmbedNoteAsync(embeddingText, cancellationToken)),
                 Timestamp = DateTime.UtcNow
             };
             Database.Notes.Insert(document);
-            return ToEntry(document);
+            return Task.FromResult(ToEntry(document));
         }
 
-        public async Task SaveAsync(IEnumerable<NotebookEntry> entries)
+        public Task SaveAsync(IEnumerable<NotebookEntry> entries)
         {
             var incoming = entries.ToList();
             var existing = Database.Notes.FindAll().ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
             var prepared = new List<NoteDocument>();
-            using var openAiCompatible = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
-            try
+            foreach (var entry in incoming)
             {
-                foreach (var entry in incoming)
+                var attachmentIds = NotebookFormat.ExtractAttachmentIds(entry.Content);
+                if (existing.TryGetValue(entry.Key, out var stored) &&
+                    string.Equals(stored.Value, entry.Content, StringComparison.Ordinal) &&
+                    stored.Attachments.SequenceEqual(attachmentIds))
                 {
-                    var attachmentIds = NotebookFormat.ExtractAttachmentIds(entry.Content);
-                    if (existing.TryGetValue(entry.Key, out var stored) &&
-                        string.Equals(stored.Value, entry.Content, StringComparison.Ordinal) &&
-                        stored.Attachments.SequenceEqual(attachmentIds))
-                    {
-                        prepared.Add(stored);
-                        continue;
-                    }
-
-                    var embeddingText = NotebookFormat.CreateEmbeddingText(entry.Content);
-                    var embedding = string.IsNullOrWhiteSpace(embeddingText)
-                        ? []
-                        : await openAiCompatible.EmbedNoteAsync(embeddingText, CancellationToken.None);
-                    prepared.Add(new NoteDocument
-                    {
-                        Id = entry.Key,
-                        Value = entry.Content,
-                        Attachments = attachmentIds,
-                        Embedding = FloatsToBytes(embedding),
-                        Timestamp = DateTime.UtcNow
-                    });
+                    prepared.Add(stored);
+                    continue;
                 }
+
+                prepared.Add(new NoteDocument
+                {
+                    Id = entry.Key,
+                    Value = entry.Content,
+                    Attachments = attachmentIds,
+                    Timestamp = DateTime.UtcNow
+                });
             }
-            catch { DeleteOrphanedAttachments(); throw; }
 
             Database.Database.BeginTrans();
             try
@@ -142,6 +117,7 @@ namespace App.Services
                 Database.Database.Rollback();
                 throw;
             }
+            return Task.CompletedTask;
         }
 
         private void DeleteOrphanedAttachments()
@@ -165,26 +141,9 @@ namespace App.Services
             Key = document.Id,
             Type = "note",
             Content = document.Value,
-            Embedding = document.Embedding,
             Attachments = [.. document.Attachments],
             Timestamp = document.Timestamp
         };
-
-        internal static byte[] FloatsToBytes(float[] values) => MemoryMarshal.AsBytes(values.AsSpan()).ToArray();
-        internal static float[] BytesToFloats(byte[] values) => MemoryMarshal.Cast<byte, float>(values.AsSpan()).ToArray();
-
-        internal static double Cosine(float[] left, float[] right)
-        {
-            if (left.Length == 0 || left.Length != right.Length) return 0;
-            double dot = 0, leftMagnitude = 0, rightMagnitude = 0;
-            for (var index = 0; index < left.Length; index++)
-            {
-                dot += left[index] * right[index];
-                leftMagnitude += left[index] * left[index];
-                rightMagnitude += right[index] * right[index];
-            }
-            return leftMagnitude == 0 || rightMagnitude == 0 ? 0 : dot / (Math.Sqrt(leftMagnitude) * Math.Sqrt(rightMagnitude));
-        }
 
         private static double FuzzyScore(IReadOnlyList<string> queryTerms, IReadOnlyList<string> documentTerms)
         {

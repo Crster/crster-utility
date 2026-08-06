@@ -6,6 +6,7 @@ using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.ApplicationModel.DataTransfer;
@@ -16,7 +17,6 @@ namespace App.Services
     internal sealed class SecretaryToolService : IDisposable
     {
         private const int MaximumResults = 20;
-        private const double MinimumSearchSimilarity = 0.45;
         private readonly SecretaryMemoryService _memory;
         private readonly NotebookDatabaseService _notebook = new();
         private readonly TodoRepository _todos = new();
@@ -26,7 +26,7 @@ namespace App.Services
 
         public static JsonArray CreateDeclarations() => new()
         {
-            Function("search_memory", "Search saved notes, memos, and todos by semantic meaning. Use a concise natural-language keyword or phrase.", Props(("search_keyword", String("Natural-language keyword or phrase to search for."))), "search_keyword"),
+            Function("search_memory", "Search saved notes, memos, and todos by keyword. Use a concise keyword or phrase; related words and word forms are matched too.", Props(("search_keyword", String("Keyword or phrase to search for."))), "search_keyword"),
             Function("save_note", "Save a note the user explicitly asks to keep.", Props(("note_text", String("Exact note content to save."))), "note_text"),
             Function("save_memo", "Use only to remember an explicit, durable user detail that will improve future help. Never save secrets, credentials, guesses, or inferred claims.", Props(("memo_text", String("Exact user-provided detail to remember."))), "memo_text"),
             Function("remove_memo", "Forget one saved memo identified by its key. Search memory first when the key is unknown.", Props(("memo_key", String("Exact memo key returned by search_memory."))), "memo_key"),
@@ -37,7 +37,7 @@ namespace App.Services
 
         public static JsonArray CreateReadOnlyDeclarations() => new()
         {
-            Function("search_memory", "Search saved notes, memos, and todos by semantic meaning. Use a concise natural-language keyword or phrase.", Props(("search_keyword", String("Natural-language keyword or phrase to search for."))), "search_keyword"),
+            Function("search_memory", "Search saved notes, memos, and todos by keyword. Use a concise keyword or phrase; related words and word forms are matched too.", Props(("search_keyword", String("Keyword or phrase to search for."))), "search_keyword"),
             Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", DataKindSchema())), "context_type")
         };
 
@@ -49,10 +49,10 @@ namespace App.Services
                 {
                     "search_memory" => await SearchLocalKnowledgeAsync(RequiredString(arguments, "search_keyword"), token),
                     "save_note" => await SaveNoteAsync(RequiredString(arguments, "note_text"), token),
-                    "save_memo" => await WriteMemoAsync(RequiredString(arguments, "memo_text"), token),
+                    "save_memo" => WriteMemo(RequiredString(arguments, "memo_text")),
                     "remove_memo" => DeleteMemo(RequiredString(arguments, "memo_key")),
                     "list_todo_categories" => ListTodoCategories(),
-                    "save_todo" => await WriteTodoAsync(RequiredString(arguments, "todo_text"), OptionalString(arguments, "category_name") is { Length: > 0 } category ? category : "General", OptionalString(arguments, "notification_cron"), token),
+                    "save_todo" => WriteTodo(RequiredString(arguments, "todo_text"), OptionalString(arguments, "category_name") is { Length: > 0 } category ? category : "General", OptionalString(arguments, "notification_cron")),
                     "get_local_context" => await GetDataAsync(RequiredString(arguments, "context_type"), token),
                     _ => Error("unknown_tool", $"Secretary cannot use the tool “{name}”.")
                 };
@@ -72,71 +72,61 @@ namespace App.Services
         private async Task<ToolResult> SearchLocalKnowledgeAsync(string keyword, CancellationToken token)
         {
             using var client = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
-            var queryEmbedding = await client.EmbedRetrievalQueryAsync(keyword, token);
-            var matches = new List<(DateTime Timestamp, JsonObject Item)>();
+            var patterns = await KeywordSearchService.CreatePatternsAsync(client, keyword, token);
+            var matches = new List<(int Matches, DateTime Timestamp, JsonObject Item)>();
             foreach (var note in _memory.ListNotes())
             {
-                AddSemanticMatch(matches, note.Timestamp, note.Embedding, new JsonObject
+                AddKeywordMatch(matches, note.Timestamp, note.Value, new JsonObject
                 {
                     ["source"] = "note",
                     ["key"] = note.Id,
                     ["value"] = note.Value,
                     ["written_utc"] = note.Timestamp.ToString("O")
-                }, queryEmbedding);
+                }, patterns);
             }
 
             foreach (var memo in _memory.ListMemos())
             {
-                AddSemanticMatch(matches, memo.Timestamp, memo.Embedding, new JsonObject
+                AddKeywordMatch(matches, memo.Timestamp, memo.Value, new JsonObject
                 {
                     ["source"] = "memo",
                     ["key"] = memo.Id,
                     ["value"] = memo.Value,
                     ["written_utc"] = memo.Timestamp.ToString("O")
-                }, queryEmbedding);
+                }, patterns);
             }
 
             foreach (var todo in _todos.List())
             {
                 var value = TodoJson(todo);
                 value.Insert(0, "source", "todo");
-                AddSemanticMatch(matches, todo.CreatedAt, todo.Embedding, value, queryEmbedding);
+                AddKeywordMatch(matches, todo.CreatedAt, $"{todo.Category}\n{todo.Value}", value, patterns);
             }
 
-            var relativeCutoff = matches.Count == 0
-                ? double.MinValue
-                : matches.Max(match => match.Item["similarity"]?.GetValue<double>() ?? double.MinValue) - 0.12;
             var items = new JsonArray(matches
-                .Where(match => (match.Item["similarity"]?.GetValue<double>() ?? double.MinValue) >= relativeCutoff)
-                .OrderByDescending(match => match.Item["similarity"]?.GetValue<double>() ?? double.MinValue)
+                .OrderByDescending(match => match.Matches)
                 .ThenByDescending(match => match.Timestamp)
                 .Take(MaximumResults)
-                .Select(match =>
-                {
-                    match.Item.Remove("similarity");
-                    return (JsonNode)match.Item;
-                })
+                .Select(match => (JsonNode)match.Item)
                 .ToArray());
             return Ok($"Found {items.Count} saved result(s).", new JsonObject { ["items"] = items });
         }
 
-        private static void AddSemanticMatch(
-            List<(DateTime Timestamp, JsonObject Item)> matches,
+        private static void AddKeywordMatch(
+            List<(int Matches, DateTime Timestamp, JsonObject Item)> matches,
             DateTime timestamp,
-            byte[] embedding,
+            string text,
             JsonObject item,
-            float[] queryEmbedding)
+            IReadOnlyList<Regex> patterns)
         {
-            if (embedding.Length == 0) return;
-            var score = NotebookDatabaseService.Cosine(queryEmbedding, NotebookDatabaseService.BytesToFloats(embedding));
-            if (score < MinimumSearchSimilarity) return;
-            item["similarity"] = score;
-            matches.Add((timestamp, item));
+            var count = KeywordSearchService.CountMatches(patterns, text);
+            if (count == 0) return;
+            matches.Add((count, timestamp, item));
         }
 
-        private async Task<ToolResult> WriteMemoAsync(string value, CancellationToken token)
+        private ToolResult WriteMemo(string value)
         {
-            var memo = await _memory.WriteMemoAsync(value, token);
+            var memo = _memory.WriteMemo(value);
             return Ok("Saved the memo.", new JsonObject { ["key"] = memo.Id });
         }
 
@@ -157,7 +147,7 @@ namespace App.Services
             return Ok("Returned the available todo categories.", new JsonObject { ["categories"] = categories });
         }
 
-        private async Task<ToolResult> WriteTodoAsync(string value, string category, string notify, CancellationToken token)
+        private ToolResult WriteTodo(string value, string category, string notify)
         {
             if (!string.IsNullOrWhiteSpace(notify))
             {
@@ -165,9 +155,6 @@ namespace App.Services
                 catch (CronFormatException exception) { throw new FormatException($"notify is not a valid five-field cron expression: {exception.Message}"); }
             }
             var todo = _todos.Create(value, category, "secretary", notify);
-            try { await new TodoSearchService().RefreshEmbeddingAsync(todo, token); }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception) { }
             return Ok("Saved the todo.", new JsonObject { ["item"] = TodoJson(todo) });
         }
 

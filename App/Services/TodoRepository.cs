@@ -95,7 +95,6 @@ namespace App.Services
                 foreach (var todo in todos)
                 {
                     todo.Category = newCategory;
-                    todo.Embedding = [];
                     Database.Todos.Update(todo);
                 }
 

@@ -18,7 +18,6 @@ namespace App.Pages
     public sealed partial class SettingsPage : Page
     {
         private bool _loading;
-        private bool _isRebuilding;
         private AppSettings _settings = null!;
         private string _loadedModelEndpoint = string.Empty;
         private IReadOnlyList<ModelChoice> _availableModelChoices = [];
@@ -68,7 +67,6 @@ namespace App.Pages
             CaffeineShortcutBox.SelectedItem = FindShortcut(CaffeineShortcuts, _settings.CaffeineShortcut);
             await LoadMicrophonesAsync();
             await LoadModelsAsync();
-            UpdateEmbeddingRebuildUi();
             UpdatePermissionWarnings();
             App.Settings.Changed += Settings_Changed;
             if (App.MainWindow is not null) App.MainWindow.Activated += MainWindow_Activated;
@@ -81,11 +79,7 @@ namespace App.Pages
             if (App.MainWindow is not null) App.MainWindow.Activated -= MainWindow_Activated;
         }
 
-        private void Settings_Changed(object? sender, AppSettings settings)
-        {
-            _settings = settings.Clone();
-            UpdateEmbeddingRebuildUi();
-        }
+        private void Settings_Changed(object? sender, AppSettings settings) => _settings = settings.Clone();
 
         private void MainWindow_Activated(object sender, WindowActivatedEventArgs args) => UpdatePermissionWarnings();
 
@@ -144,10 +138,8 @@ namespace App.Pages
             {
                 using var client = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
                 var models = await client.ListModelsAsync(System.Threading.CancellationToken.None);
-                SetModelChoices(EmbeddingModelBox, models, _settings.EmbeddingModel);
                 SetModelChoices(LowCostModelBox, models, _settings.LowCostModel);
                 SetModelChoices(HighCostModelBox, models, _settings.HighCostModel);
-                SetModelChoices(ArtistModelBox, models, _settings.ArtistModel);
                 _loadedModelEndpoint = ModelEndpointKey(_settings);
                 SetModelBoxesEnabled(true);
             }
@@ -169,32 +161,17 @@ namespace App.Pages
 
         private void SetModelBoxesEnabled(bool enabled)
         {
-            EmbeddingModelBox.IsEnabled = enabled;
             LowCostModelBox.IsEnabled = enabled;
             HighCostModelBox.IsEnabled = enabled;
-            ArtistModelBox.IsEnabled = enabled;
-            UpdateEmbeddingRebuildUi();
         }
 
         private void ClearModelChoices()
         {
             _availableModelChoices = [];
-            EmbeddingModelBox.Text = string.Empty;
             LowCostModelBox.Text = string.Empty;
             HighCostModelBox.Text = string.Empty;
-            ArtistModelBox.Text = string.Empty;
-            EmbeddingModelBox.ItemsSource = null;
             LowCostModelBox.ItemsSource = null;
             HighCostModelBox.ItemsSource = null;
-            ArtistModelBox.ItemsSource = null;
-        }
-
-        private void UpdateEmbeddingRebuildUi()
-        {
-            var needsRebuild = _settings.EmbeddingsNeedRebuild;
-            RebuildEmbeddingsButton.Visibility = needsRebuild ? Visibility.Visible : Visibility.Collapsed;
-            EmbeddingRebuildHint.Visibility = needsRebuild ? Visibility.Visible : Visibility.Collapsed;
-            RebuildEmbeddingsButton.IsEnabled = needsRebuild && !_isRebuilding && !EmbeddingMaintenanceService.IsRunning;
         }
 
         private async Task LoadMicrophonesAsync()
@@ -310,73 +287,12 @@ namespace App.Pages
             _availableModelChoices.FirstOrDefault(choice => string.Equals(choice.Name, text, StringComparison.OrdinalIgnoreCase))?.Id
             ?? text.Trim();
 
-        private void EmbeddingModelBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs e)
-        {
-            SaveSelectedModel(sender, e.SelectedItem);
-        }
-        private async void RebuildEmbeddingsButton_Click(object sender, RoutedEventArgs e)
-        {
-            var rebuiltConfiguration = EmbeddingMaintenanceService.CurrentConfigurationKey;
-            RebuildEmbeddingsErrorText.Visibility = Visibility.Collapsed;
-            CloseModelSuggestionLists();
-            SetRebuildEmbeddingsBusy(true);
-            StatusText.Text = "Rebuilding embeddings…";
-            try
-            {
-                var rebuilt = await EmbeddingMaintenanceService.RebuildAllAsync(System.Threading.CancellationToken.None);
-                if (EmbeddingMaintenanceService.MarkCurrentConfigurationRebuilt(rebuiltConfiguration))
-                {
-                    _settings = App.Settings.Current.Clone();
-                    StatusText.Text = $"Rebuilt {rebuilt} embedding{(rebuilt == 1 ? string.Empty : "s")} with {_settings.EmbeddingModel}.";
-                }
-                else
-                {
-                    _settings = App.Settings.Current.Clone();
-                    StatusText.Text = "Embeddings were rebuilt, but the endpoint or model changed during the rebuild. Rebuild again.";
-                }
-            }
-            catch (Exception exception)
-            {
-                RebuildEmbeddingsErrorText.Text = $"Embeddings could not be rebuilt: {exception.Message}";
-                RebuildEmbeddingsErrorText.Visibility = Visibility.Visible;
-                StatusText.Text = string.Empty;
-            }
-            finally
-            {
-                SetRebuildEmbeddingsBusy(false);
-                CloseModelSuggestionLists();
-                EmbeddingModelBox.Focus(FocusState.Programmatic);
-            }
-        }
-
-        private void CloseModelSuggestionLists()
-        {
-            EmbeddingModelBox.IsSuggestionListOpen = false;
-            LowCostModelBox.IsSuggestionListOpen = false;
-            HighCostModelBox.IsSuggestionListOpen = false;
-            ArtistModelBox.IsSuggestionListOpen = false;
-        }
-
-        private void SetRebuildEmbeddingsBusy(bool isBusy)
-        {
-            _isRebuilding = isBusy;
-            RebuildEmbeddingsLabel.Text = isBusy ? "Rebuilding" : "Rebuild";
-            RebuildEmbeddingsProgress.IsActive = isBusy;
-            RebuildEmbeddingsProgress.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
-            UpdateEmbeddingRebuildUi();
-        }
-
         private void LowCostModelBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs e)
         {
             SaveSelectedModel(sender, e.SelectedItem);
         }
 
         private void HighCostModelBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs e)
-        {
-            SaveSelectedModel(sender, e.SelectedItem);
-        }
-
-        private void ArtistModelBox_SuggestionChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs e)
         {
             SaveSelectedModel(sender, e.SelectedItem);
         }
@@ -391,10 +307,8 @@ namespace App.Pages
 
         private void SaveModel(AutoSuggestBox box, string modelId)
         {
-            if (ReferenceEquals(box, EmbeddingModelBox)) Save(settings => settings.EmbeddingModel = modelId);
-            else if (ReferenceEquals(box, LowCostModelBox)) Save(settings => settings.LowCostModel = modelId);
+            if (ReferenceEquals(box, LowCostModelBox)) Save(settings => settings.LowCostModel = modelId);
             else if (ReferenceEquals(box, HighCostModelBox)) Save(settings => settings.HighCostModel = modelId);
-            else if (ReferenceEquals(box, ArtistModelBox)) Save(settings => settings.ArtistModel = modelId);
         }
         private void LocationBox_LostFocus(object sender, RoutedEventArgs e)
         {
@@ -431,7 +345,6 @@ namespace App.Pages
             App.Settings.Save(changed);
             _settings = changed;
             StatusText.Text = string.Empty;
-            UpdateEmbeddingRebuildUi();
         }
     }
 }

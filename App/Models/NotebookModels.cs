@@ -9,7 +9,6 @@ namespace App.Models
 
         public string Type { get; set; } = "note";
         public string Content { get; set; } = string.Empty;
-        public byte[] Embedding { get; set; } = [];
         public List<string> Attachments { get; set; } = [];
         public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     }

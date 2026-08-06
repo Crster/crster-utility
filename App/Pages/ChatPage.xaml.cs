@@ -89,7 +89,7 @@ namespace App.Pages
             PersonalityBox.SelectedItem = _personality;
             if (string.IsNullOrWhiteSpace(_settings.OpenAiCompatibleApiKey) && !await RequestApiKeyAsync()) { StatusText.Text = "An AI provider API key is required."; return; }
             _client = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
-            _secretaryMemory = new SecretaryMemoryService(_client);
+            _secretaryMemory = new SecretaryMemoryService();
             _secretaryTools = new SecretaryToolService(_secretaryMemory);
             _smartTools = new SmartToolService(_secretaryTools);
             _technicianTools = new TechnicianToolService(
@@ -1476,7 +1476,7 @@ namespace App.Pages
         {
             if (App.MainWindow is null) return;
             var isJpeg = generated.MimeType.Equals("image/jpeg", StringComparison.OrdinalIgnoreCase);
-            var picker = new FileSavePicker { SuggestedFileName = "artist-image" };
+            var picker = new FileSavePicker { SuggestedFileName = "chat-image" };
             picker.FileTypeChoices.Add(isJpeg ? "JPEG image" : "PNG image", [isJpeg ? ".jpg" : ".png"]);
             InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow));
             var file = await picker.PickSaveFileAsync();

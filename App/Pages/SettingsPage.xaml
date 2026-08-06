@@ -13,37 +13,25 @@
             <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="12" Padding="20">
                 <StackPanel Spacing="16">
                     <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Spacing="3"><TextBlock Text="Start with Windows" FontWeight="SemiBold"/><TextBlock Text="Launch Crster Utility hidden in the system tray after sign-in." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel><ToggleSwitch x:Name="StartupToggle" Grid.Column="1" Toggled="StartupToggle_Toggled"/></Grid>
-                    <StackPanel Spacing="6"><TextBlock Text="Database folder" FontWeight="SemiBold"/><Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="NotebookPathBox" IsReadOnly="True"/><Button Grid.Column="1" Content="Browse" Click="NotebookBrowseButton_Click"/></Grid><TextBlock Text="Changing this location copies CrsterUtility.db and keeps the original as a backup." TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel>
+                    <StackPanel Spacing="6"><TextBlock Text="Database folder" FontWeight="SemiBold"/>
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="NotebookPathBox" IsReadOnly="True"/>
+                            <Button Grid.Column="1" Content="Browse" Click="NotebookBrowseButton_Click"/>
+                        </Grid>
+                    </StackPanel>
                     <StackPanel Spacing="6"><TextBlock Text="OpenAI-compatible URL" FontWeight="SemiBold"/><TextBox x:Name="OpenAiCompatibleBaseUrlBox" PlaceholderText="https://api.openai.com/v1" LostFocus="OpenAiCompatibleBaseUrlBox_LostFocus"/></StackPanel>
                     <StackPanel Spacing="6"><TextBlock Text="API key" FontWeight="SemiBold"/><PasswordBox x:Name="OpenAiCompatibleApiKeyBox" PlaceholderText="Paste your API key" PasswordChanged="OpenAiCompatibleApiKeyBox_PasswordChanged" LostFocus="OpenAiCompatibleApiKeyBox_LostFocus"/></StackPanel>
                     <!-- Section: AI Models -->
                     <StackPanel Spacing="8">
                         <TextBlock Text="AI models" FontWeight="SemiBold"/>
-                        <TextBlock Text="Models available to this API key. Changes are saved immediately." TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <Grid ColumnSpacing="8" HorizontalAlignment="Left">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="320"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <AutoSuggestBox x:Name="EmbeddingModelBox" Header="Embedding" PlaceholderText="Select a model" TextMemberPath="Name"
-                                            PointerPressed="ModelBox_PointerPressed" LostFocus="ModelBox_LostFocus" PreviewKeyDown="ModelBox_PreviewKeyDown" TextChanged="ModelBox_TextChanged" SuggestionChosen="EmbeddingModelBox_SuggestionChosen"/>
-                            <Button x:Name="RebuildEmbeddingsButton" Grid.Column="1" VerticalAlignment="Bottom" Visibility="Collapsed"
-                                    Click="RebuildEmbeddingsButton_Click"
-                                    ToolTipService.ToolTip="Clear and regenerate every note, memo, and todo embedding with the selected model"
-                                    AutomationProperties.Name="Rebuild embeddings">
-                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <ProgressRing x:Name="RebuildEmbeddingsProgress" Width="16" Height="16" IsActive="False" Visibility="Collapsed"/>
-                                    <TextBlock x:Name="RebuildEmbeddingsLabel" Text="Rebuild"/>
-                                </StackPanel>
-                            </Button>
-                        </Grid>
-                        <TextBlock x:Name="EmbeddingRebuildHint" Text="The embedding endpoint or model changed. Rebuild to regenerate stored vectors."
-                                   Visibility="Collapsed" TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock x:Name="RebuildEmbeddingsErrorText" Visibility="Collapsed" TextWrapping="Wrap" FontSize="12"
-                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}"/>
                         <AutoSuggestBox x:Name="LowCostModelBox" Header="Low Cost" PlaceholderText="Select a model" TextMemberPath="Name"
                                         PointerPressed="ModelBox_PointerPressed" LostFocus="ModelBox_LostFocus" PreviewKeyDown="ModelBox_PreviewKeyDown" TextChanged="ModelBox_TextChanged" SuggestionChosen="LowCostModelBox_SuggestionChosen"/>
                         <AutoSuggestBox x:Name="HighCostModelBox" Header="High Cost" PlaceholderText="Select a model" TextMemberPath="Name"
                                         PointerPressed="ModelBox_PointerPressed" LostFocus="ModelBox_LostFocus" PreviewKeyDown="ModelBox_PreviewKeyDown" TextChanged="ModelBox_TextChanged" SuggestionChosen="HighCostModelBox_SuggestionChosen"/>
-                        <AutoSuggestBox x:Name="ArtistModelBox" Header="Artist" PlaceholderText="Select a model" TextMemberPath="Name"
-                                        PointerPressed="ModelBox_PointerPressed" LostFocus="ModelBox_LostFocus" PreviewKeyDown="ModelBox_PreviewKeyDown" TextChanged="ModelBox_TextChanged" SuggestionChosen="ArtistModelBox_SuggestionChosen"/>
                     </StackPanel>
                     <!-- Section: Location -->
                     <StackPanel Spacing="6">

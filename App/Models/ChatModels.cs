@@ -14,7 +14,6 @@ namespace App.Models
         public required string DisplayName { get; init; }
         public string Description { get; init; } = string.Empty;
         public bool SupportsChat { get; init; }
-        public bool SupportsEmbedding { get; init; }
         public bool SupportsImageGeneration { get; init; }
         public bool SupportsThinking { get; init; }
     }

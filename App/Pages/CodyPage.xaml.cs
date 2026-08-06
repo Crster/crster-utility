@@ -2608,7 +2608,7 @@ namespace App.Pages
             }
 
             _agentClient = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
-            _agentSecretaryTools = new SecretaryToolService(new SecretaryMemoryService(_agentClient));
+            _agentSecretaryTools = new SecretaryToolService(new SecretaryMemoryService());
             _agentTools = new CodyToolService(
                 _agentClient,
                 _agentSecretaryTools,
@@ -2688,7 +2688,7 @@ namespace App.Pages
         private async Task<List<CodyCommand>> DiscoverWorkspaceCommandsAsync()
         {
             using var client = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
-            var memory = new SecretaryMemoryService(client);
+            var memory = new SecretaryMemoryService();
             using var secretaryTools = new SecretaryToolService(memory);
             var workspaceTools = new CodyToolService(client, secretaryTools, _ => Task.FromResult(false))
             {

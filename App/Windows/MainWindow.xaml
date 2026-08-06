@@ -85,11 +85,6 @@
                 </NavigationViewItem>
                 <NavigationViewItem x:Name="SnapshotsNavItem" Icon="Camera" Content="Snapshots" Tag="SnapshotsPage" />
                 <NavigationViewItem x:Name="RecordingsNavItem" Icon="Video" Content="Recordings" Tag="RecordingsPage" />
-                <NavigationViewItem x:Name="ArtistNavItem" Content="Artist" Tag="ArtistPage">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE790;" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
                 <NavigationViewItem x:Name="ToolsNavItem" Content="Tools" Tag="ToolsPage">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xEC7A;" />
