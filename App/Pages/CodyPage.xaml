@@ -5,6 +5,13 @@
     xmlns:controls="using:App.Controls"
     NavigationCacheMode="Required"
     PreviewKeyDown="CodyPage_PreviewKeyDown">
+    <Page.Resources>
+        <Storyboard x:Name="ScanCommandsSpin" RepeatBehavior="Forever">
+            <DoubleAnimation Storyboard.TargetName="ScanCommandsIconRotation"
+                             Storyboard.TargetProperty="Angle"
+                             From="0" To="360" Duration="0:0:1.1"/>
+        </Storyboard>
+    </Page.Resources>
     <Grid x:Name="RootGrid" KeyboardAcceleratorPlacementMode="Hidden">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -52,14 +59,68 @@
                             </MenuFlyout>
                         </SplitButton.Flyout>
                     </SplitButton>
-                    <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
-                        <FontIcon Glyph="&#xE943;" FontSize="12"
-                                  Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                        <TextBlock x:Name="ModelStatusText" FontSize="12"
-                                   VerticalAlignment="Center"
-                                   TextTrimming="CharacterEllipsis"
-                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
-                    </StackPanel>
+                    <Button x:Name="InstructionButton" Height="34" Padding="8,0"
+                            Background="Transparent" BorderThickness="0" VerticalAlignment="Center"
+                            ToolTipService.ToolTip="Show the system instruction"
+                            AutomationProperties.Name="Show the system instruction">
+                        <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                            <FontIcon Glyph="&#xE943;" FontSize="12"
+                                      Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                            <TextBlock x:Name="ModelStatusText" FontSize="12"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+                        <Button.Flyout>
+                            <Flyout x:Name="InstructionFlyout" Placement="BottomEdgeAlignedLeft"
+                                    Opening="InstructionFlyout_Opening">
+                                <Flyout.FlyoutPresenterStyle>
+                                    <Style TargetType="FlyoutPresenter">
+                                        <Setter Property="MaxWidth" Value="900"/>
+                                        <Setter Property="MaxHeight" Value="560"/>
+                                        <Setter Property="Padding" Value="0"/>
+                                        <Setter Property="CornerRadius" Value="8"/>
+                                        <Setter Property="ScrollViewer.HorizontalScrollMode" Value="Disabled"/>
+                                        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled"/>
+                                    </Style>
+                                </Flyout.FlyoutPresenterStyle>
+                                <Grid Width="860" RowSpacing="10" Padding="14,12">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="System instruction" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center"/>
+                                        <Button x:Name="CopyInstructionButton" Grid.Column="1"
+                                                Height="30" Padding="10,0"
+                                                Click="CopyInstructionButton_Click"
+                                                ToolTipService.ToolTip="Copy the system instruction"
+                                                AutomationProperties.Name="Copy the system instruction">
+                                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                                <FontIcon Glyph="&#xE8C8;" FontSize="12"/>
+                                                <TextBlock x:Name="CopyInstructionText" Text="Copy" FontSize="12"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
+                                    <Border Grid.Row="1" CornerRadius="6"
+                                            Background="{ThemeResource ControlFillColorDefaultBrush}">
+                                        <ScrollViewer MaxHeight="420" Padding="12,10"
+                                                      VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollMode="Disabled">
+                                            <TextBlock x:Name="InstructionText" FontSize="12"
+                                                       TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                        </ScrollViewer>
+                                    </Border>
+                                </Grid>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
                 </StackPanel>
                 
                 <StackPanel x:Name="ActionsStackPanel" Orientation="Horizontal" Spacing="6"
@@ -89,36 +150,85 @@
                         </Button>
                         <Border Width="1" Height="20" Margin="4,0"
                                 Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-                        <SplitButton x:Name="RunCommandButton" Height="34" Content="Run command"
+                        <SplitButton x:Name="RunCommandButton" Height="34" Padding="10,0"
                                      Click="RunButton_Click"
                                      ToolTipService.ToolTip="Run the selected workspace command">
+                            <SplitButton.Content>
+                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                    <FontIcon Glyph="&#xE768;" FontSize="12"/>
+                                    <TextBlock x:Name="RunCommandText" Text="Scan workspace" FontSize="12"
+                                               MaxWidth="170" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                            </SplitButton.Content>
                             <SplitButton.Flyout>
                                 <Flyout Placement="BottomEdgeAlignedRight">
-                                    <StackPanel MinWidth="280" Spacing="4">
-                                        <StackPanel x:Name="RunCommandItemsPanel" Spacing="2"/>
-                                        <Border Height="1" Margin="0,4"
-                                                Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-                                        <StackPanel Orientation="Horizontal" Spacing="4" Margin="4,0,4,2">
-                                            <HyperlinkButton x:Name="AddCommandButton" Padding="8,6"
-                                                             Click="AddCommandButton_Click"
-                                                             ToolTipService.ToolTip="Add a workspace command"
-                                                             AutomationProperties.Name="Add workspace command">
-                                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                                    <FontIcon Glyph="&#xE710;" FontSize="12"/>
-                                                    <TextBlock Text="Add command"/>
-                                                </StackPanel>
-                                            </HyperlinkButton>
-                                            <HyperlinkButton x:Name="ScanCommandsButton" Padding="8,6"
-                                                             Click="ScanCommandsMenuItem_Click"
-                                                             ToolTipService.ToolTip="Discover workspace commands"
-                                                             AutomationProperties.Name="Scan workspace commands">
-                                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                                    <FontIcon Glyph="&#xE895;" FontSize="12"/>
-                                                    <TextBlock Text="Scan workspace"/>
-                                                </StackPanel>
-                                            </HyperlinkButton>
+                                    <Flyout.FlyoutPresenterStyle>
+                                        <Style TargetType="FlyoutPresenter">
+                                            <Setter Property="Padding" Value="0"/>
+                                            <Setter Property="MaxWidth" Value="380"/>
+                                            <Setter Property="CornerRadius" Value="8"/>
+                                            <Setter Property="ScrollViewer.HorizontalScrollMode" Value="Disabled"/>
+                                            <Setter Property="ScrollViewer.VerticalScrollMode" Value="Disabled"/>
+                                        </Style>
+                                    </Flyout.FlyoutPresenterStyle>
+                                    <Grid Width="352">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+
+                                        <StackPanel Padding="14,12,14,10" Spacing="2">
+                                            <TextBlock Text="Workspace commands" FontSize="13" FontWeight="SemiBold"/>
+                                            <TextBlock Text="Read from .crster\cody.json. Edit that file to add, change, or remove a command."
+                                                       FontSize="11" TextWrapping="Wrap"
+                                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                                         </StackPanel>
-                                    </StackPanel>
+
+                                        <ScrollViewer Grid.Row="1" MaxHeight="320" Padding="8,0,8,8"
+                                                      VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollMode="Disabled">
+                                            <StackPanel x:Name="RunCommandItemsPanel" Spacing="2"/>
+                                        </ScrollViewer>
+
+                                        <Border Grid.Row="2" Padding="8" BorderThickness="0,1,0,0"
+                                                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                                Background="{ThemeResource SolidBackgroundFillColorBaseAltBrush}"
+                                                CornerRadius="0,0,8,8">
+                                            <Grid ColumnSpacing="6">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Button x:Name="ScanCommandsButton" Height="32" Padding="10,0"
+                                                        HorizontalAlignment="Stretch"
+                                                        Style="{ThemeResource AccentButtonStyle}"
+                                                        Click="ScanCommandsMenuItem_Click"
+                                                        ToolTipService.ToolTip="Discover workspace commands"
+                                                        AutomationProperties.Name="Scan workspace commands">
+                                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                                        <FontIcon x:Name="ScanCommandsIcon" Glyph="&#xE895;" FontSize="12"
+                                                                  RenderTransformOrigin="0.5,0.5">
+                                                            <FontIcon.RenderTransform>
+                                                                <RotateTransform x:Name="ScanCommandsIconRotation"/>
+                                                            </FontIcon.RenderTransform>
+                                                        </FontIcon>
+                                                        <TextBlock x:Name="ScanCommandsText" Text="Scan workspace" FontSize="12"/>
+                                                    </StackPanel>
+                                                </Button>
+                                                <Button x:Name="OpenCommandsFileButton" Grid.Column="1"
+                                                        Height="32" Padding="10,0"
+                                                        Click="OpenCommandsFileButton_Click"
+                                                        ToolTipService.ToolTip="Open .crster\cody.json in the editor"
+                                                        AutomationProperties.Name="Open cody.json in the editor">
+                                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                                        <FontIcon Glyph="&#xE8A7;" FontSize="12"/>
+                                                        <TextBlock Text="Edit file" FontSize="12"/>
+                                                    </StackPanel>
+                                                </Button>
+                                            </Grid>
+                                        </Border>
+                                    </Grid>
                                 </Flyout>
                             </SplitButton.Flyout>
                         </SplitButton>
@@ -245,7 +355,7 @@
                   Visibility="Collapsed" Opacity="0" IsHitTestVisible="False" Canvas.ZIndex="10"
                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
 
-            <Border x:Name="CodyChatDock" Grid.Column="3" Visibility="Collapsed"
+            <Border x:Name="CodyChatDock" Grid.Column="3" Visibility="Collapsed" MinWidth="340"
                     BorderThickness="1,0,0,0" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
                 <ContentControl x:Name="CodyChatHost"
                                 HorizontalContentAlignment="Stretch"

@@ -20,6 +20,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.Foundation;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.Streams;
@@ -45,6 +46,7 @@ namespace App.Controls
         private FrameworkElement? _streamingAnswerContainer;
         private ChatMessage? _pendingUserMessage;
         private UIElement? _pendingUserMessageContainer;
+        private FrameworkElement? _latestUserBubble;
         private string _streamingAnswerText = string.Empty;
         private ThinkingCard? _liveThinking;
         private ProcessingStatusRow? _processingStatus;
@@ -138,6 +140,16 @@ namespace App.Controls
             FocusComposer();
         }
 
+        /// <summary>Fills the composer with a starting request. Never overwrites what the user already typed.</summary>
+        internal void SuggestPrompt(string request)
+        {
+            if (string.IsNullOrWhiteSpace(request) || !string.IsNullOrWhiteSpace(PromptBox.Text)) return;
+            PromptBox.Text = request;
+            PromptBox.SelectionStart = PromptBox.Text.Length;
+            PromptBox.SelectionLength = 0;
+            FocusComposer();
+        }
+
         private void AppendContextToComposer(string text)
         {
             var separator = string.IsNullOrWhiteSpace(PromptBox.Text) ? string.Empty : "\r\n\r\n";
@@ -188,6 +200,7 @@ namespace App.Controls
             DiscardPendingUserPrompt();
             _pendingUserMessage = new ChatMessage(ChatItemKind.User, "You", prompt, attachments);
             _pendingUserMessageContainer = CreateUserBubble(_pendingUserMessage);
+            TrackLatestUserBubble(_pendingUserMessageContainer, _pendingUserMessage);
             RemoveEmptyState();
             TranscriptHost.Children.Add(_pendingUserMessageContainer);
             MoveProcessingStatusToEnd();
@@ -401,6 +414,9 @@ namespace App.Controls
         {
             DiscardPendingUserPrompt();
             TranscriptHost.Children.Clear();
+            _latestUserBubble = null;
+            StickyPromptText.Text = string.Empty;
+            HideStickyPrompt();
             foreach (var message in _session.Messages) RenderMessage(message);
             MoveProcessingStatusToEnd();
             UpdateEmptyState();
@@ -410,7 +426,14 @@ namespace App.Controls
         private void DiscardPendingUserPrompt()
         {
             if (_pendingUserMessageContainer is not null)
+            {
                 TranscriptHost.Children.Remove(_pendingUserMessageContainer);
+                if (ReferenceEquals(_latestUserBubble, _pendingUserMessageContainer))
+                {
+                    _latestUserBubble = null;
+                    HideStickyPrompt();
+                }
+            }
             _pendingUserMessage = null;
             _pendingUserMessageContainer = null;
         }
@@ -418,7 +441,7 @@ namespace App.Controls
         private void RenderMessage(ChatMessage message)
         {
             RemoveEmptyState();
-            TranscriptHost.Children.Add(message.Kind switch
+            var element = message.Kind switch
             {
                 ChatItemKind.User => CreateUserBubble(message),
                 ChatItemKind.Thinking => CreateThinkingBlock(message),
@@ -427,25 +450,74 @@ namespace App.Controls
                     : CreateToolBlock(message, _workspacePath),
                 ChatItemKind.Error => CreateErrorBlock(message),
                 _ => CreateAssistantBlock(message)
-            });
+            };
+            if (message.Kind == ChatItemKind.User) TrackLatestUserBubble(element, message);
+            TranscriptHost.Children.Add(element);
             ScrollToLatest();
+        }
+
+        /// <summary>Remembers the newest prompt so it can be pinned at the top once it scrolls away.</summary>
+        private void TrackLatestUserBubble(UIElement bubble, ChatMessage message)
+        {
+            _latestUserBubble = bubble as FrameworkElement;
+            StickyPromptText.Text = string.IsNullOrWhiteSpace(message.Content)
+                ? string.Join(", ", (message.Attachments ?? []).Select(a => a.DisplayName))
+                : message.Content;
+            HideStickyPrompt();
+        }
+
+        private void HideStickyPrompt()
+        {
+            StickyPromptCard.Opacity = 0;
+            StickyPromptCard.Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>Pins the latest prompt to the top of the transcript while its bubble sits above the viewport.</summary>
+        private void UpdateStickyPrompt()
+        {
+            if (_latestUserBubble is null
+                || _latestUserBubble.XamlRoot is null
+                || StickyPromptText.Text.Length == 0)
+            {
+                HideStickyPrompt();
+                return;
+            }
+
+            double bubbleBottom;
+            try
+            {
+                var origin = _latestUserBubble.TransformToVisual(TranscriptScroller).TransformPoint(new Point(0, 0));
+                bubbleBottom = origin.Y + _latestUserBubble.ActualHeight;
+            }
+            catch (ArgumentException)
+            {
+                // The bubble is not in the live visual tree yet; nothing to pin.
+                HideStickyPrompt();
+                return;
+            }
+
+            var shouldPin = bubbleBottom < TranscriptScroller.Padding.Top;
+            StickyPromptCard.Visibility = shouldPin ? Visibility.Visible : Visibility.Collapsed;
+            StickyPromptCard.Opacity = shouldPin ? 1 : 0;
         }
 
         private static UIElement CreateUserBubble(ChatMessage message)
         {
+            var accent = Resource("AccentTextFillColorPrimaryBrush");
             var content = new StackPanel { Spacing = 6 };
             if (!string.IsNullOrWhiteSpace(message.Content))
                 content.Children.Add(new TextBlock
                 {
                     Text = message.Content,
                     TextWrapping = TextWrapping.Wrap,
-                    IsTextSelectionEnabled = true
+                    IsTextSelectionEnabled = true,
+                    Foreground = accent
                 });
             foreach (var attachment in message.Attachments ?? [])
             {
                 var attachmentRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-                attachmentRow.Children.Add(new FontIcon { Glyph = AttachmentGlyph(attachment), FontSize = 12 });
-                attachmentRow.Children.Add(new TextBlock { Text = attachment.DisplayName, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 420 });
+                attachmentRow.Children.Add(new FontIcon { Glyph = AttachmentGlyph(attachment), FontSize = 12, Foreground = accent });
+                attachmentRow.Children.Add(new TextBlock { Text = attachment.DisplayName, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 420, Foreground = accent });
                 content.Children.Add(attachmentRow);
             }
             return new Border
@@ -455,7 +527,9 @@ namespace App.Controls
                 Margin = new Thickness(0, 6, 0, 2),
                 MaxWidth = 620,
                 HorizontalAlignment = HorizontalAlignment.Right,
-                Background = Resource("AccentFillColorTertiaryBrush"),
+                Background = Resource("CardBackgroundFillColorSecondaryBrush"),
+                BorderThickness = new Thickness(1),
+                BorderBrush = Resource("CardStrokeColorDefaultBrush"),
                 Child = content
             };
         }
@@ -1334,8 +1408,11 @@ namespace App.Controls
         }
 
         // Section: Scrolling
-        private void TranscriptScroller_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e) =>
+        private void TranscriptScroller_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
+        {
             _autoScroll = TranscriptScroller.ScrollableHeight - TranscriptScroller.VerticalOffset <= AutoScrollThreshold;
+            UpdateStickyPrompt();
+        }
 
         private void ScrollToLatest()
         {

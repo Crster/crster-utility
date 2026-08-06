@@ -33,6 +33,14 @@ namespace App.Models
         public required string Destination { get; init; }
     }
 
+    /// <summary>A non-navigable row shown in the search list while a search runs or when it found nothing.</summary>
+    internal sealed class SearchStatusResult
+    {
+        public required string Title { get; init; }
+
+        public required string Details { get; init; }
+    }
+
     internal sealed class TodoSearchResult
     {
         public required string TodoId { get; init; }

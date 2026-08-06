@@ -103,6 +103,19 @@
                                    Style="{StaticResource CaptionTextBlockStyle}"
                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                    TextWrapping="Wrap" TextAlignment="Center" MaxWidth="500"/>
+                        <Border x:Name="EmptyDisclaimer" Margin="0,20,0,0" MaxWidth="500" Padding="12,10"
+                                CornerRadius="8"
+                                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <FontIcon x:Name="EmptyDisclaimerIcon" Glyph="&#xE946;" FontSize="16" VerticalAlignment="Top"
+                                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                <TextBlock x:Name="EmptyDisclaimerText" Style="{StaticResource CaptionTextBlockStyle}"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                           TextWrapping="Wrap" MaxWidth="440"
+                                           Text="AI can make mistakes. Check important answers yourself."/>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>

@@ -940,6 +940,13 @@ namespace App.Pages
                     ChatPersonality.Smart => "Research current facts using web search, saved memory, and local context.",
                     _ => "Manage notes, memory, todos, and everyday personal tasks."
                 };
+                var technician = _personality == ChatPersonality.Technician;
+                EmptyDisclaimerText.Text = technician
+                    ? "Technician can run commands that change your PC. AI can be wrong, and a wrong step may break your system. Read every action before you approve it. Use at your own risk."
+                    : "AI can make mistakes. Check important answers before you rely on them.";
+                EmptyDisclaimerIcon.Glyph = technician ? "" : "";
+                EmptyDisclaimerIcon.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                    technician ? "SystemFillColorCautionBrush" : "TextFillColorSecondaryBrush"];
                 ConversationHost.Children.Add(EmptyState);
                 EmptyState.Visibility = Visibility.Visible;
             }

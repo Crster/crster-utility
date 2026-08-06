@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Media.Animation;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using App.Models;
@@ -20,6 +21,7 @@ namespace App.Windows
         private readonly NotebookDatabaseService _notebookDatabase = new();
         private readonly TodoSearchService _todoSearch = new();
         private int _searchVersion;
+        private CancellationTokenSource? _searchCancellation;
         private bool _allowClose;
         internal bool IsHiddenToTray { get; private set; }
         private static readonly FeatureSearchResult[] FeatureSearchResults =
@@ -241,13 +243,14 @@ namespace App.Windows
             var searchVersion = ++_searchVersion;
             if (query.Length < 2)
             {
+                CancelPendingSearch();
                 sender.ItemsSource = null;
                 return;
             }
 
             try
             {
-                await Task.Delay(1000);
+                await Task.Delay(250);
                 if (searchVersion != _searchVersion) return;
                 var notebookResults = _notebookDatabase.FuzzySearch(query);
                 var todoResults = _todoSearch.FuzzySearch(query);
@@ -259,7 +262,9 @@ namespace App.Windows
                 results.AddRange(todoResults);
                 results.AddRange(notebookResults);
                 if (searchVersion == _searchVersion && string.Equals(sender.Text.Trim(), query, StringComparison.Ordinal))
-                    sender.ItemsSource = results;
+                    sender.ItemsSource = results.Count > 0
+                        ? results
+                        : CreateStatusItems("No quick match", "Press Enter to search everything with AI");
             }
             catch (Exception)
             {
@@ -269,8 +274,10 @@ namespace App.Windows
 
         private async void GlobalSearchBox_QuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
         {
+            if (args.ChosenSuggestion is SearchStatusResult) return;
             if (args.ChosenSuggestion is not null)
             {
+                CancelPendingSearch();
                 NavigateToSearchResult(args.ChosenSuggestion);
                 sender.Text = string.Empty;
                 sender.ItemsSource = null;
@@ -281,28 +288,70 @@ namespace App.Windows
             var searchVersion = ++_searchVersion;
             if (query.Length < 2)
             {
+                CancelPendingSearch();
                 sender.ItemsSource = null;
                 return;
             }
 
+            CancelPendingSearch();
+            var searchCancellation = new CancellationTokenSource();
+            _searchCancellation = searchCancellation;
+
+            // The query's own words match at once, so the list is never empty while the model works.
+            var localResults = Collect(KeywordSearchService.CreateLocalPatterns(query), query);
+            sender.ItemsSource = localResults.Count > 0
+                ? localResults.Concat(CreateStatusItems("Searching with AI…", "Looking for related wording")).ToList()
+                : CreateStatusItems("Searching with AI…", "Looking for related wording");
+
+            GlobalSearchProgress.Visibility = Visibility.Visible;
             try
             {
                 // One model call builds the patterns; both stores are then searched locally.
                 using var client = new OpenAiCompatibleClient(App.Settings.Current.OpenAiCompatibleApiKey);
-                var patterns = await KeywordSearchService.CreatePatternsAsync(client, query, CancellationToken.None);
+                var patterns = await KeywordSearchService.CreatePatternsAsync(client, query, searchCancellation.Token);
                 if (searchVersion != _searchVersion) return;
-                var todoResults = _todoSearch.Search(patterns);
-                var notebookResults = _notebookDatabase.Search(patterns);
-                var featureResults = FeatureSearchResults.Where(result => MatchesSearch(result, query));
-                sender.ItemsSource = featureResults.Cast<object>()
-                    .Concat(todoResults)
-                    .Concat(notebookResults)
-                    .ToList();
+                var results = Collect(patterns, query);
+                sender.ItemsSource = results.Count > 0
+                    ? results
+                    : CreateStatusItems("No result found", $"Nothing matches “{query}”");
             }
+            catch (OperationCanceledException) { }
             catch (Exception)
             {
-                if (searchVersion == _searchVersion) sender.ItemsSource = null;
+                if (searchVersion != _searchVersion) return;
+                sender.ItemsSource = localResults.Count > 0
+                    ? localResults
+                    : CreateStatusItems("Search failed", "Check the AI provider in Settings, then try again");
             }
+            finally
+            {
+                if (ReferenceEquals(_searchCancellation, searchCancellation)) _searchCancellation = null;
+                searchCancellation.Dispose();
+                if (searchVersion == _searchVersion) GlobalSearchProgress.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        /// <summary>Searches every store with one set of patterns.</summary>
+        private List<object> Collect(IReadOnlyList<Regex> patterns, string query)
+        {
+            if (patterns.Count == 0) return [];
+            var results = new List<object>();
+            results.AddRange(FeatureSearchResults.Where(result => MatchesSearch(result, query)));
+            results.AddRange(_todoSearch.Search(patterns));
+            results.AddRange(_notebookDatabase.Search(patterns));
+            return results;
+        }
+
+        private static List<object> CreateStatusItems(string title, string details) =>
+            [new SearchStatusResult { Title = title, Details = details }];
+
+        private void CancelPendingSearch()
+        {
+            var pending = _searchCancellation;
+            _searchCancellation = null;
+            GlobalSearchProgress.Visibility = Visibility.Collapsed;
+            try { pending?.Cancel(); }
+            catch (ObjectDisposedException) { }
         }
 
         private void NavigateToSearchResult(object result)

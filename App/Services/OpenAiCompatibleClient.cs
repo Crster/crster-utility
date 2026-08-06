@@ -126,6 +126,9 @@ namespace App.Services
                 ["stream"] = false
             };
             if (tools is { Count: > 0 }) body["tools"] = ConvertTools(tools);
+            // Only DashScope documents this switch for the chat endpoint; other providers reject unknown fields.
+            if (thinkingLevel == OpenAiCompatibleThinkingLevel.Disabled && IsDashScopeEndpoint())
+                body["enable_thinking"] = false;
 
             JsonObject root;
             try
