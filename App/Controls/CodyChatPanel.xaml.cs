@@ -1437,44 +1437,63 @@ namespace App.Controls
         {
             private static readonly string[] EventOpeners =
             [
-                "Herding cats", "Chasing the red dot", "Knocking things off the desk",
-                "Judging you silently", "Stuck halfway into a box", "Ignoring you on purpose",
-                "Plotting world domination", "Staring at the wall intensely"
+                "Reading the stack trace bottom-up", "Blaming the cache first",
+                "Checking if it works on my machine", "Reproducing the bug on purpose",
+                "Renaming things until it compiles", "Opening 14 tabs of the same doc",
+                "Pretending to understand the legacy code", "Adding one more null check",
+                "Loading, please wait (real this time)", "Shaders compiling, 3 of 9427",
+                "Stuck at 99 percent on purpose", "Reticulating splines, the honest way",
+                "Day-one patch is 62 GB", "Respawning at the last checkpoint"
             ];
             private static readonly string[] ThinkingOpeners =
             [
-                "Staring blankly into space", "Contemplating the void",
-                "Doing math in its head (a cat)", "Deep in a thousand-yard stare",
-                "Loading brain.exe", "Overthinking a nap decision",
-                "Calculating the perfect pounce angle", "Having a very important thought"
+                "Rubber-ducking with myself", "Reading the code I wrote last year",
+                "Weighing a rewrite against a hotfix", "Recalling why this was a hack",
+                "Counting off-by-one errors", "Considering the third naming option",
+                "Wondering who approved this PR", "Staring at a 400-line function",
+                "Reading the skill tree before spending a point", "Saving before the boss fight",
+                "Checking the wiki instead of the tutorial", "Planning the speedrun route",
+                "Deciding between stealth and going loud", "Rerolling the build one last time"
             ];
             private static readonly string[] RespondingOpeners =
             [
-                "Coughing up a hairball of words", "Meowing until it makes sense",
-                "Kneading the keyboard", "Purring out an answer",
-                "Typing with paw beans", "Composing a very important meow",
-                "Translating cat to human", "Winding up to speak"
+                "Writing the commit message honestly", "Turning it into words, not jargon",
+                "Drafting the answer, no TODOs", "Explaining it like the docs should have",
+                "Typing fast, deleting faster", "Squashing the rambling into one line",
+                "Making it sound intentional", "Answering before you alt-tab away",
+                "Skipping the cutscene, here is the point", "Dialogue option one, the polite one",
+                "No spoilers, just the walkthrough", "Reading the patch notes out loud",
+                "Pressing X to answer", "Unmuting for the important part"
             ];
             private static readonly string[] ToolStartingOpeners =
             [
-                "Sharpening the claws", "Sneaking up on the mouse",
-                "Batting at a loose thread", "Prepping the ambush",
-                "Sniffing around suspiciously", "Testing if the box still fits",
-                "Winding up for a zoomie", "Eyeing the tool like prey"
+                "Grepping like my life depends on it", "Opening the file nobody touches",
+                "Running it locally, fingers crossed", "Adding a print statement, classic",
+                "Checking git blame for a suspect", "Reading the config, again",
+                "Attaching the debugger properly", "Diffing against what used to work",
+                "Equipping the right tool for this dungeon", "Entering the code, up up down down",
+                "Verifying game files, 1 file failed", "Sending in the drone to scout",
+                "Using a lockpick on this one", "Quicksave before touching anything"
             ];
             private static readonly string[] ToolFinishedOpeners =
             [
-                "Brought back a dead bug (proudly)", "Knocked it off the desk successfully",
-                "Caught the red dot, finally", "Trotting back with the loot",
-                "Left a paw print on it", "Delivered, no cap, just cat",
-                "Nailed the landing (mostly)", "Dropped it at your feet"
+                "Green build, no idea why", "Found it: a missing semicolon of sorts",
+                "Fixed it, one line, two hours", "Bug reproduced, we love progress",
+                "Removed the code, tests still pass", "Root cause: it was DNS",
+                "Works now, do not touch it", "Deleted more than I added",
+                "Achievement unlocked, rare one too", "Boss down, no damage taken",
+                "Loot secured, mostly junk", "New personal best on that run",
+                "Checkpoint reached, safe to continue", "Side quest complete, XP gained"
             ];
             private static readonly string[] NoticeOpeners =
             [
-                "Knocked a glass off the table", "Meowed at the door for no reason",
-                "Left a hairball as a gift", "Sat on the important paper",
-                "Yelled at 3am for attention", "Stared at nothing near the ceiling",
-                "Demanded snacks immediately", "Zoomied through the room"
+                "It compiles, ship it (kidding)", "That was not in the spec",
+                "The docs lied to both of us", "Someone left a TODO from 2019",
+                "This deserves a comment nobody reads", "Merge conflict says hello",
+                "Prod is fine, probably", "Adding it to the tech-debt pile",
+                "That looked like a feature, it was not", "Clipped through the floor again",
+                "Enemy AI just walked into a wall", "Lag spike, blame the server",
+                "Rubber-banding a little, hold on", "Frame rate said no thank you"
             ];
             private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
             private readonly TextBlock _message;

@@ -26,19 +26,19 @@ namespace App.Services
 
         public static JsonArray CreateDeclarations() => new()
         {
-            Function("search_memory", "Search saved notes, memos, and todos by keyword. Use a concise keyword or phrase; related words and word forms are matched too.", Props(("search_keyword", String("Keyword or phrase to search for."))), "search_keyword"),
-            Function("save_note", "Save a note the user explicitly asks to keep.", Props(("note_text", String("Exact note content to save."))), "note_text"),
-            Function("save_memo", "Use only to remember an explicit, durable user detail that will improve future help. Never save secrets, credentials, guesses, or inferred claims.", Props(("memo_text", String("Exact user-provided detail to remember."))), "memo_text"),
-            Function("remove_memo", "Forget one saved memo identified by its key. Search memory first when the key is unknown.", Props(("memo_key", String("Exact memo key returned by search_memory."))), "memo_key"),
-            Function("list_todo_categories", "List the available todo categories. Call this before save_todo so an existing suitable category can be reused before creating a new one.", new JsonObject()),
-            Function("save_todo", "Save a todo the user explicitly asks to keep. Call list_todo_categories first and prefer a suitable existing category before creating a new one. Category defaults to General.", Props(("todo_text", String("Task text to save.")), ("category_name", String("Existing category returned by list_todo_categories, or a concise new category when none fits.")), ("notification_cron", String("Optional five-field cron expression interpreted in local time."))), "todo_text"),
-            Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", DataKindSchema())), "context_type")
+            Function("search_memory", "Search the user's saved notes, memos, and todos. Use first for anything personal.", Props(("search_keyword", String("One keyword or short phrase."))), "search_keyword"),
+            Function("save_note", "Save a note. Only when the user asks to keep it.", Props(("note_text", String("Exact text to save."))), "note_text"),
+            Function("save_memo", "Remember one lasting fact about the user, only when they ask. Never a secret, password, or guess.", Props(("memo_text", String("Exact detail to remember."))), "memo_text"),
+            Function("remove_memo", "Delete one saved memo. Get its key from search_memory first.", Props(("memo_key", String("Memo key from search_memory."))), "memo_key"),
+            Function("list_todo_categories", "List todo categories. Call before save_todo.", new JsonObject()),
+            Function("save_todo", "Save a task the user asks to keep. Reuse a category from list_todo_categories; default is General.", Props(("todo_text", String("Task text.")), ("category_name", String("Existing category, or a short new one.")), ("notification_cron", String("Optional reminder, 5-field cron, local time."))), "todo_text"),
+            Function("get_local_context", "Get one live fact about this device: time, location, weather, clipboard, language, or battery.", Props(("context_type", DataKindSchema())), "context_type")
         };
 
         public static JsonArray CreateReadOnlyDeclarations() => new()
         {
-            Function("search_memory", "Search saved notes, memos, and todos by keyword. Use a concise keyword or phrase; related words and word forms are matched too.", Props(("search_keyword", String("Keyword or phrase to search for."))), "search_keyword"),
-            Function("get_local_context", "Use only for current device-local context: date/time, configured location, weather, clipboard text, language, or battery percentage.", Props(("context_type", DataKindSchema())), "context_type")
+            Function("search_memory", "Search the user's saved notes, memos, and todos. Use when the answer may depend on what they saved.", Props(("search_keyword", String("One keyword or short phrase."))), "search_keyword"),
+            Function("get_local_context", "Get one live fact about this device: time, location, weather, clipboard, language, or battery.", Props(("context_type", DataKindSchema())), "context_type")
         };
 
         public async Task<ToolResult> ExecuteAsync(string name, JsonObject arguments, CancellationToken token)

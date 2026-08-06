@@ -39,6 +39,7 @@ namespace App.Pages
     public sealed partial class CodyPage : Page
     {
         private const int MaximumWorkspaceFileBytes = 1_000_000;
+        private const string DiffTabTag = "diff";
         private sealed record TerminalShell(string Name, string FileName, string Arguments);
         private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -90,6 +91,7 @@ namespace App.Pages
         private bool _awaitingPlanApproval;
         private bool _planReworkRequested;
         private bool _filesVisible;
+        private bool? _filesVisibleBeforeDiff;
         private bool _isFilesResizing;
         private bool _isTerminalResizing;
         private Microsoft.UI.Dispatching.DispatcherQueueTimer? _terminalResizeSettleTimer;
@@ -206,6 +208,8 @@ namespace App.Pages
                 await ChangeWorkspaceAsync();
                 return;
             }
+            // An explicit toggle wins over the state a diff view put the panel in.
+            _filesVisibleBeforeDiff = null;
             SetFilesPanelVisibility(!_filesVisible);
         }
 
@@ -480,13 +484,19 @@ namespace App.Pages
             if (existingNode is not null)
             {
                 existingNode.Content = entry;
-                existingNode.HasUnrealizedChildren = entry.IsDirectory && existingNode.Children.Count == 0;
+                // The changes view is fully materialized: marking a folder as deferred would make the
+                // tree lazy-load every sibling file, including unchanged ones.
+                if (!isChangesView)
+                    existingNode.HasUnrealizedChildren = entry.IsDirectory && existingNode.Children.Count == 0;
                 _ = LoadSystemIconAsync(existingNode, entry);
             }
             else if (isChangesView)
             {
-                var parent = EnsureChangeViewParent(Path.GetDirectoryName(fullPath));
-                AddWorkspaceTreeNode(parent?.Children ?? WorkspaceTree.RootNodes, CreateTreeNode(entry));
+                if (!entry.IsDirectory)
+                {
+                    var parent = EnsureChangeViewParent(Path.GetDirectoryName(fullPath));
+                    AddWorkspaceTreeNode(parent?.Children ?? WorkspaceTree.RootNodes, CreateTreeNode(entry));
+                }
             }
             else
             {
@@ -1186,6 +1196,7 @@ namespace App.Pages
         private async void WorkspaceTree_Expanding(TreeView sender, TreeViewExpandingEventArgs args)
         {
             if (args.Node.Content is not WorkspaceTreeEntry { IsDirectory: true } entry
+                || ChangesButton.IsChecked == true
                 || !string.IsNullOrWhiteSpace(FileSearchBox.Text))
                 return;
 
@@ -1458,7 +1469,8 @@ namespace App.Pages
             {
                 Header = $"{entry.Name} diff",
                 ContentTransitions = null,
-                Content = viewer
+                Content = viewer,
+                Tag = DiffTabTag
             };
             EditorTabs.TabItems.Add(tab);
             EditorTabs.SelectedItem = tab;
@@ -1554,6 +1566,7 @@ namespace App.Pages
 
             if (!entry.IsDirectory && File.Exists(entry.FullPath))
             {
+                ApplyDiffFocus(false);
                 SetCodyChatDocked(!ReferenceEquals(EditorTabs.SelectedItem, HomeTab));
                 await CodyChat.StageFileAttachmentAsync(entry.FullPath, entry.Name);
                 CodyChat.SuggestPrompt($"Review the attached file {entry.RelativePath} and explain what it does.");
@@ -2241,7 +2254,10 @@ namespace App.Pages
                 .OfType<TabViewItem>()
                 .Any(tab => !ReferenceEquals(tab, HomeTab));
             if (!hasOpenEditor)
+            {
+                ApplyDiffFocus(false);
                 SetCodyChatDocked(false);
+            }
         }
 
         private async void EditorTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -2249,6 +2265,7 @@ namespace App.Pages
             if (ReferenceEquals(EditorTabs.SelectedItem, HomeTab))
             {
                 SetCodyChatDocked(false);
+                ApplyDiffFocus(false);
                 AttachSharedEditor(null);
                 return;
             }
@@ -2256,6 +2273,7 @@ namespace App.Pages
             // Any other tab (a tracked editor, a diff view, or any future non-editor tab) keeps
             // Cody docked to the side instead of forcing the selection back to the chat home tab.
             SetCodyChatDocked(true);
+            ApplyDiffFocus(IsDiffTab(EditorTabs.SelectedItem));
             if (EditorTabs.SelectedItem is TabViewItem tab && _editors.TryGetValue(tab, out var document))
             {
                 if (document.Kind == WorkspaceDocumentKind.Text && document.Editor is null)
@@ -2305,6 +2323,27 @@ namespace App.Pages
             if (!ReferenceEquals(EditorTabs.SelectedItem, HomeTab))
                 EditorTabs.SelectedItem = HomeTab;
         }
+
+        /// <summary>Gives a selected diff tab the whole page: the files panel and the chat rail step aside.</summary>
+        private void ApplyDiffFocus(bool focused)
+        {
+            if (focused)
+            {
+                _filesVisibleBeforeDiff ??= _filesVisible;
+                if (_filesVisible) SetFilesPanelVisibility(false);
+                CodyChatDock.Visibility = Visibility.Collapsed;
+                EditorColumn.Width = new GridLength(1, GridUnitType.Star);
+                CodyChatColumn.Width = new GridLength(0);
+                return;
+            }
+
+            if (_filesVisibleBeforeDiff is not { } restoreFilesPanel) return;
+            _filesVisibleBeforeDiff = null;
+            if (restoreFilesPanel) SetFilesPanelVisibility(true);
+        }
+
+        private static bool IsDiffTab(object? item) =>
+            item is TabViewItem { Tag: DiffTabTag };
 
         private void AttachSharedEditor(TabViewItem? tab)
         {
@@ -4487,6 +4526,7 @@ namespace App.Pages
         private async Task StageCodyContextAsync(string displayName, string request, CodyContextDocument context)
         {
             if (!HasActiveAgent()) return;
+            ApplyDiffFocus(false);
             SetCodyChatDocked(!ReferenceEquals(EditorTabs.SelectedItem, HomeTab));
             await CodyChat.StageTextAttachmentAsync(displayName, context.ToString());
             CodyChat.SuggestPrompt(request);

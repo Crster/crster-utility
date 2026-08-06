@@ -26,6 +26,7 @@ namespace App.Services
         public ILiteCollection<TodoDocument> Todos => _database.GetCollection<TodoDocument>("Todos");
         public ILiteCollection<TodoCategoryDocument> TodoCategories => _database.GetCollection<TodoCategoryDocument>("TodoCategories");
         public ILiteCollection<ChatSessionDocument> ChatSessions => _database.GetCollection<ChatSessionDocument>("ChatSessions");
+        public ILiteCollection<SavedChatSessionDocument> SavedChatSessions => _database.GetCollection<SavedChatSessionDocument>("SavedChatSessions");
 
         private void Configure()
         {
@@ -36,6 +37,7 @@ namespace App.Services
             Todos.EnsureIndex(item => item.Category);
             Todos.EnsureIndex(item => item.IsDone);
             Todos.EnsureIndex(item => item.CreatedAt);
+            SavedChatSessions.EnsureIndex(item => item.SavedAt);
         }
 
         private void MigrateTodoIsDoneField()

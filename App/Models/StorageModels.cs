@@ -67,4 +67,15 @@ namespace App.Models
         [BsonField("context")] public string Context { get; set; } = string.Empty;
         [BsonField("histories")] public string Histories { get; set; } = string.Empty;
     }
+
+    /// <summary>A chat the user chose to keep, so it can be reopened later.</summary>
+    internal sealed class SavedChatSessionDocument
+    {
+        [BsonId] public string Id { get; set; } = Guid.NewGuid().ToString("D");
+        [BsonField("agent")] public string Agent { get; set; } = string.Empty;
+        [BsonField("title")] public string Title { get; set; } = string.Empty;
+        [BsonField("message_count")] public int MessageCount { get; set; }
+        [BsonField("saved_at")] public DateTime SavedAt { get; set; } = DateTime.UtcNow;
+        [BsonField("histories")] public string Histories { get; set; } = string.Empty;
+    }
 }
