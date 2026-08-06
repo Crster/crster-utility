@@ -65,6 +65,8 @@ namespace App.Pages
         private readonly HashSet<TabViewItem> _terminalCommandTabsClosing = [];
         private readonly HashSet<TabViewItem> _terminalCommandTabsCompleted = [];
         private readonly List<CodyCommand> _commands = [];
+        private readonly List<CliAgentTool> _cliAgents = [];
+        private readonly Dictionary<RadioMenuFlyoutItem, CliAgentTool?> _agentMenuItems = [];
         private readonly global::App.Controls.MonacoEditorControl _sharedEditor = new();
         private ChatSession _session = new();
         private AppSettings _settings = new();
@@ -99,6 +101,8 @@ namespace App.Pages
         private bool _startingInteractiveTerminal;
         private bool _loadingTerminalShells;
         private string? _savedTerminalShellName;
+        private CliAgentTool? _activeCliAgent;
+        private string? _selectedAgentId;
         private double _filesPanelWidth = 280;
         private double _terminalPanelHeight = 230;
         private double _filesResizeStartX;
@@ -146,6 +150,7 @@ namespace App.Pages
             LoadCodySession();
             LoadWorkspaceCommands();
             LoadAvailableTerminalShells();
+            LoadAvailableCliAgents();
             RefreshWorkspace();
             ConfigureWorkspaceWatcher();
             _ = _sharedEditor.PreloadAsync();
@@ -167,6 +172,7 @@ namespace App.Pages
             CancelTerminal();
             CancelAdditionalTerminalSessions();
             CancelTerminalCommandProcesses();
+            CliAgentView.StopSession();
             DisposeWorkspaceWatcher();
         }
 
@@ -188,6 +194,7 @@ namespace App.Pages
             CancelTerminal();
             CancelAdditionalTerminalSessions();
             CancelTerminalCommandProcesses();
+            CliAgentView.StopSession();
             CloseAllEditorTabs();
             // Save on top of the current settings; this page's snapshot can be older.
             var settings = App.Settings.Current.Clone();
@@ -196,6 +203,7 @@ namespace App.Pages
             _settings = settings;
             LoadWorkspaceCommands();
             LoadAvailableTerminalShells();
+            LoadAvailableCliAgents();
             RefreshWorkspace();
             ConfigureWorkspaceWatcher();
             await RefreshWorkspaceFilesAsync(notifyOnCompletion: true);
@@ -230,6 +238,107 @@ namespace App.Pages
             UpdateModeDisplay();
             UpdateAgentAvailability();
             RefreshRunMenu();
+            ApplyActiveAgent();
+        }
+
+        // Section: Active agent
+        /// <summary>Detects the coding CLIs installed on this machine and lists them next to Cody.</summary>
+        private void LoadAvailableCliAgents()
+        {
+            _cliAgents.Clear();
+            _cliAgents.AddRange(CliAgentCatalog.Detect());
+            _activeCliAgent = _cliAgents.FirstOrDefault(agent =>
+                string.Equals(agent.Id, _selectedAgentId, StringComparison.OrdinalIgnoreCase));
+            BuildAgentSelectorMenu();
+        }
+
+        private void BuildAgentSelectorMenu()
+        {
+            _agentMenuItems.Clear();
+            AgentSelectorFlyout.Items.Clear();
+            AgentSelectorFlyout.Items.Add(CreateAgentMenuItem(null));
+            foreach (var agent in _cliAgents)
+                AgentSelectorFlyout.Items.Add(CreateAgentMenuItem(agent));
+
+            if (_cliAgents.Count == 0)
+            {
+                AgentSelectorFlyout.Items.Add(new MenuFlyoutItem
+                {
+                    Text = "No coding CLI found on this PC",
+                    IsEnabled = false
+                });
+            }
+
+            AgentSelectorFlyout.Items.Add(new MenuFlyoutSeparator());
+            var rescan = new MenuFlyoutItem
+            {
+                Text = "Look for installed CLIs again",
+                Icon = new FontIcon { Glyph = "" }
+            };
+            rescan.Click += (_, _) => RescanCliAgents();
+            AgentSelectorFlyout.Items.Add(rescan);
+        }
+
+        private RadioMenuFlyoutItem CreateAgentMenuItem(CliAgentTool? agent)
+        {
+            var item = new RadioMenuFlyoutItem
+            {
+                GroupName = "CodyActiveAgent",
+                Text = agent?.Name ?? "Cody",
+                Icon = new FontIcon { Glyph = agent is null ? "" : "" },
+                IsChecked = ReferenceEquals(agent, _activeCliAgent)
+            };
+            ToolTipService.SetToolTip(
+                item,
+                agent is null
+                    ? "Cody, the agent built into this app."
+                    : $"{agent.Description}\n{agent.FileName}");
+            item.Click += (_, _) => SelectAgent(agent);
+            _agentMenuItems[item] = agent;
+            return item;
+        }
+
+        private void RescanCliAgents()
+        {
+            LoadAvailableCliAgents();
+            ApplyActiveAgent();
+            SaveWorkspaceCommands();
+        }
+
+        private void SelectAgent(CliAgentTool? agent)
+        {
+            if (ReferenceEquals(agent, _activeCliAgent)) return;
+            _activeCliAgent = agent;
+            _selectedAgentId = agent?.Id ?? string.Empty;
+            ApplyActiveAgent();
+            SaveWorkspaceCommands();
+        }
+
+        /// <summary>Puts the chosen agent in the home tab and the docked rail, so a hosted CLI gets
+        /// the same 30% side panel Cody uses once an editor is open, and hides the Cody-only controls.</summary>
+        private void ApplyActiveAgent()
+        {
+            var agent = _activeCliAgent;
+            var codyIsActive = agent is null;
+            var codyOnly = codyIsActive ? Visibility.Visible : Visibility.Collapsed;
+
+            AgentSelectorText.Text = agent?.Name ?? "Cody";
+            AgentSelectorIcon.Glyph = codyIsActive ? "" : "";
+            HomeTabHeaderText.Text = agent?.Name ?? "Cody";
+            foreach (var (item, menuAgent) in _agentMenuItems)
+                item.IsChecked = ReferenceEquals(menuAgent, agent);
+
+            CodyChat.Visibility = codyOnly;
+            CliAgentView.Visibility = codyIsActive ? Visibility.Collapsed : Visibility.Visible;
+            InstructionButton.Visibility = codyOnly;
+            SmartToggle.Visibility = codyOnly;
+            ThinkToggle.Visibility = codyOnly;
+            ClearButton.Visibility = codyOnly;
+            // A full-screen console UI needs more room than a chat rail, so raise the docked floor.
+            CodyChatDock.MinWidth = codyIsActive ? 340 : 460;
+
+            CliAgentView.WorkspacePath = HasWorkspace() ? _settings.CodyWorkspace : string.Empty;
+            if (agent is not null) CliAgentView.Activate(agent);
         }
 
         private async Task RefreshWorkspaceFilesAsync(bool showLoading = true, bool notifyOnCompletion = false)
@@ -2299,7 +2408,7 @@ namespace App.Pages
                 if (CodyChatHost.Content is null)
                 {
                     HomeTab.Content = null;
-                    CodyChatHost.Content = CodyChat;
+                    CodyChatHost.Content = AgentSurface;
                 }
 
                 HomeTab.Visibility = Visibility.Collapsed;
@@ -2313,7 +2422,7 @@ namespace App.Pages
             if (HomeTab.Content is null)
             {
                 CodyChatHost.Content = null;
-                HomeTab.Content = CodyChat;
+                HomeTab.Content = AgentSurface;
             }
 
             HomeTab.Visibility = Visibility.Visible;
@@ -3260,6 +3369,7 @@ namespace App.Pages
             _commands.Clear();
             _selectedCommand = null;
             _savedTerminalShellName = null;
+            _selectedAgentId = null;
             if (!HasWorkspace()) { RefreshRunMenu(); return; }
             var path = WorkspaceSettingsPath();
             if (!File.Exists(path)) { RefreshRunMenu(); return; }
@@ -3271,6 +3381,7 @@ namespace App.Pages
                 if (settings is not null)
                 {
                     _savedTerminalShellName = settings.SelectedTerminalShell;
+                    _selectedAgentId = settings.SelectedAgent;
                     _commands.AddRange((settings.Commands ?? [])
                         .Select(ReadCommandEntry)
                         .OfType<CodyCommand>());
@@ -3385,7 +3496,8 @@ namespace App.Pages
                 {
                     ["commands"] = new JsonArray(_commands.Select(command => (JsonNode?)CommandToJson(command)).ToArray()),
                     ["selectedCommand"] = _selectedCommand?.CommandLine ?? string.Empty,
-                    ["selectedTerminalShell"] = GetSelectedTerminalShell().Name
+                    ["selectedTerminalShell"] = GetSelectedTerminalShell().Name,
+                    ["selectedAgent"] = _activeCliAgent?.Id ?? string.Empty
                 };
                 File.WriteAllText(
                     path,
@@ -4526,6 +4638,8 @@ namespace App.Pages
         private async Task StageCodyContextAsync(string displayName, string request, CodyContextDocument context)
         {
             if (!HasActiveAgent()) return;
+            // The context is for Cody, so bring Cody back to the front of the panel.
+            SelectAgent(null);
             ApplyDiffFocus(false);
             SetCodyChatDocked(!ReferenceEquals(EditorTabs.SelectedItem, HomeTab));
             await CodyChat.StageTextAttachmentAsync(displayName, context.ToString());
@@ -4647,20 +4761,8 @@ namespace App.Pages
             Clipboard.Flush();
         }
 
-        private static TerminalTheme CreateTerminalTheme() => new()
-        {
-            DefaultBackground = 0x0C0C0C,
-            DefaultForeground = 0xCCCCCC,
-            DefaultSelectionBackground = 0xCCCCCC,
-            CursorStyle = CursorStyle.BlinkingBar,
-            ColorTable =
-            [
-                0x0C0C0C, 0x1F0FC5, 0x0EA113, 0x009CC1,
-                0xDA3700, 0x981788, 0xDD963A, 0xCCCCCC,
-                0x767676, 0x5648E7, 0x0CC616, 0xA5F1F9,
-                0xFF783B, 0x9E00B4, 0xD6D661, 0xF2F2F2
-            ]
-        };
+        private static TerminalTheme CreateTerminalTheme() =>
+            global::App.Controls.TerminalPresets.CreateTheme();
 
         private static string CreateTerminalCommandLine(TerminalShell shell)
         {
@@ -4738,30 +4840,10 @@ namespace App.Pages
             shells.Add(new TerminalShell(name, fileName, arguments));
         }
 
-        private static string? FindExecutable(string executableName)
-        {
-            var systemPath = Path.Combine(Environment.SystemDirectory, executableName);
-            if (File.Exists(systemPath)) return systemPath;
+        private static string? FindExecutable(string executableName) =>
+            ExecutableLocator.Find(executableName);
 
-            var pathEntries = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            foreach (var directory in pathEntries)
-            {
-                var candidate = Path.Combine(directory, executableName);
-                if (File.Exists(candidate)) return candidate;
-            }
-
-            return null;
-        }
-
-        private static string? FindWindowsPowerShell()
-        {
-            var windowsDirectory = Path.GetDirectoryName(Environment.SystemDirectory);
-            if (string.IsNullOrWhiteSpace(windowsDirectory)) return FindExecutable("powershell.exe");
-
-            var powerShellPath = Path.Combine(windowsDirectory, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-            return File.Exists(powerShellPath) ? powerShellPath : FindExecutable("powershell.exe");
-        }
+        private static string? FindWindowsPowerShell() => ExecutableLocator.FindWindowsPowerShell();
 
         private static string? FindGitBash()
         {
@@ -4980,7 +5062,8 @@ namespace App.Pages
         private sealed record CodyWorkspaceSettings(
             [property: JsonPropertyName("commands")] List<CodyCommandFile>? Commands = null,
             [property: JsonPropertyName("selectedCommand")] string? SelectedCommand = null,
-            [property: JsonPropertyName("selectedTerminalShell")] string? SelectedTerminalShell = null);
+            [property: JsonPropertyName("selectedTerminalShell")] string? SelectedTerminalShell = null,
+            [property: JsonPropertyName("selectedAgent")] string? SelectedAgent = null);
         private enum WorkspaceDocumentKind { Text, Image, Binary }
 
         private sealed class EditorDocument(

@@ -1,0 +1,81 @@
+<UserControl
+    x:Class="App.Controls.CliAgentPanel"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Background="#FF0C0C0C">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Section: Session header -->
+        <Border Padding="12,7" BorderThickness="0,0,0,1"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <FontIcon Glyph="&#xE756;" FontSize="13" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="AgentNameText" FontSize="12" FontWeight="SemiBold"
+                               VerticalAlignment="Center" MaxWidth="180"
+                               TextTrimming="CharacterEllipsis" Text="Agent"/>
+                    <Border x:Name="StatusBadge" CornerRadius="9" Padding="8,2"
+                            VerticalAlignment="Center"
+                            Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                        <TextBlock x:Name="StatusText" FontSize="11" Text="Stopped"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </Border>
+                    <Border x:Name="ApprovalBadge" CornerRadius="9" Padding="8,2"
+                            VerticalAlignment="Center" Visibility="Collapsed"
+                            Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                            ToolTipService.ToolTip="Started with its approval prompts turned off, so it acts without asking.">
+                        <TextBlock Text="No approval prompts" FontSize="11"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                    <Button x:Name="RestartButton" Width="32" Height="32" Padding="0"
+                            Background="Transparent" BorderThickness="0"
+                            Click="RestartButton_Click"
+                            ToolTipService.ToolTip="Restart this agent"
+                            AutomationProperties.Name="Restart this agent">
+                        <FontIcon Glyph="&#xE72C;" FontSize="12"/>
+                    </Button>
+                    <Button x:Name="StopButton" Width="32" Height="32" Padding="0"
+                            Background="Transparent" BorderThickness="0"
+                            Click="StopButton_Click"
+                            ToolTipService.ToolTip="Stop this agent"
+                            AutomationProperties.Name="Stop this agent">
+                        <FontIcon Glyph="&#xE71A;" FontSize="12"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Section: Hosted console -->
+        <Grid x:Name="TerminalHost" Grid.Row="1" MinHeight="120"
+              HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+              SizeChanged="TerminalHost_SizeChanged"/>
+
+        <StackPanel x:Name="PlaceholderPanel" Grid.Row="1" Spacing="12" MaxWidth="360"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+            <TextBlock x:Name="PlaceholderText" FontSize="12" TextWrapping="Wrap"
+                       TextAlignment="Center" Foreground="#FF9D9D9D"
+                       Text="Choose a workspace to start this agent."/>
+            <Button x:Name="PlaceholderStartButton" HorizontalAlignment="Center" Height="32"
+                    Padding="12,0" Visibility="Collapsed" Click="RestartButton_Click"
+                    ToolTipService.ToolTip="Start this agent"
+                    AutomationProperties.Name="Start this agent">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                    <FontIcon Glyph="&#xE768;" FontSize="12"/>
+                    <TextBlock x:Name="PlaceholderStartText" Text="Start" FontSize="12"/>
+                </StackPanel>
+            </Button>
+        </StackPanel>
+    </Grid>
+</UserControl>

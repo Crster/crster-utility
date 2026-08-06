@@ -59,6 +59,19 @@
                             </MenuFlyout>
                         </SplitButton.Flyout>
                     </SplitButton>
+                    <DropDownButton x:Name="AgentSelectorButton" Height="34" Padding="10,0"
+                                    VerticalAlignment="Center"
+                                    ToolTipService.ToolTip="Choose which agent is active"
+                                    AutomationProperties.Name="Choose which agent is active">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <FontIcon x:Name="AgentSelectorIcon" Glyph="&#xE943;" FontSize="12"/>
+                            <TextBlock x:Name="AgentSelectorText" Text="Cody" FontSize="12"
+                                       MaxWidth="150" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                        <DropDownButton.Flyout>
+                            <MenuFlyout x:Name="AgentSelectorFlyout" Placement="BottomEdgeAlignedLeft"/>
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
                     <Button x:Name="InstructionButton" Height="34" Padding="8,0"
                             Background="Transparent" BorderThickness="0" VerticalAlignment="Center"
                             ToolTipService.ToolTip="Show the system instruction"
@@ -345,9 +358,14 @@
                 <TabViewItem x:Name="HomeTab" IsClosable="False" Visibility="Collapsed"
                              ContentTransitions="{x:Null}">
                     <TabViewItem.Header>
-                        <TextBlock Text="Cody"/>
+                        <TextBlock x:Name="HomeTabHeaderText" Text="Cody"/>
                     </TabViewItem.Header>
-                    <controls:CodyChatPanel x:Name="CodyChat"/>
+                    <!-- One surface so the active agent, Cody or a hosted CLI, gets the same
+                         home tab and the same 30% side rail when an editor is open. -->
+                    <Grid x:Name="AgentSurface">
+                        <controls:CodyChatPanel x:Name="CodyChat"/>
+                        <controls:CliAgentPanel x:Name="CliAgentView" Visibility="Collapsed"/>
+                    </Grid>
                 </TabViewItem>
             </TabView>
 
