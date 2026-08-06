@@ -366,7 +366,6 @@ namespace App.Pages
         {
             if (_updatingMcpToggle) return;
             _exposeCodyMcp = McpToggle.IsChecked == true;
-            DiagnosticLog.Write("CodyPage", $"McpToggle changed to {_exposeCodyMcp}");
             // A CLI reads its MCP configuration at launch, so ApplyActiveAgent restarts the session.
             ApplyActiveAgent();
             SaveWorkspaceCommands();
@@ -410,10 +409,8 @@ namespace App.Pages
 
         private void TearDownMcp()
         {
-            DiagnosticLog.Write("CodyPage", $"TearDownMcp wired={_mcpWiredAgent?.Id ?? "none"}");
             RemoveMcpConfiguration();
             _mcpServer?.Stop();
-            DiagnosticLog.Write("CodyPage", "TearDownMcp done");
         }
 
         private void RemoveMcpConfiguration()

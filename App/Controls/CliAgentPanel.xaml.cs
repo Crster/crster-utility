@@ -60,8 +60,6 @@ namespace App.Controls
             var wiringChanged = (_mcp is null) != (mcp is null)
                 || !string.Equals(_mcp?.Arguments, mcp?.Arguments, StringComparison.Ordinal);
             var restarting = agentChanged || (wiringChanged && _terminal is not null);
-            Trace($"Activate tool={tool.Id} mcp={(mcp is null ? "off" : "on")} agentChanged={agentChanged} "
-                + $"wiringChanged={wiringChanged} restarting={restarting} running={_terminal is not null}");
 
             // Same agent, only what the Cody MCP server offers it changed. Restart the console in
             // place instead of replacing the control: a control that has been detached still throws
@@ -103,7 +101,6 @@ namespace App.Controls
         {
             if (_tool is null) return;
 
-            Trace("RestartInPlace starting");
             try
             {
                 terminal.StartupCommandLine = CliAgentCatalog.CreateCommandLine(
@@ -116,7 +113,7 @@ namespace App.Controls
             }
             catch (Exception exception) when (exception is SystemException)
             {
-                DiagnosticLog.WriteException("CliAgentPanel/restartInPlace", exception);
+                // The control could not relaunch its shell; fall back to a full restart.
                 if (!ReferenceEquals(_terminal, terminal)) return;
 
                 StopSession();
@@ -127,7 +124,6 @@ namespace App.Controls
 
             if (!ReferenceEquals(_terminal, terminal)) return;
 
-            Trace("RestartInPlace done");
             UpdateHeader();
             // The new shell starts at a default size, so push the panel size back into it.
             ResizeSession(terminal);
@@ -155,8 +151,6 @@ namespace App.Controls
         private void RestartTimer_Tick(DispatcherQueueTimer sender, object args)
         {
             sender.Stop();
-            Trace($"RestartTimer tick tool={_tool?.Id ?? "none"} running={_terminal is not null} "
-                + $"children={TerminalHost.Children.Count}");
             if (_tool is null || _terminal is not null) return;
 
             StartSession();
@@ -174,7 +168,6 @@ namespace App.Controls
             _terminal = null;
             _isReady = false;
             _startWhenSized = false;
-            Trace($"StopSession running={terminal is not null} children={TerminalHost.Children.Count}");
             if (terminal is null)
             {
                 UpdateHeader();
@@ -196,11 +189,10 @@ namespace App.Controls
                 terminal.IsTabStop = false;
                 terminal.IsEnabled = false;
                 if (hadFocus && IsLoaded) RestartButton.Focus(FocusState.Programmatic);
-                Trace($"StopSession focus released hadFocus={hadFocus}");
             }
             catch (Exception exception) when (exception is SystemException)
             {
-                DiagnosticLog.WriteException("CliAgentPanel/focus", exception);
+                // The console is going away regardless; a failed focus move must not stop the teardown.
             }
 
             // A visible console keeps mapping its window from layout updates after it leaves the
@@ -213,38 +205,31 @@ namespace App.Controls
             try
             {
                 session = terminal.DisconnectConPTYTerm();
-                Trace("StopSession disconnected");
             }
             catch (Exception exception) when (IsExpectedShutdownException(exception))
             {
-                DiagnosticLog.WriteException("CliAgentPanel/disconnect", exception);
             }
 
             try
             {
                 session?.CloseStdinToApp();
-                Trace("StopSession stdin closed");
             }
             catch (Exception exception) when (IsExpectedShutdownException(exception))
             {
-                DiagnosticLog.WriteException("CliAgentPanel/stdin", exception);
             }
 
             try
             {
                 session?.StopExternalTermOnly();
-                Trace("StopSession term stopped");
             }
             catch (Exception exception) when (IsExpectedShutdownException(exception))
             {
-                DiagnosticLog.WriteException("CliAgentPanel/stopterm", exception);
             }
 
             // Disconnect while the native terminal is still hosted; removing it first races WinUI teardown.
             TerminalHost.Children.Remove(terminal);
             // Drop the pinned height so the next console is measured fresh, not against this one.
             TerminalHost.Height = double.NaN;
-            Trace($"StopSession removed children={TerminalHost.Children.Count}");
 
             // Only now, with the console detached, is it safe to end a shell that ignored the closed
             // stdin. Killing the tree while ConPTY was still attached takes the whole app down.
@@ -252,15 +237,13 @@ namespace App.Controls
             {
                 var process = session?.Process;
                 if (process is not null && !process.HasExited) process.Kill(true);
-                Trace("StopSession process ended");
             }
             catch (Exception exception) when (exception is SystemException)
             {
-                DiagnosticLog.WriteException("CliAgentPanel/kill", exception);
+                // The shell may already have ended with its stdin closed.
             }
 
             UpdateHeader();
-            Trace("StopSession done");
         }
 
         internal void FocusSession()
@@ -316,9 +299,6 @@ namespace App.Controls
             }
 
             var measured = TryMeasureConsole(out var width, out var height);
-            Trace($"StartSession onScreen={IsOnScreen} measured={measured} width={width:0.##} height={height:0.##} "
-                + $"panel={ActualWidth:0.##}x{ActualHeight:0.##} header={HeaderBorder.ActualHeight:0.##} "
-                + $"hostVisible={TerminalHost.Visibility} suppressed={_isSuppressed}");
             if (!IsOnScreen || !measured)
             {
                 _startWhenSized = true;
@@ -356,9 +336,7 @@ namespace App.Controls
                     Theme = TerminalPresets.CreateTheme()
                 };
                 _terminal = terminal;
-                Trace("StartSession created, adding to host");
                 TerminalHost.Children.Add(terminal);
-                Trace("StartSession added");
                 ResizeWhenReady(terminal);
             }
             catch (Exception exception) when (exception is InvalidOperationException
@@ -367,7 +345,6 @@ namespace App.Controls
             {
                 _terminal = null;
                 _startError = $"Could not start {_tool.Name}: {exception.Message}";
-                DiagnosticLog.WriteException("CliAgentPanel/start", exception);
             }
         }
 
@@ -384,7 +361,6 @@ namespace App.Controls
             }
 
             _isReady = true;
-            Trace("ResizeWhenReady ready, applying theme");
             // Re-apply the theme now that the inner terminal has loaded, so the font family and size
             // are in force before the first resize decides how many rows and columns fit.
             try
@@ -393,7 +369,7 @@ namespace App.Controls
             }
             catch (Exception exception) when (IsExpectedShutdownException(exception))
             {
-                DiagnosticLog.WriteException("CliAgentPanel/theme", exception);
+                // The control can detach before the theme is re-applied; the first theme still holds.
             }
 
             UpdateHeader();
@@ -410,7 +386,6 @@ namespace App.Controls
 
             if (!IsOnScreen)
             {
-                Trace("UpdateSessionVisibility hiding console");
                 terminal.Visibility = Visibility.Collapsed;
                 return;
             }
@@ -420,7 +395,6 @@ namespace App.Controls
                 () =>
                 {
                     if (!ReferenceEquals(_terminal, terminal) || !IsOnScreen) return;
-                    Trace("UpdateSessionVisibility revealing console");
                     terminal.Visibility = Visibility.Visible;
                     ResizeSession(terminal);
                 });
@@ -461,19 +435,15 @@ namespace App.Controls
 
             try
             {
-                Trace($"ResizeSession width={width:0.##} height={height:0.##}");
                 TerminalHost.Height = height;
                 terminal.Width = width;
                 terminal.Height = height;
             }
-            catch (ArgumentException exception)
+            catch (ArgumentException)
             {
                 // The native control can detach while the panel is being hidden.
-                DiagnosticLog.WriteException("CliAgentPanel/resize", exception);
             }
         }
-
-        private static void Trace(string message) => DiagnosticLog.Write("CliAgentPanel", message);
 
         /// <summary>Measures the room left for the console from the panel and its header, never from
         /// the host itself: the host's height is something this code sets, so reading it back would
