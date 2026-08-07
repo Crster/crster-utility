@@ -1,31 +1,326 @@
 {
-  "Commands": [
+  "commands": [
     {
-      "Name": "Build app",
-      "Command": "dotnet build App/App.csproj --configuration Debug --property:Platform=x64",
-      "WorkingDirectory": ""
+      "name": "Build solution",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "build",
+        "CrsterUtility.slnx",
+        "--property:Platform=x64"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
     },
     {
-      "Name": "Clean and build app",
-      "Command": "dotnet clean App/App.csproj --configuration Debug --property:Platform=x64 \u0026\u0026 dotnet build App/App.csproj --configuration Debug --property:Platform=x64 --no-incremental",
-      "WorkingDirectory": ""
+      "name": "Build solution (Release)",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "build",
+        "CrsterUtility.slnx",
+        "--configuration",
+        "Release",
+        "--property:Platform=x64"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
     },
     {
-      "Name": "Run app script",
-      "Command": "pwsh -ExecutionPolicy Bypass -File run-app.ps1",
-      "WorkingDirectory": ""
+      "name": "Clean solution",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "clean",
+        "CrsterUtility.slnx",
+        "--property:Platform=x64"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
     },
     {
-      "Name": "Restore app dependencies",
-      "Command": "dotnet restore App/App.csproj",
-      "WorkingDirectory": ""
+      "name": "Run app",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "App/App.csproj",
+        "--property:Platform=x64"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
     },
     {
-      "Name": "Publish app",
-      "Command": "dotnet publish App/App.csproj --configuration Release --property:Platform=x64 --output ./Installer/CrsterUtility/",
-      "WorkingDirectory": ""
+      "name": "Build app project",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "build",
+        "App/App.csproj"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Run app project",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "App/App.csproj"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Publish app project",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "publish",
+        "App/App.csproj"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Restore solution packages",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "restore",
+        "CrsterUtility.slnx"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Run app",
+      "type": "shell",
+      "request": "integrated",
+      "exe": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "run-app.ps1"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Build and run app Release (PowerShell)",
+      "type": "shell",
+      "request": "integrated",
+      "exe": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "run-app.ps1",
+        "-Configuration",
+        "Release"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Build App (Debug, x64)",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "build",
+        "App/App.csproj",
+        "--configuration",
+        "Debug",
+        "--property:Platform=x64"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Build App (Release, x64)",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "build",
+        "App/App.csproj",
+        "--configuration",
+        "Release",
+        "--property:Platform=x64"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Run App (Debug, x64)",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "App/App.csproj",
+        "--configuration",
+        "Debug",
+        "--property:Platform=x64"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Run App (Release, x64)",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "App/App.csproj",
+        "--configuration",
+        "Release",
+        "--property:Platform=x64"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Clean App (Debug)",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "clean",
+        "App/App.csproj",
+        "--configuration",
+        "Debug",
+        "--property:Platform=x64"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Clean App (Release)",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "clean",
+        "App/App.csproj",
+        "--configuration",
+        "Release",
+        "--property:Platform=x64"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Restore App packages",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "restore",
+        "App/App.csproj"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Build Solution (Debug, x64)",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "build",
+        "CrsterUtility.slnx",
+        "--configuration",
+        "Debug",
+        "--property:Platform=x64"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Clean Solution (Debug)",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "clean",
+        "CrsterUtility.slnx",
+        "--configuration",
+        "Debug"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Clean Solution (Release)",
+      "type": "dotnet",
+      "request": "integrated",
+      "exe": "dotnet",
+      "args": [
+        "clean",
+        "CrsterUtility.slnx",
+        "--configuration",
+        "Release"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
+    },
+    {
+      "name": "Build and launch App (PowerShell)",
+      "type": "shell",
+      "request": "integrated",
+      "exe": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "run-app.ps1",
+        "-Configuration",
+        "Debug"
+      ],
+      "cwd": "",
+      "env": {},
+      "envFile": ""
     }
   ],
-  "SelectedCommand": "pwsh -ExecutionPolicy Bypass -File run-app.ps1",
-  "SelectedTerminalShell": "PowerShell 7"
+  "selectedCommand": "powershell -ExecutionPolicy Bypass -File run-app.ps1 -Configuration Debug",
+  "selectedTerminalShell": "PowerShell 7",
+  "selectedAgent": "",
+  "exposeCodyMcp": true
 }

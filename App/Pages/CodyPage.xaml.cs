@@ -64,6 +64,7 @@ namespace App.Pages
         private readonly HashSet<string> _pendingWorkspaceChanges = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<TabViewItem, EditorDocument> _editors = [];
         private readonly Dictionary<TabViewItem, EasyTerminalControl> _terminalCommandSessions = [];
+        private readonly Dictionary<TabViewItem, CommandTerminalSubclassState> _commandTerminalSubclasses = [];
         private readonly Dictionary<TabViewItem, EasyTerminalControl> _additionalTerminalSessions = [];
         private readonly HashSet<TabViewItem> _terminalCommandTabsOpenedPanel = [];
         private readonly HashSet<TabViewItem> _terminalCommandTabsClosing = [];
@@ -322,10 +323,34 @@ namespace App.Pages
         private void SelectAgent(CliAgentTool? agent)
         {
             if (ReferenceEquals(agent, _activeCliAgent)) return;
+
+            // Switching agents tears down the side that is working: Cody loses its turn when it is
+            // busy, and the hosted CLI is killed mid-session. Refuse until the active side is idle.
+            if (AgentSwitchBlockReason(agent) is { } blockReason)
+            {
+                ModelStatusText.Text = blockReason;
+                return;
+            }
+
             _activeCliAgent = agent;
             _selectedAgentId = agent?.Id ?? string.Empty;
             ApplyActiveAgent();
             SaveWorkspaceCommands();
+        }
+
+        /// <summary>Returns a reason string when switching to <paramref name="agent"/> would tear down
+        /// a side that is still working, or null when the switch is safe.</summary>
+        private string? AgentSwitchBlockReason(CliAgentTool? agent)
+        {
+            // Leaving Cody for a CLI agent mid-turn loses the in-flight request.
+            if (_isBusy && agent is not null)
+                return "Stop Cody before switching to the CLI agent.";
+
+            // Leaving a running CLI for Cody kills the agent's session in the console.
+            if (_activeCliAgent is not null && CliAgentView.IsSessionActive && agent is null)
+                return "Stop the CLI agent before switching to Cody.";
+
+            return null;
         }
 
         /// <summary>Puts the chosen agent in the home tab and the docked rail, so a hosted CLI gets
@@ -2968,16 +2993,36 @@ namespace App.Pages
                 if (!ReferenceEquals(sessionBeforeRelatednessCheck, _session))
                     CodyChat.ShowPendingUserPrompt(prompt, request.Attachments);
                 CodyChat.CommitPendingUserPrompt();
-                var answer = await agent.RunAsync(
-                    _session,
-                    agentPrompt,
-                    uploadedAttachments,
-                    CurrentMode,
-                    planOnly,
-                    CodyChat.HandleAgentEvent,
-                    _agentCancellation.Token);
+                var effectiveMode = CurrentMode;
+                var effectivePlanOnly = planOnly;
+                var answer = string.Empty;
+                // Allow one escalation: Cody can stop a hard turn and re-run it on Be smart + Think deep.
+                for (var attempt = 0; ; attempt++)
+                {
+                    var outcome = await agent.RunAsync(
+                        _session,
+                        agentPrompt,
+                        uploadedAttachments,
+                        effectiveMode,
+                        effectivePlanOnly,
+                        CodyChat.HandleAgentEvent,
+                        _agentCancellation.Token);
+
+                    if (!outcome.Escalated || attempt > 0 || !effectiveMode.IsDefault)
+                    {
+                        answer = outcome.Answer;
+                        break;
+                    }
+
+                    effectiveMode = CodyAgentMode.SmartDeep;
+                    effectivePlanOnly = false;
+                    SmartToggle.IsChecked = true;
+                    ThinkToggle.IsChecked = true;
+                    UpdateModeDisplay();
+                }
+
                 CodyChat.CompleteTurn(answer);
-                showPlanReview = planOnly;
+                showPlanReview = effectivePlanOnly;
                 CompletionNotificationService.ShowWhenMainWindowIsInactive(
                     "Cody task complete",
                     "Cody has finished responding.");
@@ -3101,10 +3146,23 @@ namespace App.Pages
             SmartToggle.IsEnabled = !busy;
             ThinkToggle.IsEnabled = !busy;
             ClearButton.IsEnabled = !busy;
+            // The agent selector switches the active surface mid-turn, which loses an in-flight
+            // Cody request or kills a running CLI session. Keep it disabled while either is busy.
+            AgentSelectorButton.IsEnabled = !busy;
             RefreshWorkspace();
         }
 
         // Section: Run commands
+
+        /// <summary>
+        /// Normalizes a command line for similarity comparison: trims, collapses repeated
+        /// whitespace, and compares case-insensitively, so a rescanned command that differs
+        /// only in spacing or quoting is treated as a duplicate of an existing one.
+        /// </summary>
+        private static string NormalizeCommandLine(string commandLine) =>
+            string.Join(' ', commandLine.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                .ToLowerInvariant();
+
         private async void ScanCommandsMenuItem_Click(object sender, RoutedEventArgs e)
         {
             if (!HasWorkspace()) return;
@@ -3120,11 +3178,22 @@ namespace App.Pages
             StartScanAnimation();
             try
             {
-                var commands = await DiscoverWorkspaceCommandsAsync();
-                var existingCommandLines = _commands
-                    .Select(command => command.CommandLine)
+                var commands = await DiscoverWorkspaceCommandsAsync(_commands);
+                var existingNames = _commands
+                    .Select(command => command.Name)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var addedCommands = commands.Where(command => existingCommandLines.Add(command.CommandLine)).ToList();
+                var existingCommandLines = _commands
+                    .Select(command => NormalizeCommandLine(command.CommandLine))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var addedCommands = commands
+                    .Where(command =>
+                        !existingNames.Contains(command.Name) &&
+                        existingCommandLines.Add(NormalizeCommandLine(command.CommandLine)))
+                    .ToList();
+                foreach (var name in addedCommands.Select(command => command.Name))
+                {
+                    existingNames.Add(name);
+                }
                 _commands.AddRange(addedCommands);
                 if (addedCommands.Count > 0) _selectedCommand = addedCommands[0];
                 SaveWorkspaceCommands();
@@ -3177,7 +3246,7 @@ namespace App.Pages
             await OpenEditorAsync(CreateWorkspaceFileItem(path), false);
         }
 
-        private async Task<List<CodyCommand>> DiscoverWorkspaceCommandsAsync()
+        private async Task<List<CodyCommand>> DiscoverWorkspaceCommandsAsync(IReadOnlyList<CodyCommand> existing)
         {
             using var client = new OpenAiCompatibleClient(_settings.OpenAiCompatibleApiKey);
             var memory = new SecretaryMemoryService();
@@ -3198,17 +3267,30 @@ namespace App.Pages
                 .Select(declaration => (JsonNode)declaration.DeepClone())
                 .ToArray());
             var history = new List<JsonObject>();
+            var existingJson = existing.Count == 0
+                ? "[]"
+                : JsonSerializer.Serialize(existing.Select(command => new
+                {
+                    name = command.Name,
+                    command_line = command.CommandLine
+                }), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+
             IReadOnlyList<JsonObject> nextSteps =
             [
                 OpenAiCompatibleClient.CreateUserStep(
-                    "Inspect the selected workspace and discover its executable project scripts and manifest-backed commands, "
-                    + "including any Docker, Prisma, or other non-Node tooling in use. Return only a JSON array with objects shaped as "
+                    "Commands already saved for this workspace (do not propose any command whose name or command line matches one of these): "
+                    + existingJson + ". "
+                    + "Inspect the selected workspace and discover its executable project scripts and manifest-backed commands, "
+                    + "including any Docker, Prisma, or other non-Node tooling that is not already in the list above. Return only a JSON array with objects shaped as "
                     + "{\"name\":\"Run dev server\",\"type\":\"node\",\"request\":\"integrated\",\"exe\":\"npm\",\"args\":[\"run\",\"dev\"],"
                     + "\"cwd\":\"frontend\",\"env\":{\"NODE_ENV\":\"development\"},\"envFile\":\".env.local\"}.",
                     [])
             ];
             const string instruction = """
                 You discover commands supported by a software workspace so a human can run them with one click.
+
+                The user message already lists every command saved for this workspace. Do not propose a command
+                whose name or full command line matches one already saved, even if it would otherwise qualify.
 
                 Explore before answering:
                 - Start with list_workspace_entries on "." with name_pattern ".*" to see the top-level layout, then descend into
@@ -4319,7 +4401,9 @@ namespace App.Pages
                     | EasyTerminalControl.INPUT_CAPTURE.DirectionKeys,
                 Theme = CreateTerminalTheme()
             };
-            terminal.Terminal.ContextFlyout = CreateTerminalCommandOutputMenu(command, terminal);
+            var commandMenu = CreateTerminalCommandOutputMenu(command, terminal);
+            terminal.ContextFlyout = commandMenu;
+            terminal.Terminal.ContextFlyout = commandMenu;
             var tab = new TabViewItem
             {
                 Header = command.Name,
@@ -4329,6 +4413,7 @@ namespace App.Pages
             TerminalTabs.SelectedItem = tab;
             if (terminalWasHidden) _terminalCommandTabsOpenedPanel.Add(tab);
             _terminalCommandSessions.Add(tab, terminal);
+            terminal.Terminal.Loaded += (_, _) => AttachCommandTerminalContextMenuHook(tab, terminal, commandMenu);
 
             terminal.Loaded += (_, _) => _ = DispatcherQueue.TryEnqueue(
                 Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
@@ -4531,6 +4616,7 @@ namespace App.Pages
                     else await TerminateCommandTerminalAsync(commandTerminal);
                 }
 
+                DetachCommandTerminalContextMenuHook(args.Tab);
                 sender.TabItems.Remove(args.Tab);
                 if (closeTerminalPanel && sender.TabItems.Count == 1 && _terminalControl is null) HideTerminal();
             }
@@ -4588,6 +4674,8 @@ namespace App.Pages
                 {
                 }
             }
+            foreach (var tab in _commandTerminalSubclasses.Keys.ToList())
+                DetachCommandTerminalContextMenuHook(tab);
             _terminalCommandSessions.Clear();
             _terminalCommandTabsOpenedPanel.Clear();
             _terminalCommandTabsClosing.Clear();
@@ -4917,7 +5005,13 @@ namespace App.Pages
         private async Task StageCodyContextAsync(string displayName, string request, CodyContextDocument context)
         {
             if (!HasActiveAgent()) return;
-            // The context is for Cody, so bring Cody back to the front of the panel.
+            // The context is for Cody, so bring Cody back to the front of the panel. A hosted CLI
+            // that is still running has to be stopped first, or Cody cannot take the panel.
+            if (AgentSwitchBlockReason(null) is { } blockReason)
+            {
+                await ShowMessageAsync("Agent is running", blockReason);
+                return;
+            }
             SelectAgent(null);
             ApplyDiffFocus(false);
             SetCodyChatDocked(!ReferenceEquals(EditorTabs.SelectedItem, HomeTab));
@@ -5009,6 +5103,93 @@ namespace App.Pages
                 RemoveWindowSubclass(_terminalWindowHandle, _terminalWindowSubclassProcedure, UIntPtr.Zero);
             _terminalWindowHandle = IntPtr.Zero;
             _terminalWindowSubclassProcedure = null;
+        }
+
+        /// <summary>Holds per-command-terminal native window subclass state so multiple
+        /// command terminal tabs can each have their own right-click context menu.</summary>
+        private sealed class CommandTerminalSubclassState
+        {
+            public IntPtr WindowHandle;
+            public TerminalWindowSubclassProcedure? Procedure;
+            public MenuFlyout Menu = null!;
+            public EasyTerminalControl Terminal = null!;
+            public string? SelectedText;
+        }
+
+        private void AttachCommandTerminalContextMenuHook(TabViewItem tab, EasyTerminalControl terminal, MenuFlyout menu)
+        {
+            if (_commandTerminalSubclasses.ContainsKey(tab)) return;
+
+            var container = terminal.Terminal.GetType()
+                .GetField("termContainer", BindingFlags.Instance | BindingFlags.NonPublic)?
+                .GetValue(terminal.Terminal);
+            if (container is null) return;
+
+            var handle = container.GetType()
+                .GetProperty("Hwnd", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?
+                .GetValue(container);
+            if (handle is not IntPtr windowHandle || windowHandle == IntPtr.Zero) return;
+
+            var state = new CommandTerminalSubclassState
+            {
+                WindowHandle = windowHandle,
+                Menu = menu,
+                Terminal = terminal
+            };
+
+            state.Procedure = (hwnd, message, wParam, lParam, subclassId, referenceData) =>
+            {
+                // WM_RBUTTONDOWN — capture selected text before the console clears selection.
+                if (message == 0x0204)
+                {
+                    state.SelectedText = terminal.Terminal.GetSelectedText();
+                    return IntPtr.Zero;
+                }
+                // WM_RBUTTONUP — show the command output context menu at the cursor.
+                if (message == 0x0205)
+                {
+                    var selectedText = state.SelectedText;
+                    var terminalPosition = new global::Windows.Foundation.Point(
+                        (short)(lParam.ToInt64() & 0xFFFF),
+                        (short)((lParam.ToInt64() >> 16) & 0xFFFF));
+                    _ = DispatcherQueue.TryEnqueue(() =>
+                    {
+                        try
+                        {
+                            var terminalOffset = terminal.Terminal.TransformToVisual(TerminalPanel)
+                                .TransformPoint(new global::Windows.Foundation.Point());
+                            var panelPosition = new global::Windows.Foundation.Point(
+                                terminalOffset.X + terminalPosition.X,
+                                terminalOffset.Y + terminalPosition.Y);
+                            if (!menu.IsOpen)
+                                menu.ShowAt(TerminalPanel, panelPosition);
+                        }
+                        catch
+                        {
+                            // Terminal may have been disposed while the dispatcher queued.
+                        }
+                    });
+                    return IntPtr.Zero;
+                }
+                return DefSubclassProc(hwnd, message, wParam, lParam);
+            };
+
+            if (!SetWindowSubclass(windowHandle, state.Procedure, UIntPtr.Zero, IntPtr.Zero))
+                return;
+
+            _commandTerminalSubclasses[tab] = state;
+        }
+
+        private void DetachCommandTerminalContextMenuHook(TabViewItem tab)
+        {
+            if (!_commandTerminalSubclasses.Remove(tab, out var state)) return;
+            if (state.WindowHandle != IntPtr.Zero && state.Procedure is not null)
+            {
+                try { RemoveWindowSubclass(state.WindowHandle, state.Procedure, UIntPtr.Zero); }
+                catch { /* Window may already be destroyed during teardown. */ }
+            }
+            state.WindowHandle = IntPtr.Zero;
+            state.Procedure = null;
         }
 
         private delegate IntPtr TerminalWindowSubclassProcedure(IntPtr windowHandle, uint message, UIntPtr wParam, IntPtr lParam, UIntPtr subclassId, IntPtr referenceData);

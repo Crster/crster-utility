@@ -259,8 +259,12 @@ namespace App.Controls
                     FlushStreamBuffers();
                     AddMessage(new ChatMessage(ChatItemKind.Assistant, agentEvent.Title, agentEvent.Content));
                     break;
+                case CodyAgentEventKind.TokensUpdated:
+                    _processingStatus?.SetTokens(agentEvent.TotalInputTokens ?? 0, agentEvent.TotalOutputTokens ?? 0);
+                    break;
             }
-            NoteProcessingEvent(agentEvent.Kind);
+            if (agentEvent.Kind != CodyAgentEventKind.TokensUpdated)
+                NoteProcessingEvent(agentEvent.Kind);
             if (!_streamTimer.IsRunning) FlushStreamBuffers();
         }
 
@@ -1499,6 +1503,10 @@ namespace App.Controls
             private readonly TextBlock _message;
             private ProcessingEvent _event;
             private string _currentSentence = "";
+            private int _lastSentenceSecond;
+            private int _totalInputTokens;
+            private int _totalOutputTokens;
+            private bool _hasTokens;
 
             public ProcessingStatusRow()
             {
@@ -1555,19 +1563,46 @@ namespace App.Controls
                 Refresh(forceNewMessage: true);
             }
 
+            public void SetTokens(int totalInputTokens, int totalOutputTokens)
+            {
+                _totalInputTokens = totalInputTokens;
+                _totalOutputTokens = totalOutputTokens;
+                _hasTokens = true;
+                Refresh(forceNewMessage: false);
+            }
+
             public void Refresh() => Refresh(forceNewMessage: false);
 
             private void Refresh(bool forceNewMessage)
             {
-                var sentenceChanged = forceNewMessage || string.IsNullOrEmpty(_currentSentence);
-                if (sentenceChanged)
-                    _currentSentence = CreateFunSentence(_event);
-
                 var elapsed = TimeSpan.FromSeconds(Math.Max(0, (int)_stopwatch.Elapsed.TotalSeconds));
+                var sentenceChanged = forceNewMessage
+                    || string.IsNullOrEmpty(_currentSentence)
+                    || elapsed.TotalSeconds - _lastSentenceSecond >= 30;
+                if (sentenceChanged)
+                {
+                    _lastSentenceSecond = (int)elapsed.TotalSeconds;
+                    _currentSentence = CreateFunSentence(_event);
+                }
+
                 var elapsedText = elapsed.TotalMinutes >= 1
-                    ? $"{(int)elapsed.TotalMinutes}m"
+                    ? $"{(int)elapsed.TotalMinutes}m {elapsed.Seconds}s"
                     : $"{elapsed.Seconds}s";
-                _message.Text = $"{elapsedText} - {_currentSentence}";
+                var tokenText = _hasTokens
+                    ? $"{FormatTokenCount(_totalInputTokens + _totalOutputTokens)} tokens"
+                    : string.Empty;
+
+                static string FormatTokenCount(int count)
+                {
+                    return count switch
+                    {
+                        >= 1_000_000 => $"{count / 1_000_000m:#,0.##}M",
+                        >= 1_000 => $"{count / 1_000m:#,0.##}k",
+                        _ => count.ToString()
+                    };
+                }
+                var parts = new List<string> { elapsedText, tokenText, _currentSentence };
+                _message.Text = string.Join(" - ", parts.Where(part => !string.IsNullOrEmpty(part)));
 
                 if (sentenceChanged)
                     AnimateNewSentence();

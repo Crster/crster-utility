@@ -50,6 +50,10 @@ namespace App.Controls
 
         internal CliAgentTool? ActiveTool => _tool;
 
+        /// <summary>True while the hosted CLI console is starting or running, so the host page can
+        /// refuse to swap it out for Cody mid-session.</summary>
+        internal bool IsSessionActive => _terminal is not null || _startWhenSized;
+
         /// <summary>Shows the agent and starts its session when it is not running yet. A different agent,
         /// or a change to what the Cody MCP server offers it, restarts the session, because a CLI reads
         /// its MCP configuration once at launch.</summary>

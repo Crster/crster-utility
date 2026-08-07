@@ -91,6 +91,16 @@ namespace App.Services
             return declarations;
         }
 
+        /// <summary>
+        /// Declaration for the Cody-only escalation tool. It takes no arguments and signals that
+        /// the current turn should stop and re-run on the high-capability model with high thinking.
+        /// Kept out of CreateExecutionDeclarations so the CLI agent path never advertises it.
+        /// </summary>
+        public static JsonObject CreateEscalationDeclaration() =>
+            Function("escalate_to_smart_thinking",
+                "Call this only when the current low-cost model cannot make progress on a hard turn (you are stuck, repeating, or cannot satisfy the request). Calling it stops the turn immediately and restarts it on the high-capability model with high thinking, keeping the tool results already gathered. Call it at most once per user turn. Never call it when Be smart + Think deep is already active.",
+                new JsonObject());
+
         public async Task<ToolResult> ExecuteAsync(string name, JsonObject arguments, CancellationToken token)
         {
             try
@@ -115,6 +125,11 @@ namespace App.Services
                     "list_running_processes" => ListProcesses(),
                     "terminate_process" => await KillProcessAsync(OptionalInt(arguments, "process_id", 0)),
                     "web_search" => await WebSearchAsync(Required(arguments, "query"), token),
+                    "escalate_to_smart_thinking" => Ok("Escalation accepted. This turn will restart on the high-capability model with high thinking.", new JsonObject
+                    {
+                        ["escalated"] = true,
+                        ["next_mode"] = "be_smart_think_deep"
+                    }),
                     "get_local_context" => NormalizeResult(await _secretaryTools.ExecuteAsync("get_local_context", arguments, token)),
                     _ => Error("unknown_tool", $"Technician cannot use the tool “{name}”.")
                 };

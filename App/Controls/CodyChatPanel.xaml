@@ -39,16 +39,16 @@
         </ScrollViewer>
 
         <!-- Section: Sticky copy of the latest prompt, shown once the real bubble scrolls out of view -->
-        <Grid Grid.Row="0" VerticalAlignment="Top" Padding="20,8,26,0" IsHitTestVisible="False">
-            <Border x:Name="StickyPromptCard" MaxWidth="820" HorizontalAlignment="Center"
+        <Grid Grid.Row="0" VerticalAlignment="Top" Padding="0,8,0,0" IsHitTestVisible="False">
+            <Border x:Name="StickyPromptCard" HorizontalAlignment="Stretch"
                     Visibility="Collapsed" Opacity="0">
-                <Border MaxWidth="620" HorizontalAlignment="Right" BorderThickness="1"
-                        CornerRadius="12" Padding="14,8,14,9"
-                        Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                <Border HorizontalAlignment="Center" BorderThickness="1"
+                        CornerRadius="0,0,12,12" Padding="14,8,14,9"
+                        Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
-                    <TextBlock x:Name="StickyPromptText" TextWrapping="Wrap" MaxLines="2"
+                    <TextBlock x:Name="StickyPromptText" TextWrapping="Wrap" MaxLines="4"
                                TextTrimming="CharacterEllipsis"
-                               Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
                 </Border>
             </Border>
         </Grid>
