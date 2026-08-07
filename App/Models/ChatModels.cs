@@ -44,6 +44,7 @@ namespace App.Models
         public string? InteractionId { get; set; }
         public int? InputTokens { get; set; }
         public int? OutputTokens { get; set; }
+        public bool WebSearchUnavailable { get; set; }
     }
 
     internal sealed class ChatSession

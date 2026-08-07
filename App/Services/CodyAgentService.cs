@@ -52,6 +52,8 @@ namespace App.Services
         private const int MaximumAgentInstructionsCharacters = 60_000;
         private const string EmptyResponseRecoveryPrompt = "Write the answer for the user now, using the tool results already gathered. Do not call another tool.";
         private const string EscalateToolName = "escalate_to_smart_thinking";
+        /// <summary>Per-turn provider budget for deep thinking, which can take much longer than a normal turn.</summary>
+        private static readonly TimeSpan ThinkDeepTurnTimeout = TimeSpan.FromMinutes(10);
 
         private static readonly HashSet<string> AgentToolNames = new(StringComparer.Ordinal)
         {
@@ -186,7 +188,7 @@ namespace App.Services
             Format: `type(scope): summary`. `type` is one of feat, fix, refactor, perf, docs, test, chore, build, ci. Summary: lowercase, imperative, no period, under 72 characters. Example: `feat(auth): add token refresh on expiry`</commits>
 
             <logs>For major or debugging work, offer a log in one line. Write it only if the user agrees.
-            Path: `logs\<yyyy-MM-dd>-<topic>.md`, CRLF.
+            Path: `.crster\logs\<yyyy-MM-dd>-<topic>.md`, CRLF.
             Content: the goal, what you changed, commands you ran, the exact error text, your current guess, the next step. Use bullets here. No long dumps.
             If the user says your fix did not work, read the log first. Never repeat an approach the log lists as failed.
             A log is not a scratch file. Keep it until the user confirms the fix, then delete it.
@@ -459,6 +461,12 @@ namespace App.Services
             CancellationToken cancellationToken)
         {
             OpenAiCompatibleTurnResult bufferedResult;
+            // Deep thinking can take far longer than a normal turn, so give it its own generous budget.
+            var turnToken = mode.ThinkDeep
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+                : null;
+            if (turnToken is not null)
+                turnToken.CancelAfter(ThinkDeepTurnTimeout);
             try
             {
                 bufferedResult = await _client.CreateSimpleInteractionAsync(
@@ -467,7 +475,7 @@ namespace App.Services
                     nextSteps,
                     instruction,
                     declarations,
-                    cancellationToken,
+                    turnToken?.Token ?? cancellationToken,
                     ThinkingFor(mode),
                     includeWebSearch: WebSearchFor(mode));
             }
@@ -475,6 +483,10 @@ namespace App.Services
             {
                 Debug.WriteLine($"[Cody:ThinkDeep] Provider call threw: {exception.GetType().Name}: {exception.Message}");
                 throw;
+            }
+            finally
+            {
+                turnToken?.Dispose();
             }
             if (!string.IsNullOrEmpty(bufferedResult.Thinking))
                 report(new CodyAgentEvent(CodyAgentEventKind.ThinkingDelta, Content: bufferedResult.Thinking));

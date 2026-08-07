@@ -124,6 +124,7 @@ namespace App.Pages
         private WorkspaceTreeEntry? _contextTreeEntry;
         private string? _copiedWorkspacePath;
         private string? _contentSearchQuery;
+        private bool _isSearchActive;
 
         internal static CodyPage? Current { get; private set; }
 
@@ -814,6 +815,25 @@ namespace App.Pages
 
             foreach (var path in paths)
                 ApplyWorkspacePathChange(path);
+
+            if (_isSearchActive) RefreshActiveSearch();
+        }
+
+        private void RefreshActiveSearch()
+        {
+            if (!HasWorkspace()) return;
+
+            if (_contentSearchQuery is { Length: > 0 } query)
+            {
+                ShowSearchResults(SearchWorkspaceText(query));
+                return;
+            }
+
+            var pathQuery = FileSearchBox.Text.Trim();
+            if (pathQuery.Length == 0)
+                ShowWorkspaceTree(_workspaceRoots);
+            else
+                ShowSearchResults(SearchWorkspacePaths(pathQuery));
         }
 
         private bool IsExcludedFromWorkspaceWatcher(string path)
@@ -879,10 +899,19 @@ namespace App.Pages
             if (entry is null
                 || isChangesView && !entry.IsDirectory && entry.GitState is not (GitFileState.Created or GitFileState.Modified))
             {
-                RemoveWorkspaceTreeNode(WorkspaceTree.RootNodes, fullPath);
-                if (isChangesView) RemoveEmptyChangeFolders(WorkspaceTree.RootNodes);
+                if (!_isSearchActive) RemoveWorkspaceTreeNode(WorkspaceTree.RootNodes, fullPath);
+                if (isChangesView && !_isSearchActive) RemoveEmptyChangeFolders(WorkspaceTree.RootNodes);
                 UpdateWorkspaceRootEntry(fullPath, null);
                 UpdateWorkspaceFile(fullPath, null);
+                return;
+            }
+
+            if (_isSearchActive)
+            {
+                // A search result view is shown: keep the tree filtered. Only the backing data
+                // changes; the caller re-runs the active search to refresh the visible results.
+                UpdateWorkspaceRootEntry(fullPath, entry);
+                UpdateWorkspaceFile(fullPath, entry);
                 return;
             }
 
@@ -1214,6 +1243,7 @@ namespace App.Pages
 
         private void ShowWorkspaceTree(IEnumerable<WorkspaceTreeEntry> entries)
         {
+            _isSearchActive = false;
             WorkspaceTree.RootNodes.Clear();
             foreach (var entry in entries)
             {
@@ -1524,6 +1554,7 @@ namespace App.Pages
         // Section: File editor
         private void ShowSearchResults(IEnumerable<WorkspaceFileItem> files)
         {
+            _isSearchActive = ChangesButton.IsChecked != true;
             WorkspaceTree.RootNodes.Clear();
             if (!HasWorkspace()) return;
 

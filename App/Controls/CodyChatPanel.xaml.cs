@@ -47,6 +47,7 @@ namespace App.Controls
         private ChatMessage? _pendingUserMessage;
         private UIElement? _pendingUserMessageContainer;
         private FrameworkElement? _latestUserBubble;
+        private Border? _lastAssistantBlock;
         private string _streamingAnswerText = string.Empty;
         private ThinkingCard? _liveThinking;
         private ProcessingStatusRow? _processingStatus;
@@ -419,6 +420,7 @@ namespace App.Controls
             DiscardPendingUserPrompt();
             TranscriptHost.Children.Clear();
             _latestUserBubble = null;
+            _lastAssistantBlock = null;
             StickyPromptText.Text = string.Empty;
             HideStickyPrompt();
             foreach (var message in _session.Messages) RenderMessage(message);
@@ -455,9 +457,34 @@ namespace App.Controls
                 ChatItemKind.Error => CreateErrorBlock(message),
                 _ => CreateAssistantBlock(message)
             };
-            if (message.Kind == ChatItemKind.User) TrackLatestUserBubble(element, message);
+            if (message.Kind == ChatItemKind.User)
+            {
+                TrackLatestUserBubble(element, message);
+            }
+            else if (message.Kind == ChatItemKind.Assistant)
+            {
+                HighlightLastAssistantBlock(element as Border);
+            }
             TranscriptHost.Children.Add(element);
             ScrollToLatest();
+        }
+
+        /// <summary>Marks the newest assistant message with a subtle card so its end is easy to find.</summary>
+        private void HighlightLastAssistantBlock(Border? container)
+        {
+            if (_lastAssistantBlock is not null)
+            {
+                _lastAssistantBlock.Background = null;
+                _lastAssistantBlock.BorderBrush = null;
+                _lastAssistantBlock.BorderThickness = new Thickness(0);
+            }
+            _lastAssistantBlock = container;
+            if (container is not null)
+            {
+                container.Background = Resource("ControlFillColorSecondaryBrush");
+                container.BorderBrush = Resource("CardStrokeColorDefaultBrush");
+                container.BorderThickness = new Thickness(1);
+            }
         }
 
         /// <summary>Remembers the newest prompt so it can be pinned at the top once it scrolls away.</summary>
@@ -552,7 +579,12 @@ namespace App.Controls
             var markdown = CreateCodyMarkdown();
             markdown.Markdown = message.Content;
             body.Children.Add(markdown);
-            return body;
+            return new Border
+            {
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(16, 12, 16, 12),
+                Child = body
+            };
         }
 
         private MarkdownView CreateCodyMarkdown()

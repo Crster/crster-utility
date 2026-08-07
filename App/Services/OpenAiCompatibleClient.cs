@@ -99,18 +99,30 @@ namespace App.Services
         {
             RequireSelectedModel(model, "a low-cost or high-cost");
             includeWebSearch &= SupportsBuiltInWebSearch(model);
+            var webSearchUnavailable = false;
             if (includeWebSearch)
-                return await CreateResponsesInteractionAsync(
-                    model,
-                    history,
-                    newSteps,
-                    systemInstruction,
-                    tools,
-                    cancellationToken,
-                    thinkingLevel,
-                    includeWebSearch: true,
-                    onTextDelta,
-                    onThinkingDelta: null);
+            {
+                try
+                {
+                    return await CreateResponsesInteractionAsync(
+                        model,
+                        history,
+                        newSteps,
+                        systemInstruction,
+                        tools,
+                        cancellationToken,
+                        thinkingLevel,
+                        includeWebSearch: true,
+                        onTextDelta,
+                        onThinkingDelta: null);
+                }
+                catch (InvalidOperationException exception) when (IsUnsupportedModelError(exception.Message))
+                {
+                    // The provider's web-search endpoint does not accept this model. Fall back to the
+                    // chat endpoint without web search so the turn still completes, and tell the caller.
+                    webSearchUnavailable = true;
+                }
+            }
 
             var messages = new JsonArray
             {
@@ -148,7 +160,9 @@ namespace App.Services
                     throw new InvalidOperationException("The AI provider returned invalid tool-call JSON twice. No local tools were run; retry the request.", retryException);
                 }
             }
-            return ParseChatCompletion(root);
+            var chatResult = ParseChatCompletion(root);
+            chatResult.WebSearchUnavailable = webSearchUnavailable;
+            return chatResult;
         }
 
         /// <summary>Whether the selected provider/model combination exposes a server-side web-search tool.</summary>
@@ -714,6 +728,10 @@ namespace App.Services
         private static bool IsInvalidModelJsonError(string message) =>
             message.Contains("invalid", StringComparison.OrdinalIgnoreCase)
             && message.Contains("json", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsUnsupportedModelError(string message) =>
+            message.Contains("unsupported", StringComparison.OrdinalIgnoreCase)
+            && message.Contains("model", StringComparison.OrdinalIgnoreCase);
 
         private static void RequireSelectedModel(string model, string modelType)
         {

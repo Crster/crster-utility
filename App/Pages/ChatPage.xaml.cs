@@ -226,6 +226,13 @@ namespace App.Pages
                         thinkingLevel,
                         webSearchEnabled,
                         webSearchEnabled ? QueueStreamedAssistantText : null);
+                    if (result.WebSearchUnavailable)
+                    {
+                        AddMessage(new ChatMessage(
+                            ChatItemKind.Thinking,
+                            "Web search",
+                            "Web search is not available for this model. Continuing without it."));
+                    }
                     foreach (var nextStep in nextSteps)
                     {
                         var historyStep = CreateHistoryStep(nextStep);
@@ -326,6 +333,7 @@ namespace App.Pages
                         }
 
                         var toolResult = await ExecuteToolAsync(call.Name, call.Arguments, operationCancellation.Token);
+                        if (call.Name is "save_memo" or "remove_memo") RefreshMemory();
                         if (_personality == ChatPersonality.Technician) technicianToolCallCount++;
                         AddMessage(new ChatMessage(
                             ChatItemKind.Tool,
@@ -804,6 +812,7 @@ namespace App.Pages
             SavedChatsButton.IsChecked = visible;
             ToolTipService.SetToolTip(SavedChatsButton, visible ? "Hide saved chats" : "Show saved chats");
             if (visible) RefreshSavedChats();
+            if (visible) RefreshMemory();
         }
 
         private void RefreshSavedChats()
@@ -813,6 +822,53 @@ namespace App.Pages
             foreach (var document in documents) SavedChatsList.Items.Add(CreateSavedChatItem(document));
             SavedChatsEmptyState.Visibility = documents.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             SavedChatsList.Visibility = documents.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        private void RefreshMemory()
+        {
+            var showMemory = _personality is ChatPersonality.Secretary or ChatPersonality.Smart;
+            MemorySection.Visibility = showMemory ? Visibility.Visible : Visibility.Collapsed;
+            if (!showMemory) return;
+
+            MemoryList.Items.Clear();
+            var memos = _secretaryMemory?.ListMemos() ?? [];
+            foreach (var memo in memos) MemoryList.Items.Add(CreateMemoryItem(memo));
+            MemoryEmptyState.Visibility = memos.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            MemoryList.Visibility = memos.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        private Grid CreateMemoryItem(MemoDocument memo)
+        {
+            var item = new Grid { ColumnSpacing = 8, Tag = memo };
+            item.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var text = new TextBlock
+            {
+                Text = memo.Value,
+                TextWrapping = TextWrapping.Wrap,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxLines = 3,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(text, 0);
+            item.Children.Add(text);
+
+            var deleteItem = new MenuFlyoutItem
+            {
+                Text = "Delete",
+                Icon = new FontIcon { Glyph = "\uE74D" }
+            };
+            deleteItem.Click += (_, _) => DeleteMemory(memo);
+
+            var flyout = new MenuFlyout();
+            flyout.Items.Add(deleteItem);
+            item.ContextFlyout = flyout;
+            return item;
+        }
+
+        private void DeleteMemory(MemoDocument memo)
+        {
+            _secretaryMemory?.DeleteMemo(memo.Id);
+            RefreshMemory();
         }
 
         private Grid CreateSavedChatItem(SavedChatSessionDocument document)
@@ -898,6 +954,7 @@ namespace App.Pages
             ComposerBox.PlaceholderText = $"Message {personality}...";
             RenderSession();
             RefreshSavedChats();
+            RefreshMemory();
             StatusText.Text = "Saved chat opened.";
         }
 
@@ -1011,7 +1068,11 @@ namespace App.Pages
 
         private async Task<bool> ConfirmTechnicianActionAsync(TechnicianCommandConfirmation confirmation)
         {
-            var assessment = await AssessTechnicianCommandRiskAsync(confirmation);
+            // File writes already carry the technician's stated reason, so no AI risk assessment is
+            // needed: show a fixed Medium risk and use the reason as the note.
+            var assessment = confirmation.Note is null
+                ? await AssessTechnicianCommandRiskAsync(confirmation)
+                : new TechnicianCommandRisk("Medium", confirmation.Note);
             var content = new StackPanel { Spacing = 8, MinWidth = 420 };
             content.Children.Add(new TextBlock { Text = "Command", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
             content.Children.Add(new TextBlock { Text = confirmation.Command, TextWrapping = TextWrapping.Wrap });
@@ -1106,6 +1167,7 @@ namespace App.Pages
             _settings = settings;
             RenderSession();
             StatusText.Text = string.Empty;
+            if (SavedChatsPanel.Visibility == Visibility.Visible) RefreshMemory();
         }
 
         private void RenderSession()

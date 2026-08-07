@@ -1,4 +1,6 @@
 using System;
+using System.Text;
+using System.Threading;
 using App.Services;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
@@ -30,6 +32,9 @@ namespace App.Pages
         private ActiveExternalApp _activeExternalApp;
         private bool _movePending;
         private bool _isRunning;
+
+        private CancellationTokenSource? _cleanupCts;
+        private bool _cleanupOptionsVisible;
 
         public ToolsPage()
         {
@@ -201,5 +206,146 @@ namespace App.Pages
             Ide,
             Browser
         }
+
+        #region Windows Cleanup
+
+        private void CleanupButton_Click(object sender, RoutedEventArgs e)
+        {
+            _cleanupOptionsVisible = !_cleanupOptionsVisible;
+            CleanupOptionsPanel.Visibility = _cleanupOptionsVisible ? Visibility.Visible : Visibility.Collapsed;
+            CleanupProgressPanel.Visibility = Visibility.Collapsed;
+            CleanupResultText.Visibility = Visibility.Collapsed;
+        }
+
+        private async void StartCleanupButton_Click(object sender, RoutedEventArgs e)
+        {
+            var options = new CleanupOptions
+            {
+                ClearTempFolders = ClearTempCheck.IsChecked == true,
+                ClearRecycleBin = ClearRecycleCheck.IsChecked == true,
+                ClearExplorerHistory = ClearExplorerCheck.IsChecked == true,
+                ClearRecentDocuments = ClearRecentCheck.IsChecked == true,
+                ClearAppLogs = ClearAppLogsCheck.IsChecked == true,
+                ClearWindowsErrorReports = ClearWERCheck.IsChecked == true,
+                ClearThumbnailCache = ClearThumbnailCheck.IsChecked == true,
+                ClearIconCache = ClearIconCheck.IsChecked == true,
+                ClearWindowsUpdateCache = ClearWUCheck.IsChecked == true,
+                ClearDeliveryOptimization = ClearDOCheck.IsChecked == true,
+                ClearFontCache = ClearFontCheck.IsChecked == true,
+                ClearPrefetch = ClearPrefetchCheck.IsChecked == true,
+                ClearMemoryDumps = ClearDumpsCheck.IsChecked == true,
+                ClearEmptyFolders = ClearEmptyFoldersCheck.IsChecked == true,
+                ClearOrphanFiles = ClearOrphanCheck.IsChecked == true,
+                ClearRegistryKeys = ClearRegistryCheck.IsChecked == true,
+                ClearDriverLogs = ClearDriverLogsCheck.IsChecked == true,
+                ClearSetupLogs = ClearSetupLogsCheck.IsChecked == true,
+                ClearEventLogs = ClearEventLogsCheck.IsChecked == true,
+                ClearEnvironmentPath = ClearEnvPathCheck.IsChecked == true,
+                ClearDnsCache = ClearDnsCheck.IsChecked == true,
+            };
+
+            if (!HasAnyOption(options))
+            {
+                CleanupResultText.Text = "Please select at least one cleanup task.";
+                CleanupResultText.Visibility = Visibility.Visible;
+                return;
+            }
+
+            _cleanupCts = new CancellationTokenSource();
+            CleanupOptionsPanel.Visibility = Visibility.Collapsed;
+            CleanupProgressPanel.Visibility = Visibility.Visible;
+            CleanupResultText.Visibility = Visibility.Collapsed;
+            CancelCleanupButton.Visibility = Visibility.Visible;
+            StartCleanupButton.IsEnabled = false;
+            CleanupLogText.Text = string.Empty;
+            CleanupProgress.IsIndeterminate = true;
+
+            var progress = new Progress<CleanupStepProgress>(step =>
+            {
+                var icon = step.State switch
+                {
+                    CleanupStepState.Running => "⏳",
+                    CleanupStepState.Succeeded => "✓",
+                    CleanupStepState.Skipped => "⊘",
+                    CleanupStepState.Failed => "✗",
+                    _ => "•"
+                };
+                CleanupLogText.Text += $"{icon} {step.Category}: {step.Status}\n";
+            });
+
+            try
+            {
+                var service = new WindowsCleanupService();
+                var result = await service.RunAsync(options, progress, _cleanupCts.Token);
+
+                CleanupProgress.IsIndeterminate = false;
+                CleanupProgress.Value = 100;
+                CancelCleanupButton.Visibility = Visibility.Collapsed;
+                StartCleanupButton.IsEnabled = true;
+
+                var sb = new StringBuilder();
+                sb.AppendLine("Cleanup complete!");
+                sb.AppendLine($"Files deleted: {result.FilesDeleted}");
+                sb.AppendLine($"Folders deleted: {result.FoldersDeleted}");
+                if (result.RegistryKeysCleaned > 0)
+                    sb.AppendLine($"Registry keys cleaned: {result.RegistryKeysCleaned}");
+                if (result.EventLogsCleared > 0)
+                    sb.AppendLine($"Event logs cleared: {result.EventLogsCleared}");
+                if (result.PathEntriesRemoved > 0)
+                    sb.AppendLine($"PATH entries removed: {result.PathEntriesRemoved}");
+
+                CleanupResultText.Text = sb.ToString();
+                CleanupResultText.Visibility = Visibility.Visible;
+            }
+            catch (OperationCanceledException)
+            {
+                CleanupResultText.Text = "Cleanup cancelled.";
+                CleanupResultText.Visibility = Visibility.Visible;
+            }
+            catch (Exception ex)
+            {
+                CleanupResultText.Text = $"Cleanup failed: {ex.Message}";
+                CleanupResultText.Visibility = Visibility.Visible;
+            }
+            finally
+            {
+                _cleanupCts?.Dispose();
+                _cleanupCts = null;
+                CleanupProgressPanel.Visibility = Visibility.Collapsed;
+                CleanupOptionsPanel.Visibility = Visibility.Visible;
+            }
+        }
+
+        private void CancelCleanupButton_Click(object sender, RoutedEventArgs e)
+        {
+            _cleanupCts?.Cancel();
+        }
+
+        private static bool HasAnyOption(CleanupOptions options)
+        {
+            return options.ClearTempFolders
+                || options.ClearRecycleBin
+                || options.ClearExplorerHistory
+                || options.ClearRecentDocuments
+                || options.ClearAppLogs
+                || options.ClearWindowsErrorReports
+                || options.ClearThumbnailCache
+                || options.ClearIconCache
+                || options.ClearWindowsUpdateCache
+                || options.ClearDeliveryOptimization
+                || options.ClearFontCache
+                || options.ClearPrefetch
+                || options.ClearMemoryDumps
+                || options.ClearEmptyFolders
+                || options.ClearOrphanFiles
+                || options.ClearRegistryKeys
+                || options.ClearDriverLogs
+                || options.ClearSetupLogs
+                || options.ClearEventLogs
+                || options.ClearEnvironmentPath
+                || options.ClearDnsCache;
+        }
+
+        #endregion
     }
 }

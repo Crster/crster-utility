@@ -394,7 +394,8 @@ namespace App.Services
                 $"write_file {fullPath}{Environment.NewLine}Purpose: {purpose}{Environment.NewLine}Size: {content.Length} characters",
                 false,
                 true,
-                warning);
+                warning,
+                purpose);
             if (!await _confirmAsync(confirmation)) return Error("confirmation_declined", "The user did not approve writing this file.");
 
             string? backupPath = null;
@@ -626,5 +627,5 @@ namespace App.Services
         private static ToolResult Error(string category, string summary) => new(false, new JsonObject { ["success"] = false, ["error_category"] = category, ["error"] = summary }.ToJsonString());
     }
 
-    internal sealed record TechnicianCommandConfirmation(string Command, bool IsElevated, bool IsMutating, string? SafetyWarning);
+    internal sealed record TechnicianCommandConfirmation(string Command, bool IsElevated, bool IsMutating, string? SafetyWarning, string? Note = null);
 }

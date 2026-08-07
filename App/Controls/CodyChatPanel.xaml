@@ -12,6 +12,7 @@
         <ScrollViewer x:Name="TranscriptScroller" Grid.Row="0"
                       Padding="20,16,20,8" VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled"
+                      Translation="0,0,0"
                       ViewChanged="TranscriptScroller_ViewChanged">
             <StackPanel x:Name="TranscriptHost" MaxWidth="820" Spacing="10"
                         HorizontalAlignment="Center">
@@ -45,7 +46,11 @@
                 <Border HorizontalAlignment="Center" BorderThickness="1"
                         CornerRadius="0,0,12,12" Padding="14,8,14,9"
                         Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
-                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        Translation="0,0,32">
+                    <Border.Shadow>
+                        <ThemeShadow/>
+                    </Border.Shadow>
                     <TextBlock x:Name="StickyPromptText" TextWrapping="Wrap" MaxLines="4"
                                TextTrimming="CharacterEllipsis"
                                Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>

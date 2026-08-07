@@ -47,6 +47,117 @@
                                 Click="CaffeineButton_Click" />
                     </Grid>
                 </Border>
+
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="12"
+                        Padding="24"
+                        Margin="0,16,0,0">
+                    <StackPanel Spacing="16">
+                        <Grid ColumnSpacing="24">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <Border Width="48" Height="48" CornerRadius="24"
+                                    Background="{ThemeResource AccentFillColorDefaultBrush}">
+                                <FontIcon Glyph="&#xE74D;" FontSize="20"
+                                          Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+
+                            <StackPanel Grid.Column="1" Spacing="6" VerticalAlignment="Center">
+                                <TextBlock Text="Windows Cleanup" Style="{StaticResource SubtitleTextBlockStyle}" />
+                                <TextBlock x:Name="CleanupDescriptionText"
+                                           Text="Safe cleanup of temp folders, recycle bin, logs, cache, and invalid registry entries. Some operations require administrator access."
+                                           TextWrapping="Wrap"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+
+                            <Button x:Name="CleanupButton"
+                                    Grid.Column="2"
+                                    Content="Run Cleanup"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Padding="16,10"
+                                    VerticalAlignment="Center"
+                                    Click="CleanupButton_Click" />
+                        </Grid>
+
+                        <StackPanel x:Name="CleanupOptionsPanel" Spacing="8" Visibility="Collapsed">
+                            <TextBlock Text="Select cleanup tasks:" FontWeight="SemiBold" Margin="0,8,0,4" />
+                            <Grid ColumnSpacing="16" RowSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition />
+                                    <RowDefinition />
+                                    <RowDefinition />
+                                    <RowDefinition />
+                                    <RowDefinition />
+                                    <RowDefinition />
+                                    <RowDefinition />
+                                    <RowDefinition />
+                                    <RowDefinition />
+                                </Grid.RowDefinitions>
+
+                                <CheckBox x:Name="ClearTempCheck" Content="Temp folders" IsChecked="True" Grid.Row="0" Grid.Column="0" />
+                                <CheckBox x:Name="ClearRecycleCheck" Content="Recycle Bin" IsChecked="True" Grid.Row="0" Grid.Column="1" />
+                                <CheckBox x:Name="ClearExplorerCheck" Content="Explorer history" IsChecked="True" Grid.Row="1" Grid.Column="0" />
+                                <CheckBox x:Name="ClearRecentCheck" Content="Recent documents" IsChecked="True" Grid.Row="1" Grid.Column="1" />
+                                <CheckBox x:Name="ClearAppLogsCheck" Content="Application logs" IsChecked="True" Grid.Row="2" Grid.Column="0" />
+                                <CheckBox x:Name="ClearWERCheck" Content="Windows Error Reports" IsChecked="True" Grid.Row="2" Grid.Column="1" />
+                                <CheckBox x:Name="ClearThumbnailCheck" Content="Thumbnail cache" IsChecked="True" Grid.Row="3" Grid.Column="0" />
+                                <CheckBox x:Name="ClearIconCheck" Content="Icon cache" IsChecked="True" Grid.Row="3" Grid.Column="1" />
+                                <CheckBox x:Name="ClearWUCheck" Content="Windows Update cache" IsChecked="True" Grid.Row="4" Grid.Column="0" />
+                                <CheckBox x:Name="ClearDOCheck" Content="Delivery Optimization" IsChecked="True" Grid.Row="4" Grid.Column="1" />
+                                <CheckBox x:Name="ClearFontCheck" Content="Font cache" IsChecked="True" Grid.Row="5" Grid.Column="0" />
+                                <CheckBox x:Name="ClearPrefetchCheck" Content="Prefetch files" IsChecked="True" Grid.Row="5" Grid.Column="1" />
+                                <CheckBox x:Name="ClearDumpsCheck" Content="Memory dumps" IsChecked="True" Grid.Row="6" Grid.Column="0" />
+                                <CheckBox x:Name="ClearEmptyFoldersCheck" Content="Empty folders" IsChecked="True" Grid.Row="6" Grid.Column="1" />
+                                <CheckBox x:Name="ClearOrphanCheck" Content="Orphan files" IsChecked="True" Grid.Row="7" Grid.Column="0" />
+                            </Grid>
+
+                            <TextBlock Text="Elevated operations (requires admin):" FontWeight="SemiBold" Margin="0,12,0,4" />
+                            <Grid ColumnSpacing="16" RowSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition />
+                                    <RowDefinition />
+                                    <RowDefinition />
+                                </Grid.RowDefinitions>
+
+                                <CheckBox x:Name="ClearRegistryCheck" Content="Invalid registry keys" IsChecked="True" Grid.Row="0" Grid.Column="0" />
+                                <CheckBox x:Name="ClearDriverLogsCheck" Content="Driver logs" IsChecked="True" Grid.Row="0" Grid.Column="1" />
+                                <CheckBox x:Name="ClearSetupLogsCheck" Content="Setup logs" IsChecked="True" Grid.Row="1" Grid.Column="0" />
+                                <CheckBox x:Name="ClearEventLogsCheck" Content="Windows Event Logs" IsChecked="True" Grid.Row="1" Grid.Column="1" />
+                                <CheckBox x:Name="ClearEnvPathCheck" Content="Environment PATH" IsChecked="True" Grid.Row="2" Grid.Column="0" />
+                                <CheckBox x:Name="ClearDnsCheck" Content="DNS cache" IsChecked="True" Grid.Row="2" Grid.Column="1" />
+                            </Grid>
+
+                            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
+                                <Button x:Name="StartCleanupButton" Content="Start Cleanup" Style="{StaticResource AccentButtonStyle}" Click="StartCleanupButton_Click" />
+                                <Button x:Name="CancelCleanupButton" Content="Cancel" Click="CancelCleanupButton_Click" Visibility="Collapsed" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <StackPanel x:Name="CleanupProgressPanel" Spacing="8" Visibility="Collapsed">
+                            <ProgressBar x:Name="CleanupProgress" IsIndeterminate="True" />
+                            <ScrollViewer Height="200" VerticalScrollBarVisibility="Auto">
+                                <TextBlock x:Name="CleanupLogText" TextWrapping="Wrap" FontFamily="Consolas" FontSize="12" />
+                            </ScrollViewer>
+                        </StackPanel>
+
+                        <TextBlock x:Name="CleanupResultText" Visibility="Collapsed" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </Grid>
     </ScrollViewer>
